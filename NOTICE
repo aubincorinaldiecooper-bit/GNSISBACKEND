@@ -1,0 +1,12 @@
+GNSIS
+Copyright (c) 2026 Aubin Cooper / Sine Studios
+
+This project is a clean-room MVP inspired by the architecture and vocabulary of
+Autogenesis ("a self-evolution protocol and runtime for LLM-based agent
+systems"):
+
+    Autogenesis — https://github.com/DVampire/Autogenesis  (MIT License)
+
+GNSIS reimplements a small, stable subset of those ideas — the RSPL (versioned
+resources) and SEPL (the self-evolution loop) concepts and the tool-calling
+agent — from scratch. No Autogenesis source code is vendored here.
