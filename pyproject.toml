@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnsis"
+description = "A stable, dogfoodable self-evolution runtime for tool-calling LLM agents."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Aubin Cooper", email = "aubincorinaldiecooper@gmail.com" }]
+keywords = ["agents", "llm", "self-evolution", "tool-calling", "openrouter"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+# Core is standard-library only — no install-time dependencies.
+dependencies = []
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+gnsis = "gnsis.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/aubincorinaldiecooper-bit/gnsis"
+"Inspired by" = "https://github.com/DVampire/Autogenesis"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "gnsis.__about__.__version__" }
