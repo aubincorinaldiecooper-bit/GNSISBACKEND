@@ -11,7 +11,10 @@ from .config import Config
 from .evolution.loop import EvolutionReport, Iteration, SelfEvolutionLoop
 from .evolution.optimizer import PromptOptimizer
 from .evolution.task import EvalResult, Task, calculator_task
+from .jobs.models import Job, JobState
+from .jobs.store import FileJobStore, JobStore
 from .memory.memory import Memory
+from .persistence.base import MemoryProvider, ResourceStoreBackend
 from .models.base import BaseModel, Message, ModelResponse, ToolCall
 from .models.registry import create_model, resolve_provider
 from .resources.resource import Resource, ResourceVersion
@@ -37,7 +40,13 @@ __all__ = [
     "Resource",
     "ResourceVersion",
     "ResourceStore",
+    "ResourceStoreBackend",
     "Memory",
+    "MemoryProvider",
+    "Job",
+    "JobState",
+    "JobStore",
+    "FileJobStore",
     "Tracer",
     "ToolCallingAgent",
     "AgentResult",

@@ -13,6 +13,7 @@ import os
 import re
 from typing import Any, List, Optional, Tuple
 
+from ..persistence.base import ResourceStoreBackend
 from .resource import Resource, ResourceVersion
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -22,8 +23,8 @@ def _slug(value: str) -> str:
     return _SAFE.sub("_", value)
 
 
-class ResourceStore:
-    """Versioned persistence for :class:`Resource` objects."""
+class ResourceStore(ResourceStoreBackend):
+    """Versioned persistence for :class:`Resource` objects (file-backed)."""
 
     def __init__(self, workdir: str) -> None:
         self.root = os.path.join(workdir, "resources")

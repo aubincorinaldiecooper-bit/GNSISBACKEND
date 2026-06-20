@@ -13,10 +13,12 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from ..persistence.base import MemoryProvider
+
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
-class Memory:
+class Memory(MemoryProvider):
     def __init__(self, workdir: str, namespace: str = "default") -> None:
         safe_ns = _SAFE.sub("_", namespace)
         self.path = os.path.join(workdir, "memory", f"{safe_ns}.jsonl")
