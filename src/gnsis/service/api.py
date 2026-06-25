@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..orchestration.models import Approval, JobSpec
+from ..orchestration.pipeline import reject_job
 from ..orchestration.status import JobStatus
 from .repository import PostgresJobStore
 from .settings import get_settings
@@ -63,6 +64,17 @@ def _ui() -> str:
 
 def store() -> PostgresJobStore:
     return PostgresJobStore()
+
+
+def _memory():
+    """The configured memory provider (Postgres by default, else no-op)."""
+    from ..memory.base import NullMemoryProvider
+
+    if get_settings().memory_backend == "postgres":
+        from .repository import PostgresMemoryProvider
+
+        return PostgresMemoryProvider()
+    return NullMemoryProvider()
 
 
 def require_api_key(authorization: Optional[str] = Header(default=None)) -> None:
@@ -204,11 +216,9 @@ def reject(
     job_id: str, req: ApproveRequest, db: PostgresJobStore = Depends(store)
 ) -> JobResponse:
     _require_awaiting(db, job_id)
-    db.save_approval(
-        Approval(job_id=job_id, decision="rejected", actor=req.actor, note=req.note)
-    )
-    job = db.set_status(job_id, JobStatus.REJECTED)
-    return _to_response(job)
+    # Records the rejection AND distills a lesson into repo-scoped memory.
+    reject_job(db, job_id, actor=req.actor, note=req.note, memory=_memory())
+    return _to_response(db.get_job(job_id))
 
 
 def _require_awaiting(db: PostgresJobStore, job_id: str):

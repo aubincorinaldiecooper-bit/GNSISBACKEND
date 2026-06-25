@@ -21,7 +21,7 @@ from .models import (
     PipelineResult,
     PRMetadata,
 )
-from .pipeline import JobPipeline, Publisher, publish
+from .pipeline import JobPipeline, Publisher, publish, reject_job
 from .status import APPROVAL_GATE, PHASE_STATUS, TERMINAL, JobStatus, Phase, is_terminal
 from .store import InMemoryJobStore, JobNotFound, JobStore
 
@@ -51,4 +51,5 @@ __all__ = [
     "JobPipeline",
     "Publisher",
     "publish",
+    "reject_job",
 ]

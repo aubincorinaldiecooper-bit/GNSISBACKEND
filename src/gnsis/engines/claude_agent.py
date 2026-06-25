@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 from typing import Any, List, Optional
 
 from ..orchestration.engine import PhaseSink, Workspace
 from ..orchestration.models import EngineResult
 from ..orchestration.status import Phase
+from .common import run_tests
 
 DEFAULT_MODEL = "claude-opus-4-8"
 _CODING_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
@@ -96,7 +96,7 @@ class ClaudeAgentEngine:
 
         # tests -----------------------------------------------------------
         sink.begin_phase(Phase.TESTS)
-        tests = self._run_tests(workspace, sink)
+        tests = run_tests(workspace, sink, self.max_test_seconds)
         sink.checkpoint(Phase.TESTS, tests)
 
         # summary ---------------------------------------------------------
@@ -147,27 +147,6 @@ class ClaudeAgentEngine:
             chunks.append(_message_text(message))
         return "\n".join(c for c in chunks if c).strip()
 
-    # -- tests -------------------------------------------------------------
-    def _run_tests(self, workspace: Workspace, sink: PhaseSink) -> str:
-        command = _detect_test_command(workspace.path)
-        if command is None:
-            sink.log("no test command detected; skipping test run", level="warning")
-            return "No test command detected."
-        sink.log(f"running tests: {' '.join(command)}")
-        try:
-            proc = subprocess.run(
-                command,
-                cwd=workspace.path,
-                capture_output=True,
-                text=True,
-                timeout=self.max_test_seconds,
-            )
-        except subprocess.TimeoutExpired:
-            return f"Tests timed out after {self.max_test_seconds}s."
-        tail = (proc.stdout + "\n" + proc.stderr).strip()[-8000:]
-        verdict = "passed" if proc.returncode == 0 else f"failed (exit {proc.returncode})"
-        return f"Tests {verdict}.\n\n{tail}"
-
 
 def _message_text(message: Any) -> str:
     """Best-effort text extraction across SDK message/content shapes."""
@@ -186,20 +165,3 @@ def _message_text(message: Any) -> str:
     if isinstance(text, str):
         return text
     return ""
-
-
-def _detect_test_command(path: str) -> Optional[List[str]]:
-    """Pick a sensible test command for the project, or ``None``."""
-    if os.path.exists(os.path.join(path, "pyproject.toml")) or _glob(path, "test_*.py"):
-        if os.path.isdir(os.path.join(path, "tests")):
-            return ["python", "-m", "pytest", "-q"]
-        return ["python", "-m", "pytest", "-q"]
-    if os.path.exists(os.path.join(path, "package.json")):
-        return ["npm", "test", "--silent"]
-    return None
-
-
-def _glob(path: str, pattern: str) -> bool:
-    import glob as _g
-
-    return bool(_g.glob(os.path.join(path, "**", pattern), recursive=True))

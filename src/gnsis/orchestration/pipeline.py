@@ -18,6 +18,7 @@ from typing import Any, Optional, Protocol
 from ..memory.base import MemoryProvider, MemoryRecord, NullMemoryProvider
 from .engine import PatchEngine, PhaseSink, Workspace
 from .models import (
+    Approval,
     Checkpoint,
     Diff,
     EngineResult,
@@ -198,6 +199,54 @@ def publish(
             )
         )
     return pr
+
+
+def reject_job(
+    store: JobStore,
+    job_id: str,
+    actor: str,
+    note: str = "",
+    memory: Optional[MemoryProvider] = None,
+) -> None:
+    """Record a rejection and, from it, a **lesson** the agent can learn from.
+
+    This is the first Reflexion-style step: a human rejection (with their reason)
+    is exactly the signal worth remembering — "we tried X, it was rejected
+    because Y; don't repeat it." Because the human acted at the gate, the lesson
+    is an *approved*, repo-scoped memory, so it honors approval-gated writes while
+    still letting the system learn from mistakes over time.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        raise JobNotFound(job_id)
+
+    store.save_approval(
+        Approval(job_id=job_id, decision="rejected", actor=actor, note=note)
+    )
+    store.set_status(job_id, JobStatus.REJECTED)
+
+    if memory is not None:
+        diff = store.get_diff(job_id)
+        files = diff.files_changed if diff else []
+        memory.write(
+            MemoryRecord(
+                repo=job.repo,
+                content=_lesson_text(job.instruction, note, files),
+                kind="lesson",
+                metadata={"job_id": job_id, "files": files},
+                approved=True,
+            )
+        )
+
+
+def _lesson_text(instruction: str, note: str, files) -> str:
+    head = f"A previous attempt at '{instruction.strip().splitlines()[0]}' was REJECTED."
+    if note:
+        head += f" Reason given: {note}."
+    if files:
+        head += f" It changed: {', '.join(list(files)[:12])}."
+    head += " Avoid repeating that approach."
+    return head
 
 
 def _summary_for(store: JobStore, job_id: str) -> str:

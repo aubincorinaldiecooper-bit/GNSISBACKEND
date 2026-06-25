@@ -116,6 +116,38 @@ curl "$BASE/jobs/<id>/diff"
 curl -X POST "$BASE/jobs/<id>/approve" -d '{"actor":"you"}'
 ```
 
+## Engines (swappable)
+
+The agent that writes the code is pluggable behind one interface, chosen per job
+(`"engine"` in the create-job body) or by `GNSIS_DEFAULT_ENGINE`:
+
+| Engine | What it is | Needs |
+| --- | --- | --- |
+| `claude` | Anthropic Claude Agent SDK (the Claude Code harness). | `ANTHROPIC_API_KEY` + Node/CLI (in the image). |
+| `openhands` | OpenHands — open-source, Python, autonomous. Driven headless; the diff is the result. | OpenHands installed; `GNSIS_OPENHANDS_*`. |
+| `mock` | Deterministic, offline — for smoke tests. | nothing |
+
+Running both lets you A/B engines on real work and keep the one that wins.
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `GNSIS_OPENHANDS_MODEL` | `anthropic/claude-opus-4-8` | Model OpenHands uses (`LLM_MODEL`). |
+| `GNSIS_OPENHANDS_CMD` | `["python","-m","openhands.core.main","-t","{task}"]` | Headless invocation (JSON list; `{task}`/`{workspace}` substituted). Tune per OpenHands version. |
+
+## Learning loop (gets better over time)
+
+GNSIS learns from **both** human decisions at the gate, and both writes are
+approval-gated:
+
+- **Approve → publish:** the change is remembered as an `accepted_change` for the
+  repo (a positive example / convention).
+- **Reject (with a reason):** the rejection is distilled into a `lesson` —
+  *"we tried X, it was rejected because Y; avoid that."*
+
+Before each new job, relevant repo memory (accepted changes + lessons) is injected
+into the engine's context, so the agent stops repeating mistakes and follows
+learned conventions. This is engine-agnostic — it improves whichever engine runs.
+
 ## Long-term memory (specialization)
 
 GNSIS keeps a **repo-scoped, approval-gated** long-term memory in Postgres
