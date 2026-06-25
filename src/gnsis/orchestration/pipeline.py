@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Protocol
 
+from ..memory.base import MemoryProvider, MemoryRecord, NullMemoryProvider
 from .engine import PatchEngine, PhaseSink, Workspace
 from .models import (
     Checkpoint,
@@ -66,11 +67,24 @@ class Publisher(Protocol):
 
 
 class JobPipeline:
-    """Runs a job from ``queued`` up to the approval gate."""
+    """Runs a job from ``queued`` up to the approval gate.
 
-    def __init__(self, store: JobStore, engine: PatchEngine) -> None:
+    If a long-term :class:`MemoryProvider` is supplied, the engine receives the
+    instruction *augmented* with repo-scoped memory (conventions, prior decisions,
+    accepted changes) — this is how GNSIS specializes to a codebase over time.
+    The default provider is the no-op, so behavior is unchanged until memory is
+    enabled.
+    """
+
+    def __init__(
+        self,
+        store: JobStore,
+        engine: PatchEngine,
+        memory: Optional[MemoryProvider] = None,
+    ) -> None:
         self.store = store
         self.engine = engine
+        self.memory = memory or NullMemoryProvider()
 
     def run(
         self, job_id: str, workspace: Optional[Workspace] = None
@@ -80,10 +94,9 @@ class JobPipeline:
             raise JobNotFound(job_id)
 
         sink = _StoreSink(self.store, job_id)
+        instruction = self._augment_with_memory(job)
         try:
-            result: EngineResult = self.engine.generate(
-                job.instruction, workspace, sink
-            )
+            result: EngineResult = self.engine.generate(instruction, workspace, sink)
         except Exception as exc:  # noqa: BLE001 - record and surface every failure
             self.store.append_log(
                 LogEntry(job_id, "", "error", f"engine failed: {exc}")
@@ -112,8 +125,32 @@ class JobPipeline:
         )
         return PipelineResult(job_id, APPROVAL_GATE, result)
 
+    def _augment_with_memory(self, job) -> str:
+        """Prepend repo-scoped memory (if any) to the engine's instruction."""
+        records = self.memory.search(job.repo, job.instruction, limit=5)
+        if not records:
+            records = self.memory.recent(job.repo, limit=5)
+        if not records:
+            return job.instruction
+        bullets = "\n".join(f"- {r.content}" for r in records)
+        self.store.append_log(
+            LogEntry(
+                job.id, Phase.PLAN, "info",
+                f"injected {len(records)} memory item(s) for {job.repo}",
+            )
+        )
+        return (
+            "Project memory for this repository (learned from prior, approved "
+            f"work — honor it):\n{bullets}\n\nTask:\n{job.instruction}"
+        )
 
-def publish(store: JobStore, publisher: "Publisher", job_id: str) -> PRMetadata:
+
+def publish(
+    store: JobStore,
+    publisher: "Publisher",
+    job_id: str,
+    memory: Optional[MemoryProvider] = None,
+) -> PRMetadata:
     """Open the PR for an *approved* job. Called by the ``publish_pr`` worker task.
 
     All GitHub writes happen here, behind the approval gate. The ``publisher``
@@ -146,4 +183,26 @@ def publish(store: JobStore, publisher: "Publisher", job_id: str) -> PRMetadata:
     store.append_log(
         LogEntry(job_id, Phase.PUBLISH, "info", f"opened PR #{pr.number}: {pr.url}")
     )
+
+    # Approval-gated memory write: a published change is a *validated* outcome,
+    # so it is the one thing worth remembering for next time. Scoped to the repo.
+    if memory is not None:
+        summary = _summary_for(store, job_id) or job.instruction
+        memory.write(
+            MemoryRecord(
+                repo=job.repo,
+                content=summary,
+                kind="accepted_change",
+                metadata={"job_id": job_id, "pr": pr.number, "files": diff.files_changed},
+                approved=True,
+            )
+        )
     return pr
+
+
+def _summary_for(store: JobStore, job_id: str) -> str:
+    """The summary-phase checkpoint, if the engine produced one."""
+    for cp in reversed(store.get_checkpoints(job_id)):
+        if cp.phase == Phase.SUMMARY and isinstance(cp.content, str):
+            return cp.content
+    return ""

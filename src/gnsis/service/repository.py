@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from ..memory.base import MemoryProvider, MemoryRecord
 from ..orchestration.models import (
     Approval,
     Checkpoint,
@@ -360,3 +361,63 @@ class PostgresResourceStore:
                 .all()
             )
             return [self._version_to_dataclass(r) for r in rows]
+
+
+class PostgresMemoryProvider(MemoryProvider):
+    """Durable, repo-scoped long-term memory backed by Postgres.
+
+    This is the chosen memory backend for GNSIS. It honors the two invariants:
+    writes are refused unless ``approved`` is true, and every read is filtered to
+    a single repo, so one project's memory never leaks into another's context.
+    """
+
+    name = "postgres"
+
+    def write(self, record: MemoryRecord):
+        if not record.approved:
+            return None  # approval-gated
+        with session_scope() as s:
+            s.add(
+                orm.AgentMemory(
+                    repo=record.repo,
+                    kind=record.kind,
+                    content=record.content,
+                    meta=dict(record.metadata),
+                    approved=True,
+                )
+            )
+        return record
+
+    def search(self, repo: str, query: str, limit: int = 5):
+        # Lightweight relevance: rank repo-scoped rows by query-term overlap.
+        # (Swap in pgvector/full-text later without changing the interface.)
+        rows = self.recent(repo, limit=200)
+        terms = [t for t in query.lower().split() if t]
+        scored = []
+        for rec in rows:
+            score = sum(1 for t in terms if t in rec.content.lower())
+            if score:
+                scored.append((score, rec))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [rec for _, rec in scored[:limit]]
+
+    def recent(self, repo: str, limit: int = 20):
+        with session_scope() as s:
+            rows = (
+                s.query(orm.AgentMemory)
+                .filter(orm.AgentMemory.repo == repo)
+                .order_by(orm.AgentMemory.id.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                MemoryRecord(
+                    repo=r.repo,
+                    content=r.content,
+                    kind=r.kind,
+                    metadata=dict(r.meta or {}),
+                    approved=r.approved,
+                    created_at=r.created_at.isoformat() if r.created_at else "",
+                )
+                for r in rows
+            ]

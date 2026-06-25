@@ -86,21 +86,55 @@ class NullMemoryProvider(MemoryProvider):
         return []
 
 
-class SimpleMemProvider(MemoryProvider):
-    """Placeholder for the intended ``SimpleMem``-backed provider.
+class InMemoryMemoryProvider(MemoryProvider):
+    """A process-local provider for tests and single-process local runs.
 
-    When implemented, this is the long-term memory provider for GNSIS, with
-    repo-scoped namespaces and approval-gated writes. It is intentionally not
-    implemented yet — constructing or calling it raises, so it can never be
-    enabled by accident before it is real.
+    Enforces the two invariants so the contract is exercised offline: writes are
+    refused unless ``approved`` is true, and every read is filtered to one repo.
+    Not durable — the Postgres provider is the real backend.
+    """
+
+    name = "memory"
+
+    def __init__(self) -> None:
+        self._by_repo: Dict[str, List[MemoryRecord]] = {}
+
+    def write(self, record: MemoryRecord) -> Optional[MemoryRecord]:
+        if not record.approved:
+            return None  # approval-gated: only validated outcomes persist
+        self._by_repo.setdefault(record.repo, []).append(record)
+        return record
+
+    def search(self, repo: str, query: str, limit: int = 5) -> List[MemoryRecord]:
+        terms = [t for t in query.lower().split() if t]
+        scored = []
+        for rec in self._by_repo.get(repo, []):
+            haystack = rec.content.lower()
+            score = sum(1 for t in terms if t in haystack)
+            if score:
+                scored.append((score, rec))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [rec for _, rec in scored[:limit]]
+
+    def recent(self, repo: str, limit: int = 20) -> List[MemoryRecord]:
+        return list(reversed(self._by_repo.get(repo, [])))[:limit]
+
+
+class SimpleMemProvider(MemoryProvider):
+    """Optional future ``SimpleMem``-backed provider (not the chosen default).
+
+    Postgres is the selected memory backend for GNSIS (see
+    :class:`gnsis.service.repository.PostgresMemoryProvider`); SimpleMem remains
+    a possible alternative adapter and is intentionally left unimplemented so it
+    can never be enabled by accident before it is real.
     """
 
     name = "simplemem"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
-            "SimpleMem-backed memory is not implemented yet. Use NullMemoryProvider "
-            "until the SimpleMem adapter (repo-scoped, approval-gated) is built."
+            "SimpleMem-backed memory is not implemented. The chosen backend is "
+            "Postgres (PostgresMemoryProvider); use that or NullMemoryProvider."
         )
 
     def write(self, record: MemoryRecord) -> Optional[MemoryRecord]:  # pragma: no cover

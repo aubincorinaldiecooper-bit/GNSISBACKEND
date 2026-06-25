@@ -44,6 +44,18 @@ class Settings:
 
     allowed_repos: List[str] = field(default_factory=list)
 
+    # Long-term memory backend: "postgres" (default) or "none".
+    memory_backend: str = "postgres"
+
+    # Sandbox for executing model-written code: "none" (run in the worker
+    # container) or "docker" (ephemeral, isolated container per job).
+    sandbox: str = "none"
+    sandbox_image: str = "gnsis-sandbox:latest"
+    sandbox_network: str = "bridge"
+    sandbox_memory: str = "2g"
+    sandbox_cpus: str = "2"
+    sandbox_timeout: int = 1800
+
     @property
     def celery_broker_url(self) -> str:
         return os.environ.get("CELERY_BROKER_URL", self.redis_url)
@@ -78,6 +90,13 @@ class Settings:
             workspace_root=os.environ.get("GNSIS_WORKSPACE_ROOT", "/tmp/gnsis-workspaces"),
             api_key=os.environ.get("GNSIS_API_KEY"),
             allowed_repos=repos,
+            memory_backend=os.environ.get("GNSIS_MEMORY", "postgres"),
+            sandbox=os.environ.get("GNSIS_SANDBOX", "none"),
+            sandbox_image=os.environ.get("GNSIS_SANDBOX_IMAGE", "gnsis-sandbox:latest"),
+            sandbox_network=os.environ.get("GNSIS_SANDBOX_NETWORK", "bridge"),
+            sandbox_memory=os.environ.get("GNSIS_SANDBOX_MEMORY", "2g"),
+            sandbox_cpus=os.environ.get("GNSIS_SANDBOX_CPUS", "2"),
+            sandbox_timeout=int(os.environ.get("GNSIS_SANDBOX_TIMEOUT", "1800")),
         )
 
 

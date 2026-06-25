@@ -16,10 +16,13 @@ from celery import Celery
 from celery.signals import worker_ready
 
 from ..engines import get_engine
+from ..memory.base import MemoryProvider, NullMemoryProvider
+from ..orchestration.engine import PatchEngine
 from ..orchestration.pipeline import JobPipeline, publish
 from ..orchestration.status import JobStatus
 from .github_app import publisher_from_env
-from .repository import PostgresJobStore
+from .repository import PostgresJobStore, PostgresMemoryProvider
+from .sandbox import DockerEngine
 from .settings import get_settings
 from .workspace import cleanup_workspace, prepare_workspace
 
@@ -48,6 +51,26 @@ def _store() -> PostgresJobStore:
     return PostgresJobStore()
 
 
+def _memory() -> MemoryProvider:
+    if settings.memory_backend == "postgres":
+        return PostgresMemoryProvider()
+    return NullMemoryProvider()
+
+
+def _build_engine(engine_name: str) -> PatchEngine:
+    """The job's engine, wrapped in the Docker sandbox if one is configured."""
+    if settings.sandbox == "docker":
+        return DockerEngine(
+            inner_engine=engine_name,
+            image=settings.sandbox_image,
+            network=settings.sandbox_network,
+            memory=settings.sandbox_memory,
+            cpus=settings.sandbox_cpus,
+            timeout_seconds=settings.sandbox_timeout,
+        )
+    return get_engine(engine_name)
+
+
 @celery_app.task(name="gnsis.run_job")
 def run_job(job_id: str) -> str:
     """Generate the change for ``job_id`` and park it at the approval gate."""
@@ -69,8 +92,7 @@ def run_job(job_id: str) -> str:
             root=settings.workspace_root,
             job_id=job_id,
         )
-        engine = get_engine(job.engine)
-        pipeline = JobPipeline(store, engine)
+        pipeline = JobPipeline(store, _build_engine(job.engine), memory=_memory())
         result = pipeline.run(job_id, workspace)
         return result.status
     except Exception as exc:  # noqa: BLE001
@@ -86,5 +108,5 @@ def publish_pr(job_id: str) -> str:
     """Open the PR for an approved job. Refuses if not approved."""
     store = _store()
     publisher = publisher_from_env(settings)
-    pr = publish(store, publisher, job_id)
+    pr = publish(store, publisher, job_id, memory=_memory())
     return pr.url

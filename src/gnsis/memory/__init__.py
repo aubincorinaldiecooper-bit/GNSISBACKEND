@@ -11,6 +11,7 @@ Two distinct things live here, deliberately kept apart:
 """
 
 from .base import (
+    InMemoryMemoryProvider,
     MemoryProvider,
     MemoryRecord,
     NullMemoryProvider,
@@ -23,5 +24,6 @@ __all__ = [
     "MemoryProvider",
     "MemoryRecord",
     "NullMemoryProvider",
+    "InMemoryMemoryProvider",
     "SimpleMemProvider",
 ]
