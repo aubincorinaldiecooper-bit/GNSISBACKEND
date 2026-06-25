@@ -35,7 +35,8 @@ class DockerSandboxCommandTests(unittest.TestCase):
         from gnsis.service.sandbox import DockerEngine
 
         ws = Workspace(path="/tmp/ws", repo="o/r", base_branch="main")
-        return DockerEngine(inner_engine="mock", image="img:latest")._docker_command(ws)
+        eng = DockerEngine(inner_engine="mock", image="img:latest")
+        return eng._docker_command(ws, eng._book_dir(ws))
 
     def test_entrypoint_is_overridden(self):
         cmd = self._cmd()
@@ -49,6 +50,27 @@ class DockerSandboxCommandTests(unittest.TestCase):
         i = cmd.index("gnsis.service.runner")
         self.assertEqual(cmd[i - 1], "-m")
         self.assertEqual(cmd[i - 2], "img:latest")
+
+    def test_bookkeeping_files_are_outside_the_worktree(self):
+        # The instruction/events/result must never live under /work, or they'd
+        # be swept into the engine's git diff and leak into the PR.
+        cmd = self._cmd()
+        joined = " ".join(cmd)
+        for flag in ("--instruction-file", "--events", "--result"):
+            path = cmd[cmd.index(flag) + 1]
+            self.assertTrue(path.startswith("/gnsis/"), path)
+            self.assertNotIn("/work/", path)
+        # and the worktree is still mounted at /work
+        self.assertIn("/work", joined)
+        self.assertIn(":/gnsis", joined)
+
+    def test_book_dir_is_a_sibling_not_inside_workspace(self):
+        from gnsis.orchestration.engine import Workspace
+        from gnsis.service.sandbox import DockerEngine
+
+        ws = Workspace(path="/tmp/ws", repo="o/r", base_branch="main")
+        book = DockerEngine(inner_engine="mock", image="i")._book_dir(ws)
+        self.assertFalse(book.startswith("/tmp/ws/"))
 
 
 if __name__ == "__main__":
