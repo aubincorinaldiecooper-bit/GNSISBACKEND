@@ -21,9 +21,25 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# The Railway deployment surface (FastAPI API + Celery worker + Postgres).
+# The GNSIS core stays standard-library only; these are needed only to run the
+# service. Install with: pip install -e ".[service]"
+service = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "celery[redis]>=5.3",
+    "redis>=5.0",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2",
+    "PyJWT>=2.8",
+    "cryptography>=42",
+    "claude-agent-sdk>=0.1",
+]
 
 [project.scripts]
 gnsis = "gnsis.cli:main"
+gnsis-migrate = "gnsis.service.db:init_db"
 
 [project.urls]
 Homepage = "https://github.com/aubincorinaldiecooper-bit/gnsis"
