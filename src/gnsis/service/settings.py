@@ -44,6 +44,9 @@ class Settings:
 
     allowed_repos: List[str] = field(default_factory=list)
 
+    # CORS origins allowed to call the API from a browser. Default "*".
+    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+
     # Long-term memory backend: "postgres" (default) or "none".
     memory_backend: str = "postgres"
 
@@ -77,6 +80,11 @@ class Settings:
             for r in os.environ.get("GNSIS_ALLOWED_REPOS", "").split(",")
             if r.strip()
         ]
+        cors = [
+            o.strip()
+            for o in os.environ.get("GNSIS_CORS_ORIGINS", "*").split(",")
+            if o.strip()
+        ] or ["*"]
         return cls(
             database_url=_normalize_db_url(database_url),
             redis_url=redis_url,
@@ -90,6 +98,7 @@ class Settings:
             workspace_root=os.environ.get("GNSIS_WORKSPACE_ROOT", "/tmp/gnsis-workspaces"),
             api_key=os.environ.get("GNSIS_API_KEY"),
             allowed_repos=repos,
+            cors_origins=cors,
             memory_backend=os.environ.get("GNSIS_MEMORY", "postgres"),
             sandbox=os.environ.get("GNSIS_SANDBOX", "none"),
             sandbox_image=os.environ.get("GNSIS_SANDBOX_IMAGE", "gnsis-sandbox:latest"),

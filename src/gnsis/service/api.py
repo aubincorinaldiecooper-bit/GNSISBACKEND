@@ -11,14 +11,32 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..orchestration.models import Approval, JobSpec
 from ..orchestration.status import JobStatus
 from .repository import PostgresJobStore
 from .settings import get_settings
+from .ui import INDEX_HTML
+
+def _cors_origins() -> list:
+    try:
+        return get_settings().cors_origins
+    except Exception:
+        return ["*"]
+
 
 app = FastAPI(title="GNSIS", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
@@ -27,6 +45,16 @@ def _startup() -> None:
     from .db import init_db
 
     init_db()
+
+
+@app.get("/", include_in_schema=False)
+def _root() -> RedirectResponse:
+    return RedirectResponse(url="/ui")
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def _ui() -> str:
+    return INDEX_HTML
 
 
 def store() -> PostgresJobStore:

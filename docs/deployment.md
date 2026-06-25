@@ -37,14 +37,12 @@ client ──HTTP──▶ FastAPI (web)
 ## Setup on Railway
 
 1. **Create a project** and add the **Postgres** and **Redis** plugins.
-2. **Create two services from this repo:**
-   - **web** — start command:
-     `uvicorn gnsis.service.api:app --host 0.0.0.0 --port $PORT`
-   - **worker** — start command:
-     `celery -A gnsis.service.tasks.celery_app worker --loglevel=info --concurrency=2`
-
-   Both install with `pip install -e ".[service]"` (see `railway.json` /
-   `Procfile`).
+2. **Create two services from this repo.** Both build from the included
+   **`Dockerfile`** (Python + Node + the Claude Code CLI + git — the worker needs
+   Node because the Claude Agent SDK drives the Claude Code CLI under the hood).
+   Set each service's start command:
+   - **web** — `uvicorn gnsis.service.api:app --host 0.0.0.0 --port $PORT`
+   - **worker** — `celery -A gnsis.service.tasks.celery_app worker --loglevel=info --concurrency=2`
 3. **Set the environment variables** (below) on **both** services.
 4. Deploy. The schema is created automatically (the API on startup, the worker on
    boot); you can also run `gnsis-migrate` as a one-off.
@@ -79,6 +77,7 @@ Set these on **both** the web and worker services.
 | `GNSIS_WORKER_CONCURRENCY` | `2` | Celery worker concurrency. |
 | `GNSIS_API_KEY` | _unset_ | If set, the API requires `Authorization: Bearer <key>`. |
 | `GNSIS_ALLOWED_REPOS` | _unset_ | Comma-separated allowlist; empty = any repo. |
+| `GNSIS_CORS_ORIGINS` | `*` | Comma-separated browser origins allowed to call the API. |
 
 ### The GitHub App
 
@@ -98,6 +97,10 @@ queued → planning → patching → testing → summarizing → awaiting_approv
 ```
 
 ## Using it
+
+Open the **web** service URL in a browser — `/` serves a built-in UI (`/ui`) to
+create jobs, watch status + logs, review the diff, and approve/reject. Or use the
+API directly:
 
 ```bash
 # create a job
