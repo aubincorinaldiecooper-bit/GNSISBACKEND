@@ -26,5 +26,30 @@ class EngineRegistryTests(unittest.TestCase):
             get_engine("nope")
 
 
+class DockerSandboxCommandTests(unittest.TestCase):
+    """Regression: the runner must be invoked once, not doubled by the image
+    ENTRYPOINT (docker appends `docker run` CMD to an image's ENTRYPOINT)."""
+
+    def _cmd(self):
+        from gnsis.orchestration.engine import Workspace
+        from gnsis.service.sandbox import DockerEngine
+
+        ws = Workspace(path="/tmp/ws", repo="o/r", base_branch="main")
+        return DockerEngine(inner_engine="mock", image="img:latest")._docker_command(ws)
+
+    def test_entrypoint_is_overridden(self):
+        cmd = self._cmd()
+        self.assertIn("--entrypoint", cmd)
+        self.assertEqual(cmd[cmd.index("--entrypoint") + 1], "python")
+
+    def test_runner_module_invoked_exactly_once(self):
+        cmd = self._cmd()
+        self.assertEqual(cmd.count("gnsis.service.runner"), 1)
+        # `-m <module>`, not `python -m <module>` after the image (that would double up)
+        i = cmd.index("gnsis.service.runner")
+        self.assertEqual(cmd[i - 1], "-m")
+        self.assertEqual(cmd[i - 2], "img:latest")
+
+
 if __name__ == "__main__":
     unittest.main()

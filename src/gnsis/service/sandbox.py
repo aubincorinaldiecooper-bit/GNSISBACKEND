@@ -108,9 +108,15 @@ class DockerEngine:
         for var in self.pass_env:
             if os.environ.get(var):
                 cmd += ["-e", var]
+        # Override the image entrypoint explicitly: Dockerfile.sandbox sets
+        # ENTRYPOINT to the runner, and `docker run IMAGE CMD` *appends* CMD to
+        # the entrypoint — without this, the runner would be invoked twice and
+        # argparse would reject the extra positionals. `--entrypoint python`
+        # makes the invocation correct for any gnsis-installed image.
         cmd += [
+            "--entrypoint", "python",
             self.image,
-            "python", "-m", "gnsis.service.runner",
+            "-m", "gnsis.service.runner",
             "--workspace", "/work",
             "--engine", self.inner_engine,
             "--repo", workspace.repo,
