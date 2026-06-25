@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from contextlib import asynccontextmanager
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -21,6 +23,7 @@ from .repository import PostgresJobStore
 from .settings import get_settings
 from .ui import INDEX_HTML
 
+
 def _cors_origins() -> list:
     try:
         return get_settings().cors_origins
@@ -28,7 +31,16 @@ def _cors_origins() -> list:
         return ["*"]
 
 
-app = FastAPI(title="GNSIS", version="0.1.0")
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    # Idempotent: ensure tables exist before the first request.
+    from .db import init_db
+
+    init_db()
+    yield
+
+
+app = FastAPI(title="GNSIS", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,14 +49,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    # Idempotent: ensures tables exist before the first request.
-    from .db import init_db
-
-    init_db()
 
 
 @app.get("/", include_in_schema=False)
