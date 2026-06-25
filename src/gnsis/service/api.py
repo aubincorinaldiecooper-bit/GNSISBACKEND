@@ -11,26 +11,70 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from contextlib import asynccontextmanager
+
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..orchestration.models import Approval, JobSpec
+from ..orchestration.pipeline import reject_job
 from ..orchestration.status import JobStatus
 from .repository import PostgresJobStore
 from .settings import get_settings
+from .ui import INDEX_HTML
 
-app = FastAPI(title="GNSIS", version="0.1.0")
+
+def _cors_origins() -> list:
+    try:
+        return get_settings().cors_origins
+    except Exception:
+        return ["*"]
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    # Idempotent: ensures tables exist before the first request.
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    # Idempotent: ensure tables exist before the first request.
     from .db import init_db
 
     init_db()
+    yield
+
+
+app = FastAPI(title="GNSIS", version="0.1.0", lifespan=_lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/", include_in_schema=False)
+def _root() -> RedirectResponse:
+    return RedirectResponse(url="/ui")
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def _ui() -> str:
+    return INDEX_HTML
 
 
 def store() -> PostgresJobStore:
     return PostgresJobStore()
+
+
+def _memory():
+    """The configured memory provider (Postgres by default, else no-op)."""
+    from ..memory.base import NullMemoryProvider
+
+    if get_settings().memory_backend == "postgres":
+        from .repository import PostgresMemoryProvider
+
+        return PostgresMemoryProvider()
+    return NullMemoryProvider()
 
 
 def require_api_key(authorization: Optional[str] = Header(default=None)) -> None:
@@ -172,11 +216,9 @@ def reject(
     job_id: str, req: ApproveRequest, db: PostgresJobStore = Depends(store)
 ) -> JobResponse:
     _require_awaiting(db, job_id)
-    db.save_approval(
-        Approval(job_id=job_id, decision="rejected", actor=req.actor, note=req.note)
-    )
-    job = db.set_status(job_id, JobStatus.REJECTED)
-    return _to_response(job)
+    # Records the rejection AND distills a lesson into repo-scoped memory.
+    reject_job(db, job_id, actor=req.actor, note=req.note, memory=_memory())
+    return _to_response(db.get_job(job_id))
 
 
 def _require_awaiting(db: PostgresJobStore, job_id: str):

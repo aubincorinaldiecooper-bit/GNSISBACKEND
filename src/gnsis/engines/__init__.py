@@ -20,6 +20,10 @@ def get_engine(name: str, **kwargs) -> PatchEngine:
         from .claude_agent import ClaudeAgentEngine
 
         return ClaudeAgentEngine(**kwargs)
+    if key == "openhands":
+        from .openhands import OpenHandsEngine
+
+        return OpenHandsEngine(**kwargs)
     raise ValueError(f"unknown engine: {name!r}")
 
 

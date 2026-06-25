@@ -7,6 +7,7 @@ stub. These tests pin that contract so future providers conform to it.
 import unittest
 
 from gnsis.memory import (
+    InMemoryMemoryProvider,
     MemoryProvider,
     MemoryRecord,
     NullMemoryProvider,
@@ -33,6 +34,29 @@ class MemoryProviderTests(unittest.TestCase):
     def test_simplemem_is_not_implemented_yet(self):
         with self.assertRaises(NotImplementedError):
             SimpleMemProvider()
+
+
+class InMemoryProviderTests(unittest.TestCase):
+    def setUp(self):
+        self.mem = InMemoryMemoryProvider()
+
+    def test_approval_gates_writes(self):
+        self.assertIsNone(
+            self.mem.write(MemoryRecord(repo="o/r", content="unapproved"))
+        )
+        self.assertEqual(self.mem.recent("o/r"), [])
+
+        rec = MemoryRecord(repo="o/r", content="prefer pytest", approved=True)
+        self.assertIsNotNone(self.mem.write(rec))
+        self.assertEqual(len(self.mem.recent("o/r")), 1)
+
+    def test_reads_are_repo_scoped(self):
+        self.mem.write(MemoryRecord(repo="o/a", content="alpha note", approved=True))
+        self.mem.write(MemoryRecord(repo="o/b", content="beta note", approved=True))
+        self.assertEqual(len(self.mem.recent("o/a")), 1)
+        self.assertEqual(self.mem.recent("o/a")[0].content, "alpha note")
+        self.assertEqual(self.mem.search("o/b", "beta")[0].content, "beta note")
+        self.assertEqual(self.mem.search("o/a", "beta"), [])
 
 
 if __name__ == "__main__":

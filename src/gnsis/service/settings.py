@@ -44,6 +44,21 @@ class Settings:
 
     allowed_repos: List[str] = field(default_factory=list)
 
+    # CORS origins allowed to call the API from a browser. Default "*".
+    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+
+    # Long-term memory backend: "postgres" (default) or "none".
+    memory_backend: str = "postgres"
+
+    # Sandbox for executing model-written code: "none" (run in the worker
+    # container) or "docker" (ephemeral, isolated container per job).
+    sandbox: str = "none"
+    sandbox_image: str = "gnsis-sandbox:latest"
+    sandbox_network: str = "bridge"
+    sandbox_memory: str = "2g"
+    sandbox_cpus: str = "2"
+    sandbox_timeout: int = 1800
+
     @property
     def celery_broker_url(self) -> str:
         return os.environ.get("CELERY_BROKER_URL", self.redis_url)
@@ -65,6 +80,11 @@ class Settings:
             for r in os.environ.get("GNSIS_ALLOWED_REPOS", "").split(",")
             if r.strip()
         ]
+        cors = [
+            o.strip()
+            for o in os.environ.get("GNSIS_CORS_ORIGINS", "*").split(",")
+            if o.strip()
+        ] or ["*"]
         return cls(
             database_url=_normalize_db_url(database_url),
             redis_url=redis_url,
@@ -78,6 +98,14 @@ class Settings:
             workspace_root=os.environ.get("GNSIS_WORKSPACE_ROOT", "/tmp/gnsis-workspaces"),
             api_key=os.environ.get("GNSIS_API_KEY"),
             allowed_repos=repos,
+            cors_origins=cors,
+            memory_backend=os.environ.get("GNSIS_MEMORY", "postgres"),
+            sandbox=os.environ.get("GNSIS_SANDBOX", "none"),
+            sandbox_image=os.environ.get("GNSIS_SANDBOX_IMAGE", "gnsis-sandbox:latest"),
+            sandbox_network=os.environ.get("GNSIS_SANDBOX_NETWORK", "bridge"),
+            sandbox_memory=os.environ.get("GNSIS_SANDBOX_MEMORY", "2g"),
+            sandbox_cpus=os.environ.get("GNSIS_SANDBOX_CPUS", "2"),
+            sandbox_timeout=int(os.environ.get("GNSIS_SANDBOX_TIMEOUT", "1800")),
         )
 
 
