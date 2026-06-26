@@ -40,6 +40,7 @@ service = [
 [project.scripts]
 gnsis = "gnsis.cli:main"
 gnsis-migrate = "gnsis.service.db:init_db"
+gnsis-smoke = "gnsis.smoke:main"
 
 [project.urls]
 Homepage = "https://github.com/aubincorinaldiecooper-bit/gnsis"
