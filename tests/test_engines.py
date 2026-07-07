@@ -21,6 +21,29 @@ class EngineRegistryTests(unittest.TestCase):
     def test_openhands_engine_builds_without_dep(self):
         self.assertEqual(get_engine("openhands").name, "openhands")
 
+    def test_openhands_reads_endpoint_from_env(self):
+        import os
+        from gnsis.engines.openhands import OpenHandsEngine
+
+        keys = {
+            "GNSIS_OPENHANDS_MODEL": "openrouter/deepreinforce-ai/ornith-1.0-397b",
+            "GNSIS_OPENHANDS_BASE_URL": "https://inference.friendli.ai/v1",
+            "GNSIS_OPENHANDS_API_KEY": "sk-test",
+        }
+        saved = {k: os.environ.get(k) for k in keys}
+        try:
+            os.environ.update(keys)
+            eng = OpenHandsEngine()
+            self.assertEqual(eng.model, keys["GNSIS_OPENHANDS_MODEL"])
+            self.assertEqual(eng.base_url, keys["GNSIS_OPENHANDS_BASE_URL"])
+            self.assertEqual(eng.api_key, keys["GNSIS_OPENHANDS_API_KEY"])
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
     def test_unknown_engine_raises(self):
         with self.assertRaises(ValueError):
             get_engine("nope")

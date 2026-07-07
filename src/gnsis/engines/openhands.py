@@ -43,11 +43,18 @@ class OpenHandsEngine:
         self,
         model: Optional[str] = None,
         command: Optional[List[str]] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         max_run_seconds: int = 1800,
         max_test_seconds: int = 600,
     ) -> None:
         self.model = model or os.environ.get("GNSIS_OPENHANDS_MODEL", DEFAULT_MODEL)
         self.command = command or _command_from_env()
+        # For a custom OpenAI-compatible endpoint (FriendliAI, self-hosted vLLM,
+        # a fine-tuned Ornith, …). OpenRouter models (openrouter/…) need neither —
+        # LiteLLM resolves them from OPENROUTER_API_KEY alone.
+        self.base_url = base_url or os.environ.get("GNSIS_OPENHANDS_BASE_URL")
+        self.api_key = api_key or os.environ.get("GNSIS_OPENHANDS_API_KEY")
         self.max_run_seconds = max_run_seconds
         self.max_test_seconds = max_test_seconds
 
@@ -108,7 +115,11 @@ class OpenHandsEngine:
         ]
         env = dict(os.environ)
         env["LLM_MODEL"] = self.model
-        sink.log(f"running OpenHands: {cmd[0]} …")
+        if self.base_url:
+            env["LLM_BASE_URL"] = self.base_url
+        if self.api_key:
+            env["LLM_API_KEY"] = self.api_key
+        sink.log(f"running OpenHands ({self.model}): {cmd[0]} …")
         try:
             proc = subprocess.run(
                 cmd,

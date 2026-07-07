@@ -132,7 +132,32 @@ Running both lets you A/B engines on real work and keep the one that wins.
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `GNSIS_OPENHANDS_MODEL` | `anthropic/claude-opus-4-8` | Model OpenHands uses (`LLM_MODEL`). |
+| `GNSIS_OPENHANDS_BASE_URL` | _unset_ | Custom OpenAI-compatible endpoint (FriendliAI, self-hosted vLLM, …). Not needed for `openrouter/…` models. |
+| `GNSIS_OPENHANDS_API_KEY` | _unset_ | Key for that custom endpoint. |
 | `GNSIS_OPENHANDS_CMD` | `["python","-m","openhands.core.main","-t","{task}"]` | Headless invocation (JSON list; `{task}`/`{workspace}` substituted). Tune per OpenHands version. |
+
+### Running an open model (e.g. Ornith) via OpenHands
+
+GNSIS is model-agnostic through OpenHands. To use an open agentic-coding model
+like **Ornith-1.0** (MIT, DeepReinforce) instead of a closed API:
+
+- **Via OpenRouter (simplest — no base URL needed):**
+  ```
+  GNSIS_DEFAULT_ENGINE=openhands
+  GNSIS_OPENHANDS_MODEL=openrouter/deepreinforce-ai/ornith-1.0-397b
+  OPENROUTER_API_KEY=sk-or-...
+  ```
+- **Via a custom endpoint (FriendliAI, self-hosted vLLM, or a fine-tuned model):**
+  ```
+  GNSIS_OPENHANDS_MODEL=openai/deepreinforce-ai/ornith-1.0-35b
+  GNSIS_OPENHANDS_BASE_URL=https://<endpoint>/v1
+  GNSIS_OPENHANDS_API_KEY=...
+  ```
+
+Because the weights are open, your approval-gated memory (accepted changes as
+positives, rejections+reasons as negatives) can later become **fine-tuning data**
+— GNSIS training its own coding model on your repos. Confirm the exact model slug
+on the provider and validate the wiring with `gnsis-smoke` before deploying.
 
 ## Learning loop (gets better over time)
 

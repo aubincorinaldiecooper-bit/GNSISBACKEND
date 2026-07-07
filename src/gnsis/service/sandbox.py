@@ -61,7 +61,15 @@ class DockerEngine:
         self.memory = memory
         self.cpus = cpus
         self.timeout_seconds = timeout_seconds
-        self.pass_env = pass_env or ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]
+        self.pass_env = pass_env or [
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GNSIS_OPENHANDS_MODEL",
+            "GNSIS_OPENHANDS_BASE_URL",
+            "GNSIS_OPENHANDS_API_KEY",
+            "LLM_BASE_URL",
+            "LLM_API_KEY",
+        ]
 
     def generate(
         self,
