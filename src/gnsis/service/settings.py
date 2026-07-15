@@ -32,10 +32,29 @@ class Settings:
     anthropic_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
 
-    # GitHub App — used only by the publish step (worker), never the API.
+    # GitHub App — the platform-owned credentials. The App id + private key are
+    # used to mint short-lived installation tokens per run. The global
+    # installation id is DEPRECATED for user runs (each run now resolves its own
+    # installation) and kept only as an optional fallback for legacy/internal runs.
     github_app_id: Optional[str] = None
     github_app_private_key: Optional[str] = None
     github_app_installation_id: Optional[str] = None
+    github_app_slug: Optional[str] = None
+    github_webhook_secret: Optional[str] = None
+
+    # Better Auth bridge — how the FastAPI backend authenticates end users.
+    # The backend verifies short-lived JWTs minted by the Better Auth service
+    # against its published JWKS; it never sees Better Auth secrets or cookies.
+    better_auth_jwks_url: Optional[str] = None
+    better_auth_issuer: Optional[str] = None
+    better_auth_audience: Optional[str] = None
+
+    # Server-to-server channel to the auth service (installation ownership check).
+    auth_internal_url: Optional[str] = None
+    auth_internal_secret: Optional[str] = None
+
+    # The user-facing frontend origin (CORS + webhook/onboarding return URLs).
+    frontend_url: Optional[str] = None
 
     default_engine: str = "claude"
     default_base_branch: str = "main"
@@ -58,6 +77,51 @@ class Settings:
     sandbox_memory: str = "2g"
     sandbox_cpus: str = "2"
     sandbox_timeout: int = 1800
+
+    @property
+    def user_auth_enabled(self) -> bool:
+        """True when Better Auth JWT verification is fully configured."""
+        return bool(
+            self.better_auth_jwks_url
+            and self.better_auth_issuer
+            and self.better_auth_audience
+        )
+
+    @property
+    def installation_verification_enabled(self) -> bool:
+        """True when the backend can call the auth service to verify ownership."""
+        return bool(self.auth_internal_url and self.auth_internal_secret)
+
+    def missing_production_vars(self) -> List[str]:
+        """Names of required-for-production settings that are absent.
+
+        Used by the startup check to fail loudly and actionably rather than
+        limping along and rejecting every user request at runtime.
+        """
+        missing: List[str] = []
+        if not self.user_auth_enabled:
+            for name, value in (
+                ("BETTER_AUTH_JWKS_URL", self.better_auth_jwks_url),
+                ("BETTER_AUTH_ISSUER", self.better_auth_issuer),
+                ("BETTER_AUTH_AUDIENCE", self.better_auth_audience),
+            ):
+                if not value:
+                    missing.append(name)
+        if not self.installation_verification_enabled:
+            for name, value in (
+                ("GNSIS_AUTH_INTERNAL_URL", self.auth_internal_url),
+                ("GNSIS_AUTH_INTERNAL_SECRET", self.auth_internal_secret),
+            ):
+                if not value:
+                    missing.append(name)
+        for name, value in (
+            ("GITHUB_APP_ID", self.github_app_id),
+            ("GITHUB_APP_PRIVATE_KEY", self.github_app_private_key),
+            ("GITHUB_APP_SLUG", self.github_app_slug),
+        ):
+            if not value:
+                missing.append(name)
+        return missing
 
     @property
     def celery_broker_url(self) -> str:
@@ -93,6 +157,14 @@ class Settings:
             github_app_id=os.environ.get("GITHUB_APP_ID"),
             github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY"),
             github_app_installation_id=os.environ.get("GITHUB_APP_INSTALLATION_ID"),
+            github_app_slug=os.environ.get("GITHUB_APP_SLUG"),
+            github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET"),
+            better_auth_jwks_url=os.environ.get("BETTER_AUTH_JWKS_URL"),
+            better_auth_issuer=os.environ.get("BETTER_AUTH_ISSUER"),
+            better_auth_audience=os.environ.get("BETTER_AUTH_AUDIENCE"),
+            auth_internal_url=os.environ.get("GNSIS_AUTH_INTERNAL_URL"),
+            auth_internal_secret=os.environ.get("GNSIS_AUTH_INTERNAL_SECRET"),
+            frontend_url=os.environ.get("GNSIS_FRONTEND_URL"),
             default_engine=os.environ.get("GNSIS_DEFAULT_ENGINE", "claude"),
             default_base_branch=os.environ.get("GNSIS_DEFAULT_BASE_BRANCH", "main"),
             workspace_root=os.environ.get("GNSIS_WORKSPACE_ROOT", "/tmp/gnsis-workspaces"),

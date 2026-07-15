@@ -12,7 +12,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -20,6 +30,104 @@ from .db import Base
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# -- tenancy: one personal workspace per Better Auth user ----------------------
+
+
+class Workspace(Base):
+    """A user's personal Genesis workspace. One per Better Auth subject."""
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_auth_subject: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), default="Personal")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    installations: Mapped[list["GitHubInstallation"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    repositories: Mapped[list["Repository"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+
+
+class GitHubInstallation(Base):
+    """A GitHub App installation claimed by (and scoped to) one workspace."""
+
+    __tablename__ = "github_installations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id"), index=True
+    )
+    github_installation_id: Mapped[int] = mapped_column(
+        BigInteger, unique=True, index=True
+    )
+    github_account_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    github_account_login: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    github_account_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    suspended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    workspace: Mapped[Workspace] = relationship(back_populates="installations")
+    repositories: Mapped[list["Repository"]] = relationship(
+        back_populates="installation", cascade="all, delete-orphan"
+    )
+
+
+class Repository(Base):
+    """A repository authorized through a workspace's GitHub App installation."""
+
+    __tablename__ = "repositories"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "github_repository_id", name="uq_repo_per_workspace"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    github_installation_record_id: Mapped[str] = mapped_column(
+        ForeignKey("github_installations.id"), index=True
+    )
+    github_repository_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    owner: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(255))
+    full_name: Mapped[str] = mapped_column(String(511), index=True)
+    default_branch: Mapped[str] = mapped_column(String(255), default="main")
+    private: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    workspace: Mapped[Workspace] = relationship(back_populates="repositories")
+    installation: Mapped[GitHubInstallation] = relationship(
+        back_populates="repositories"
+    )
+
+
+class WebhookDelivery(Base):
+    """Idempotency ledger: one row per processed GitHub webhook delivery."""
+
+    __tablename__ = "webhook_deliveries"
+
+    delivery_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    event: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Job(Base):
@@ -34,6 +142,10 @@ class Job(Base):
     branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     context: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Tenancy — nullable so legacy/internal rows created before this migration
+    # (and internal-API-key runs) remain valid; user runs always set both.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

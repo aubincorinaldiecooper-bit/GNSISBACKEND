@@ -38,6 +38,7 @@ class JobStatus:
     COMPLETED = "completed"
     REJECTED = "rejected"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 #: status the worker sets while a given phase runs
@@ -51,7 +52,7 @@ PHASE_STATUS: Dict[str, str] = {
 
 #: states from which no further automatic transition happens
 TERMINAL: FrozenSet[str] = frozenset(
-    {JobStatus.COMPLETED, JobStatus.REJECTED, JobStatus.FAILED}
+    {JobStatus.COMPLETED, JobStatus.REJECTED, JobStatus.FAILED, JobStatus.CANCELLED}
 )
 
 #: the gate: a job sits here until a human approves or rejects

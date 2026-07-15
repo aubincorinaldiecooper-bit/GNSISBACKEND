@@ -20,7 +20,9 @@ dependencies = []
 dynamic = ["version"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+# `httpx` is required by FastAPI's TestClient, used by the service auth/tenancy
+# tests. It's a test-only dependency; the runtime service does not need it.
+dev = ["pytest>=7", "httpx>=0.27"]
 # The Railway deployment surface (FastAPI API + Celery worker + Postgres).
 # The GNSIS core stays standard-library only; these are needed only to run the
 # service. Install with: pip install -e ".[service]"

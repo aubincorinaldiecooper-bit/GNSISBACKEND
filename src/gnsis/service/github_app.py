@@ -52,13 +52,53 @@ class GitHubApp:
         return jwt.encode(payload, self.private_key, algorithm="RS256")
 
     def installation_token(self) -> str:
+        return self.token_for_installation(self.installation_id)
+
+    def token_for_installation(self, installation_id: Any) -> str:
+        """Mint a short-lived installation access token for ``installation_id``.
+
+        Not persisted anywhere: the returned token lives only in memory for the
+        duration of the caller's operation (clone/push/PR, or a repo sync).
+        """
         token_jwt = self._app_jwt()
         data = _request(
             "POST",
-            f"{_API}/app/installations/{self.installation_id}/access_tokens",
+            f"{_API}/app/installations/{installation_id}/access_tokens",
             headers={"Authorization": f"Bearer {token_jwt}"},
         )
         return data["token"]
+
+
+def app_from_settings(settings: Any) -> "GitHubApp":
+    """Build a GitHubApp for token minting, independent of any single installation.
+
+    The global installation id is optional now (each run resolves its own), so a
+    placeholder is used — only :meth:`token_for_installation` is called with a
+    real, per-run installation id.
+    """
+    return GitHubApp(
+        app_id=settings.github_app_id,
+        private_key=settings.github_app_private_key,
+        installation_id=settings.github_app_installation_id or "0",
+    )
+
+
+def list_installation_repositories(token: str) -> list:
+    """List repositories accessible to an installation token (paginated)."""
+    repos: list = []
+    page = 1
+    while True:
+        data = _request(
+            "GET",
+            f"{_API}/installation/repositories?per_page=100&page={page}",
+            headers={"Authorization": f"token {token}"},
+        )
+        batch = data.get("repositories", []) if isinstance(data, dict) else []
+        repos.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return repos
 
 
 class GitHubPublisher:

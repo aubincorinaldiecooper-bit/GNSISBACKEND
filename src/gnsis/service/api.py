@@ -2,64 +2,145 @@
 
 Every endpoint either reads Postgres or enqueues a Celery task. **No evolution or
 generation work runs in a request handler** — creating a job returns immediately
-with a queued record; the worker does the long work. Approval simply records the
-human decision and enqueues ``publish_pr``.
+with a queued record; the worker does the long work.
+
+Authentication: user-facing routes require a short-lived Better Auth JWT
+(verified against the auth service's JWKS). Identity comes only from the verified
+token — never from a request body. Every user route is scoped to the caller's
+personal workspace, so one user can never read or act on another's data. The
+legacy ``GNSIS_API_KEY`` remains only as an internal/emergency path
+(``/internal/*``); it is not an end-user identity.
 """
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
-from contextlib import asynccontextmanager
-
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..orchestration.models import Approval, JobSpec
 from ..orchestration.pipeline import reject_job
-from ..orchestration.status import JobStatus
+from ..orchestration.status import JobStatus, is_terminal
+from . import installations as installations_svc
+from . import workspaces as ws
+from . import webhooks as webhooks_svc
+from .auth import AuthedUser, AuthError, JwksCache, JwtVerifier, bearer_token
+from .auth_client import AuthServiceClient, InstallationVerificationError
+from .github_app import app_from_settings
 from .repository import PostgresJobStore
 from .settings import get_settings
 from .ui import INDEX_HTML
+from .workspaces import WorkspaceConflictError, WorkspaceRecord
 
 
 def _cors_origins() -> list:
     try:
-        return get_settings().cors_origins
+        settings = get_settings()
+        if settings.frontend_url:
+            return [settings.frontend_url]
+        return settings.cors_origins
     except Exception:
         return ["*"]
 
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
-    # Idempotent: ensure tables exist before the first request.
     from .db import init_db
 
     init_db()
+    # Fail loud and actionable if production auth vars are missing.
+    try:
+        settings = get_settings()
+        missing = settings.missing_production_vars()
+        if missing:
+            import logging
+
+            logging.getLogger("gnsis").warning(
+                "GNSIS starting with missing auth/GitHub settings; user routes "
+                "will reject requests until these are set: %s",
+                ", ".join(missing),
+            )
+    except Exception:  # noqa: BLE001 - never let the check crash startup
+        pass
     yield
 
 
-app = FastAPI(title="GNSIS", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="GNSIS", version="0.2.0", lifespan=_lifespan)
 
+_allow_origins = _cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins(),
-    allow_credentials=False,
+    allow_origins=_allow_origins,
+    allow_credentials="*" not in _allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-@app.get("/", include_in_schema=False)
-def _root() -> RedirectResponse:
-    return RedirectResponse(url="/ui")
+# -- dependency providers (overridable in tests) ------------------------------
+
+_verifier: Optional[JwtVerifier] = None
 
 
-@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
-def _ui() -> str:
-    return INDEX_HTML
+def get_verifier() -> JwtVerifier:
+    settings = get_settings()
+    if not settings.user_auth_enabled:
+        raise HTTPException(status_code=503, detail="user authentication is not configured")
+    global _verifier
+    if _verifier is None:
+        cache = JwksCache(url=settings.better_auth_jwks_url)
+        _verifier = JwtVerifier(
+            cache,
+            issuer=settings.better_auth_issuer,
+            audience=settings.better_auth_audience,
+        )
+    return _verifier
+
+
+def get_auth_client() -> AuthServiceClient:
+    settings = get_settings()
+    if not settings.installation_verification_enabled:
+        raise HTTPException(status_code=503, detail="installation verification is not configured")
+    return AuthServiceClient(
+        base_url=settings.auth_internal_url,
+        internal_secret=settings.auth_internal_secret,
+    )
+
+
+def get_github_app():
+    settings = get_settings()
+    if not (settings.github_app_id and settings.github_app_private_key):
+        raise HTTPException(status_code=503, detail="GitHub App credentials are not configured")
+    return app_from_settings(settings)
+
+
+def current_user(
+    authorization: Optional[str] = Header(default=None),
+    verifier: JwtVerifier = Depends(get_verifier),
+) -> AuthedUser:
+    try:
+        token = bearer_token(authorization)
+        return verifier.verify(token)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+def current_workspace(user: AuthedUser = Depends(current_user)) -> WorkspaceRecord:
+    """The caller's personal workspace, created on first authenticated request."""
+    return ws.get_or_create_workspace(user.subject)
+
+
+def require_internal_key(authorization: Optional[str] = Header(default=None)) -> None:
+    """Guard for internal/emergency routes. Not an end-user identity."""
+    settings = get_settings()
+    if not settings.api_key:
+        raise HTTPException(status_code=503, detail="internal API is not enabled")
+    if authorization != f"Bearer {settings.api_key}":
+        raise HTTPException(status_code=401, detail="invalid or missing internal API key")
 
 
 def store() -> PostgresJobStore:
@@ -67,7 +148,6 @@ def store() -> PostgresJobStore:
 
 
 def _memory():
-    """The configured memory provider (Postgres by default, else no-op)."""
     from ..memory.base import NullMemoryProvider
 
     if get_settings().memory_backend == "postgres":
@@ -77,20 +157,17 @@ def _memory():
     return NullMemoryProvider()
 
 
-def require_api_key(authorization: Optional[str] = Header(default=None)) -> None:
-    """Optional shared-secret gate. Disabled unless GNSIS_API_KEY is set."""
-    settings = get_settings()
-    if not settings.api_key:
-        return
-    expected = f"Bearer {settings.api_key}"
-    if authorization != expected:
-        raise HTTPException(status_code=401, detail="invalid or missing API key")
-
-
 # -- schemas ------------------------------------------------------------------
 
 
 class CreateJobRequest(BaseModel):
+    repository_id: str
+    instruction: str
+    base_branch: Optional[str] = None
+    engine: Optional[str] = None
+
+
+class InternalCreateJobRequest(BaseModel):
     repo: str = Field(..., examples=["owner/name"])
     instruction: str
     base_branch: Optional[str] = None
@@ -119,21 +196,37 @@ class LogResponse(BaseModel):
 
 
 class ApproveRequest(BaseModel):
-    actor: str = "human"
     note: str = ""
 
 
-# -- routes -------------------------------------------------------------------
+class ClaimRequest(BaseModel):
+    installation_id: int
+
+
+# -- health / meta ------------------------------------------------------------
+
+
+@app.get("/", include_in_schema=False)
+def _root() -> RedirectResponse:
+    return RedirectResponse(url="/ui")
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def _ui() -> str:
+    return INDEX_HTML
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    # Never expose secrets or their values — only whether subsystems are wired.
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "user_auth": settings.user_auth_enabled,
+        "github_app": bool(settings.github_app_id and settings.github_app_private_key),
+    }
 
 
-# Kept in sync with gnsis.engines.get_engine's registry by hand — small and
-# rarely changes, and a static list avoids probing API keys just to answer
-# "what's selectable" for the UI.
 AVAILABLE_ENGINES = [
     {"id": "claude", "label": "Claude Agent SDK"},
     {"id": "gnsis", "label": "GNSIS (OpenRouter, native)"},
@@ -146,8 +239,259 @@ def list_engines() -> list:
     return AVAILABLE_ENGINES
 
 
-@app.post("/jobs", response_model=JobResponse, dependencies=[Depends(require_api_key)])
-def create_job(req: CreateJobRequest, db: PostgresJobStore = Depends(store)) -> JobResponse:
+# -- identity + workspace -----------------------------------------------------
+
+
+@app.get("/v1/me")
+def me(
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    installs = ws.list_installations(workspace.id)
+    active = [i for i in installs if i.status == "active"]
+    repos = ws.list_repositories(workspace.id)
+    return {
+        "user": {
+            "id": user.subject,
+            "email": user.email,
+            "name": user.name,
+            "avatar_url": user.avatar_url,
+        },
+        "workspace": {"id": workspace.id, "name": workspace.name},
+        "github": {
+            "connected": len(active) > 0,
+            "installation_count": len(active),
+            "repository_count": len(repos),
+        },
+    }
+
+
+# -- GitHub installations -----------------------------------------------------
+
+
+def _installation_dict(inst) -> dict:
+    return {
+        "installation_id": inst.github_installation_id,
+        "status": inst.status,
+        "account": {
+            "id": inst.github_account_id,
+            "login": inst.github_account_login,
+            "type": inst.github_account_type,
+        },
+    }
+
+
+def _repository_dict(repo) -> dict:
+    return {
+        "id": repo.id,
+        "github_repository_id": repo.github_repository_id,
+        "owner": repo.owner,
+        "name": repo.name,
+        "full_name": repo.full_name,
+        "default_branch": repo.default_branch,
+        "private": repo.private,
+        "enabled": repo.enabled,
+        "archived": repo.archived,
+    }
+
+
+@app.post("/v1/github/installations/claim")
+def claim_installation(
+    req: ClaimRequest,
+    user: AuthedUser = Depends(current_user),
+    auth_client: AuthServiceClient = Depends(get_auth_client),
+    github_app=Depends(get_github_app),
+) -> dict:
+    try:
+        result = installations_svc.claim_installation(
+            auth_subject=user.subject,
+            installation_id=req.installation_id,
+            auth_client=auth_client,
+            github_app=github_app,
+        )
+    except InstallationVerificationError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    except WorkspaceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "installation": _installation_dict(result.installation),
+        "repositories": [_repository_dict(r) for r in result.repositories],
+    }
+
+
+@app.get("/v1/github/installations")
+def list_installations_route(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> list:
+    return [_installation_dict(i) for i in ws.list_installations(workspace.id)]
+
+
+@app.post("/v1/github/installations/{installation_id}/sync")
+def sync_installation_route(
+    installation_id: int,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    github_app=Depends(get_github_app),
+) -> dict:
+    inst = ws.get_installation_for_workspace(workspace.id, installation_id)
+    if inst is None:
+        raise HTTPException(status_code=404, detail="installation not found")
+    repos = installations_svc.sync_installation(
+        workspace_id=workspace.id, installation=inst, github_app=github_app
+    )
+    return {
+        "installation": _installation_dict(inst),
+        "repositories": [_repository_dict(r) for r in repos],
+    }
+
+
+@app.get("/v1/repositories")
+def list_repositories_route(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> list:
+    return [_repository_dict(r) for r in ws.list_repositories(workspace.id)]
+
+
+# -- jobs (user-facing, workspace-scoped) -------------------------------------
+
+
+@app.post("/jobs", response_model=JobResponse)
+def create_job(
+    req: CreateJobRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> JobResponse:
+    settings = get_settings()
+    repo = ws.get_repository(workspace.id, req.repository_id)
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repository not found")
+    if not repo.enabled:
+        raise HTTPException(status_code=409, detail="repository is disabled")
+    inst = ws.get_installation_by_record_id(repo.github_installation_record_id)
+    if inst is None or inst.status == "deleted":
+        raise HTTPException(status_code=409, detail="repository installation is unavailable")
+    if inst.status == "suspended":
+        raise HTTPException(status_code=409, detail="repository installation is suspended")
+
+    spec = JobSpec(
+        repo=repo.full_name,
+        instruction=req.instruction,
+        base_branch=req.base_branch or repo.default_branch or settings.default_base_branch,
+        engine=req.engine or settings.default_engine,
+        workspace_id=workspace.id,
+        repository_id=repo.id,
+    )
+    job = db.create_job(spec)
+
+    from .tasks import run_job
+
+    run_job.delay(job.id)
+    return _to_response(job)
+
+
+@app.get("/jobs", response_model=List[JobResponse])
+def list_jobs(
+    limit: int = 50,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> List[JobResponse]:
+    jobs = [j for j in db.list_jobs(limit=500) if j.workspace_id == workspace.id]
+    return [_to_response(j) for j in jobs[:limit]]
+
+
+@app.get("/jobs/{job_id}", response_model=JobResponse)
+def get_job(
+    job_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> JobResponse:
+    return _to_response(_require_owned_job(db, workspace, job_id))
+
+
+@app.get("/jobs/{job_id}/logs", response_model=List[LogResponse])
+def get_logs(
+    job_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> List[LogResponse]:
+    _require_owned_job(db, workspace, job_id)
+    return [
+        LogResponse(phase=e.phase, level=e.level, message=e.message, created_at=e.created_at)
+        for e in db.get_logs(job_id)
+    ]
+
+
+@app.get("/jobs/{job_id}/diff")
+def get_diff(
+    job_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> dict:
+    _require_owned_job(db, workspace, job_id)
+    diff = db.get_diff(job_id)
+    if diff is None:
+        raise HTTPException(status_code=404, detail="no diff yet")
+    return {"patch": diff.patch, "files_changed": diff.files_changed}
+
+
+@app.post("/jobs/{job_id}/approve", response_model=JobResponse)
+def approve(
+    job_id: str,
+    req: ApproveRequest,
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> JobResponse:
+    _require_owned_job(db, workspace, job_id)
+    _require_awaiting(db, job_id)
+    db.save_approval(
+        Approval(job_id=job_id, decision="approved", actor=user.subject, note=req.note)
+    )
+    job = db.set_status(job_id, JobStatus.APPROVED)
+
+    from .tasks import publish_pr
+
+    publish_pr.delay(job_id)
+    return _to_response(job)
+
+
+@app.post("/jobs/{job_id}/reject", response_model=JobResponse)
+def reject(
+    job_id: str,
+    req: ApproveRequest,
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> JobResponse:
+    _require_owned_job(db, workspace, job_id)
+    _require_awaiting(db, job_id)
+    reject_job(db, job_id, actor=user.subject, note=req.note, memory=_memory())
+    return _to_response(db.get_job(job_id))
+
+
+@app.post("/jobs/{job_id}/cancel", response_model=JobResponse)
+def cancel(
+    job_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> JobResponse:
+    job = _require_owned_job(db, workspace, job_id)
+    if is_terminal(job.status):
+        raise HTTPException(status_code=409, detail=f"job is already '{job.status}'")
+    job = db.set_status(job_id, JobStatus.CANCELLED, error="cancelled by user")
+    return _to_response(job)
+
+
+# -- internal / emergency (raw repo, behind the internal key) -----------------
+
+
+@app.post(
+    "/internal/jobs",
+    response_model=JobResponse,
+    dependencies=[Depends(require_internal_key)],
+)
+def internal_create_job(
+    req: InternalCreateJobRequest, db: PostgresJobStore = Depends(store)
+) -> JobResponse:
     settings = get_settings()
     if settings.allowed_repos and req.repo not in settings.allowed_repos:
         raise HTTPException(status_code=403, detail=f"repo not allowed: {req.repo}")
@@ -158,83 +502,51 @@ def create_job(req: CreateJobRequest, db: PostgresJobStore = Depends(store)) -> 
         engine=req.engine or settings.default_engine,
     )
     job = db.create_job(spec)
-
-    # Enqueue the long work; never run it here.
     from .tasks import run_job
 
     run_job.delay(job.id)
     return _to_response(job)
 
 
-@app.get("/jobs", response_model=List[JobResponse], dependencies=[Depends(require_api_key)])
-def list_jobs(limit: int = 50, db: PostgresJobStore = Depends(store)) -> List[JobResponse]:
-    return [_to_response(j) for j in db.list_jobs(limit=limit)]
+# -- GitHub webhooks ----------------------------------------------------------
 
 
-@app.get("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_api_key)])
-def get_job(job_id: str, db: PostgresJobStore = Depends(store)) -> JobResponse:
+@app.post("/github/webhooks")
+async def github_webhooks(request: Request) -> dict:
+    settings = get_settings()
+    if not settings.github_webhook_secret:
+        raise HTTPException(status_code=503, detail="webhooks are not configured")
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    try:
+        webhooks_svc.verify_signature(settings.github_webhook_secret, body, signature)
+    except webhooks_svc.WebhookError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+    event = request.headers.get("X-GitHub-Event", "")
+    delivery = request.headers.get("X-GitHub-Delivery", "")
+    import json
+
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    return webhooks_svc.handle_event(event, delivery, payload)
+
+
+# -- helpers ------------------------------------------------------------------
+
+
+def _require_owned_job(db: PostgresJobStore, workspace: WorkspaceRecord, job_id: str):
+    """Fetch a job only if it belongs to the caller's workspace.
+
+    Cross-workspace (or unknown) ids return 404 — never confirm another user's
+    job exists, so ids can't be enumerated.
+    """
     job = db.get_job(job_id)
-    if job is None:
+    if job is None or job.workspace_id != workspace.id:
         raise HTTPException(status_code=404, detail="job not found")
-    return _to_response(job)
-
-
-@app.get(
-    "/jobs/{job_id}/logs",
-    response_model=List[LogResponse],
-    dependencies=[Depends(require_api_key)],
-)
-def get_logs(job_id: str, db: PostgresJobStore = Depends(store)) -> List[LogResponse]:
-    if db.get_job(job_id) is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    return [
-        LogResponse(
-            phase=e.phase, level=e.level, message=e.message, created_at=e.created_at
-        )
-        for e in db.get_logs(job_id)
-    ]
-
-
-@app.get("/jobs/{job_id}/diff", dependencies=[Depends(require_api_key)])
-def get_diff(job_id: str, db: PostgresJobStore = Depends(store)) -> dict:
-    diff = db.get_diff(job_id)
-    if diff is None:
-        raise HTTPException(status_code=404, detail="no diff yet")
-    return {"patch": diff.patch, "files_changed": diff.files_changed}
-
-
-@app.post(
-    "/jobs/{job_id}/approve",
-    response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
-)
-def approve(
-    job_id: str, req: ApproveRequest, db: PostgresJobStore = Depends(store)
-) -> JobResponse:
-    job = _require_awaiting(db, job_id)
-    db.save_approval(
-        Approval(job_id=job_id, decision="approved", actor=req.actor, note=req.note)
-    )
-    job = db.set_status(job_id, JobStatus.APPROVED)
-
-    from .tasks import publish_pr
-
-    publish_pr.delay(job_id)
-    return _to_response(job)
-
-
-@app.post(
-    "/jobs/{job_id}/reject",
-    response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
-)
-def reject(
-    job_id: str, req: ApproveRequest, db: PostgresJobStore = Depends(store)
-) -> JobResponse:
-    _require_awaiting(db, job_id)
-    # Records the rejection AND distills a lesson into repo-scoped memory.
-    reject_job(db, job_id, actor=req.actor, note=req.note, memory=_memory())
-    return _to_response(db.get_job(job_id))
+    return job
 
 
 def _require_awaiting(db: PostgresJobStore, job_id: str):
@@ -243,8 +555,7 @@ def _require_awaiting(db: PostgresJobStore, job_id: str):
         raise HTTPException(status_code=404, detail="job not found")
     if job.status != JobStatus.AWAITING_APPROVAL:
         raise HTTPException(
-            status_code=409,
-            detail=f"job is '{job.status}', not awaiting approval",
+            status_code=409, detail=f"job is '{job.status}', not awaiting approval"
         )
     return job
 

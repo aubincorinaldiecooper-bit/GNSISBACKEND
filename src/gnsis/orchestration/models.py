@@ -32,6 +32,9 @@ class JobSpec:
     engine: str = "claude"  # which PatchEngine to use
     branch: Optional[str] = None  # proposed head branch; defaults from job id
     context: Dict[str, Any] = field(default_factory=dict)
+    # Tenancy — set for user runs; None for legacy/internal runs.
+    workspace_id: Optional[str] = None
+    repository_id: Optional[str] = None
 
 
 @dataclass
@@ -49,6 +52,9 @@ class JobRecord:
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
     context: Dict[str, Any] = field(default_factory=dict)
+    # Tenancy — set for user runs; None for legacy/internal runs.
+    workspace_id: Optional[str] = None
+    repository_id: Optional[str] = None
 
 
 @dataclass

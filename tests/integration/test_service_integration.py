@@ -16,7 +16,13 @@ from unittest import mock
 RUN = bool(os.environ.get("DATABASE_URL")) and bool(os.environ.get("REDIS_URL"))
 
 if RUN:  # imports require the `service` extra — only load when we'll run
+    import json as _json
+    import time as _time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
     from fastapi.testclient import TestClient
+    from jwt.algorithms import ECAlgorithm as _ECAlgorithm
 
     from gnsis.memory.base import MemoryRecord
     from gnsis.orchestration import (
@@ -29,12 +35,22 @@ if RUN:  # imports require the `service` extra — only load when we'll run
         publish,
     )
     from gnsis.service import api as api_module
+    from gnsis.service.auth import JwksCache, JwtVerifier
+    from gnsis.service.auth_client import VerifiedInstallation
     from gnsis.service.db import init_db
     from gnsis.service.repository import (
         PostgresJobStore,
         PostgresMemoryProvider,
         PostgresResourceStore,
     )
+    from gnsis.service.workspaces import (
+        get_or_create_workspace,
+        sync_repositories,
+        upsert_installation,
+    )
+
+    _ISS = "https://auth.integration.test"
+    _AUD = "gnsis-integration"
 
 
 class _FakePublisher:
@@ -91,32 +107,103 @@ class PostgresFlowTests(unittest.TestCase):
 
 @unittest.skipUnless(RUN, "needs DATABASE_URL + REDIS_URL + service extra")
 class ApiTests(unittest.TestCase):
+    """Drives the user-facing HTTP contract (JWT + workspace + repository_id)."""
+
     @classmethod
     def setUpClass(cls):
+        # Configure + inject a JWT verifier so the authed routes accept our
+        # test tokens; seed a workspace/installation/repo the user owns.
+        os.environ["BETTER_AUTH_JWKS_URL"] = "https://auth.integration.test/jwks"
+        os.environ["BETTER_AUTH_ISSUER"] = _ISS
+        os.environ["BETTER_AUTH_AUDIENCE"] = _AUD
+        from gnsis.service import settings as settings_mod
+
+        settings_mod._settings = None
         init_db()
+
+        cls.priv = _ec.generate_private_key(_ec.SECP256R1())
+        jwk = _json.loads(_ECAlgorithm.to_jwk(cls.priv.public_key()))
+        jwk.update({"kid": "itk", "alg": "ES256", "use": "sig"})
+        verifier = JwtVerifier(
+            JwksCache(fetcher=lambda: {"keys": [jwk]}), issuer=_ISS, audience=_AUD
+        )
+        api_module.app.dependency_overrides[api_module.get_verifier] = lambda: verifier
         cls.client = TestClient(api_module.app)
+
+        cls.ws = get_or_create_workspace("integration-user")
+        inst = upsert_installation(
+            cls.ws.id,
+            VerifiedInstallation(
+                installation_id=7001, account_id=1, account_login="o", account_type="User"
+            ),
+        )
+        repos = sync_repositories(
+            cls.ws.id,
+            inst.id,
+            [
+                {
+                    "id": 900,
+                    "full_name": "o/api",
+                    "name": "api",
+                    "owner": {"login": "o"},
+                    "default_branch": "main",
+                    "private": True,
+                    "archived": False,
+                }
+            ],
+        )
+        cls.repo_id = repos[0].id
+
+    @classmethod
+    def tearDownClass(cls):
+        api_module.app.dependency_overrides.clear()
+
+    def _hdr(self, sub="integration-user"):
+        now = int(_time.time())
+        tok = _jwt.encode(
+            {"sub": sub, "iss": _ISS, "aud": _AUD, "iat": now, "exp": now + 900},
+            self.priv,
+            algorithm="ES256",
+            headers={"kid": "itk"},
+        )
+        return {"Authorization": f"Bearer {tok}"}
 
     def test_create_then_drive_to_approval_and_approve(self):
         store = PostgresJobStore()
-        # POST /jobs enqueues run_job; stub the queue so the test is hermetic.
         with mock.patch("gnsis.service.tasks.run_job.delay"):
             resp = self.client.post(
-                "/jobs", json={"repo": "o/api", "instruction": "do it", "engine": "mock"}
+                "/jobs",
+                json={"repository_id": self.repo_id, "instruction": "do it", "engine": "mock"},
+                headers=self._hdr(),
             )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 200, resp.text)
         job_id = resp.json()["id"]
         self.assertEqual(resp.json()["status"], "queued")
+        self.assertEqual(resp.json()["repo"], "o/api")
 
         # the worker would run this; do it inline for the test
         JobPipeline(store, MockEngine()).run(job_id)
 
-        self.assertEqual(self.client.get(f"/jobs/{job_id}").json()["status"], "awaiting_approval")
-        self.assertTrue(self.client.get(f"/jobs/{job_id}/logs").json())
-        self.assertIn("patch", self.client.get(f"/jobs/{job_id}/diff").json())
+        self.assertEqual(
+            self.client.get(f"/jobs/{job_id}", headers=self._hdr()).json()["status"],
+            "awaiting_approval",
+        )
+        self.assertTrue(self.client.get(f"/jobs/{job_id}/logs", headers=self._hdr()).json())
+        self.assertIn(
+            "patch", self.client.get(f"/jobs/{job_id}/diff", headers=self._hdr()).json()
+        )
+
+        # A different user cannot see or approve this job.
+        self.assertEqual(
+            self.client.get(f"/jobs/{job_id}", headers=self._hdr("intruder")).status_code,
+            404,
+        )
 
         with mock.patch("gnsis.service.tasks.publish_pr.delay"):
-            ap = self.client.post(f"/jobs/{job_id}/approve", json={"actor": "ci"})
-        self.assertEqual(ap.status_code, 200)
+            ap = self.client.post(
+                f"/jobs/{job_id}/approve", json={"note": "ci"}, headers=self._hdr()
+            )
+        self.assertEqual(ap.status_code, 200, ap.text)
         self.assertEqual(ap.json()["status"], "approved")
 
     def test_health(self):
@@ -131,11 +218,15 @@ class ApiTests(unittest.TestCase):
         store = PostgresJobStore()
         with mock.patch("gnsis.service.tasks.run_job.delay"):
             resp = self.client.post(
-                "/jobs", json={"repo": "o/api", "instruction": "do it", "engine": "usage-spy"}
+                "/jobs",
+                json={"repository_id": self.repo_id, "instruction": "do it", "engine": "usage-spy"},
+                headers=self._hdr(),
             )
         job_id = resp.json()["id"]
         # fresh job: no usage reported yet
-        self.assertEqual(self.client.get(f"/jobs/{job_id}").json()["usage"], {})
+        self.assertEqual(
+            self.client.get(f"/jobs/{job_id}", headers=self._hdr()).json()["usage"], {}
+        )
 
         class _UsageEngine:
             name = "usage-spy"
@@ -153,7 +244,8 @@ class ApiTests(unittest.TestCase):
 
         JobPipeline(store, _UsageEngine()).run(job_id)
         self.assertEqual(
-            self.client.get(f"/jobs/{job_id}").json()["usage"], {"total_tokens": 42}
+            self.client.get(f"/jobs/{job_id}", headers=self._hdr()).json()["usage"],
+            {"total_tokens": 42},
         )
 
 
