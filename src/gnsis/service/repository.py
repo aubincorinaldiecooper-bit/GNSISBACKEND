@@ -40,6 +40,8 @@ def _job_to_record(row: orm.Job) -> JobRecord:
         created_at=row.created_at.isoformat() if row.created_at else "",
         updated_at=row.updated_at.isoformat() if row.updated_at else "",
         context=dict(row.context or {}),
+        workspace_id=row.workspace_id,
+        repository_id=row.repository_id,
     )
 
 
@@ -60,6 +62,8 @@ class PostgresJobStore:
                 status="queued",
                 branch=branch,
                 context=dict(spec.context),
+                workspace_id=spec.workspace_id,
+                repository_id=spec.repository_id,
             )
             s.add(row)
             s.flush()
