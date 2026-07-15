@@ -105,6 +105,10 @@ class JobPipeline:
             self.store.set_status(job_id, JobStatus.FAILED, error=str(exc))
             return PipelineResult(job_id, JobStatus.FAILED)
 
+        usage = result.detail.get("usage")
+        if usage:
+            self.store.merge_context(job_id, {"usage": usage})
+
         if not result.success:
             self.store.set_status(
                 job_id, JobStatus.FAILED, error="engine reported failure"

@@ -122,6 +122,40 @@ class ApiTests(unittest.TestCase):
     def test_health(self):
         self.assertEqual(self.client.get("/health").json()["status"], "ok")
 
+    def test_engines_lists_gnsis(self):
+        ids = [e["id"] for e in self.client.get("/engines").json()]
+        self.assertIn("gnsis", ids)
+        self.assertIn("claude", ids)
+
+    def test_usage_is_returned_once_the_engine_reports_it(self):
+        store = PostgresJobStore()
+        with mock.patch("gnsis.service.tasks.run_job.delay"):
+            resp = self.client.post(
+                "/jobs", json={"repo": "o/api", "instruction": "do it", "engine": "usage-spy"}
+            )
+        job_id = resp.json()["id"]
+        # fresh job: no usage reported yet
+        self.assertEqual(self.client.get(f"/jobs/{job_id}").json()["usage"], {})
+
+        class _UsageEngine:
+            name = "usage-spy"
+
+            def generate(self, instruction, workspace, sink):
+                from gnsis.orchestration import EngineResult, Phase
+
+                sink.begin_phase(Phase.SUMMARY)
+                sink.checkpoint(Phase.SUMMARY, "done")
+                return EngineResult(
+                    plan="p", patch="diff --git a/x b/x\n", tests="", summary="s",
+                    files_changed=["x"], success=True,
+                    detail={"engine": "usage-spy", "usage": {"total_tokens": 42}},
+                )
+
+        JobPipeline(store, _UsageEngine()).run(job_id)
+        self.assertEqual(
+            self.client.get(f"/jobs/{job_id}").json()["usage"], {"total_tokens": 42}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
