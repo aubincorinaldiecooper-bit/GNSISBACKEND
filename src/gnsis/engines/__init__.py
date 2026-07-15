@@ -1,9 +1,10 @@
 """Concrete PatchEngines and a tiny registry.
 
-Engine #1 is the Anthropic Claude Agent SDK. The deterministic ``mock`` engine
-(from the orchestration core) is always available for offline tests and the
-demo. Future engines — an OpenRouter Agent SDK adapter, or a native GNSIS coding
-agent — register here without any change to the pipeline, API, or worker.
+Engine #1 is the Anthropic Claude Agent SDK, engine #2 is OpenHands, and
+``gnsis`` is our own engine: OpenRouter (or any OpenAI-compatible endpoint,
+e.g. a LiteLLM proxy) driving our own tool-calling loop, so every model call
+and tool call is ours to observe. The deterministic ``mock`` engine (from the
+orchestration core) is always available for offline tests and the demo.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ def get_engine(name: str, **kwargs) -> PatchEngine:
         from .openhands import OpenHandsEngine
 
         return OpenHandsEngine(**kwargs)
+    if key == "gnsis":
+        from .gnsis_native import GnsisNativeEngine
+
+        return GnsisNativeEngine(**kwargs)
     raise ValueError(f"unknown engine: {name!r}")
 
 

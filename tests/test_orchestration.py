@@ -80,6 +80,26 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(self.store.get_job(self.job.id).status, JobStatus.COMPLETED)
         self.assertIsNotNone(self.store.get_pr_metadata(self.job.id))
 
+    def test_engine_usage_is_persisted_to_job_context(self):
+        class UsageEngine:
+            name = "usage"
+
+            def generate(self, instruction, workspace, sink):
+                sink.begin_phase(Phase.SUMMARY)
+                sink.checkpoint(Phase.SUMMARY, "did the thing")
+                return EngineResult(
+                    plan="p", patch="diff --git a/x b/x\n", tests="", summary="s",
+                    files_changed=["x"], success=True,
+                    detail={"engine": "usage", "usage": {"total_tokens": 123}},
+                )
+
+        job = self.store.create_job(
+            JobSpec(repo="o/r", instruction="add a thing", engine="usage")
+        )
+        JobPipeline(self.store, UsageEngine()).run(job.id, workspace=None)
+        updated = self.store.get_job(job.id)
+        self.assertEqual(updated.context.get("usage"), {"total_tokens": 123})
+
     def test_engine_failure_marks_job_failed(self):
         class BoomEngine:
             name = "boom"

@@ -21,6 +21,9 @@ class EngineRegistryTests(unittest.TestCase):
     def test_openhands_engine_builds_without_dep(self):
         self.assertEqual(get_engine("openhands").name, "openhands")
 
+    def test_gnsis_engine_builds_without_network(self):
+        self.assertEqual(get_engine("gnsis").name, "gnsis")
+
     def test_unknown_engine_raises(self):
         with self.assertRaises(ValueError):
             get_engine("nope")

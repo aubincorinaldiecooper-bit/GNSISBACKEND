@@ -102,6 +102,17 @@ class PostgresJobStore:
             s.flush()
             return _job_to_record(row)
 
+    def merge_context(self, job_id: str, updates: dict) -> JobRecord:
+        with session_scope() as s:
+            row = s.get(orm.Job, job_id)
+            if row is None:
+                raise KeyError(job_id)
+            # Reassign (rather than mutate in place) so SQLAlchemy's change
+            # tracking on the JSON column actually notices the update.
+            row.context = {**(row.context or {}), **updates}
+            s.flush()
+            return _job_to_record(row)
+
     # -- phase records ----------------------------------------------------
     def append_log(self, entry: LogEntry) -> LogEntry:
         with session_scope() as s:

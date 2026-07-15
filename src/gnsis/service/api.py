@@ -108,6 +108,7 @@ class JobResponse(BaseModel):
     error: Optional[str]
     created_at: str
     updated_at: str
+    usage: dict = Field(default_factory=dict)
 
 
 class LogResponse(BaseModel):
@@ -128,6 +129,21 @@ class ApproveRequest(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+# Kept in sync with gnsis.engines.get_engine's registry by hand — small and
+# rarely changes, and a static list avoids probing API keys just to answer
+# "what's selectable" for the UI.
+AVAILABLE_ENGINES = [
+    {"id": "claude", "label": "Claude Agent SDK"},
+    {"id": "gnsis", "label": "GNSIS (OpenRouter, native)"},
+    {"id": "openhands", "label": "OpenHands"},
+]
+
+
+@app.get("/engines")
+def list_engines() -> list:
+    return AVAILABLE_ENGINES
 
 
 @app.post("/jobs", response_model=JobResponse, dependencies=[Depends(require_api_key)])
@@ -245,4 +261,5 @@ def _to_response(job) -> JobResponse:
         error=job.error,
         created_at=job.created_at,
         updated_at=job.updated_at,
+        usage=(job.context or {}).get("usage", {}),
     )

@@ -42,6 +42,8 @@ class JobStore(Protocol):
 
     def set_branch(self, job_id: str, branch: str) -> JobRecord: ...
 
+    def merge_context(self, job_id: str, updates: dict) -> JobRecord: ...
+
     # -- evolution / phase records ---------------------------------------
     def append_log(self, entry: LogEntry) -> LogEntry: ...
 
@@ -129,6 +131,12 @@ class InMemoryJobStore:
     def set_branch(self, job_id: str, branch: str) -> JobRecord:
         job = self._require(job_id)
         job.branch = branch
+        job.updated_at = _now()
+        return job
+
+    def merge_context(self, job_id: str, updates: dict) -> JobRecord:
+        job = self._require(job_id)
+        job.context = {**job.context, **updates}
         job.updated_at = _now()
         return job
 
