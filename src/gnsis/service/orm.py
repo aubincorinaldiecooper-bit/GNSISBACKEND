@@ -17,6 +17,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -218,6 +219,135 @@ class PullRequest(Base):
     url: Mapped[str] = mapped_column(String(512))
     branch: Mapped[str] = mapped_column(String(255))
     head_sha: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+# -- public-beta remote execution (GitHub Actions executor) --------------------
+
+
+class ExecutionRun(Base):
+    """One remote execution of a user job in the private GitHub Actions executor.
+
+    This is the control-plane's durable record of a run: what customer commit it
+    is pinned to, which fixed executor workflow/attempt it dispatched, the *hash*
+    of the single-use dispatch nonce and of the short-lived executor token (never
+    the plaintext of either), the enforced budgets and accrued usage, the
+    server-computed patch hash, and the lifecycle timestamps reconciliation
+    relies on. No raw OIDC token, plaintext executor/installation token, provider
+    master key, or GitHub App private key is ever stored here.
+    """
+
+    __tablename__ = "execution_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="github_actions")
+
+    # Immutable customer target.
+    base_branch: Mapped[str] = mapped_column(String(255), default="main")
+    base_sha: Mapped[str] = mapped_column(String(64), default="")
+
+    # Single-use dispatch nonce — stored only as a hash, consumed atomically.
+    dispatch_nonce_hash: Mapped[str] = mapped_column(String(64), index=True)
+    nonce_consumed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Fixed executor identity + the exact trusted workflow commit.
+    executor_owner: Mapped[str] = mapped_column(String(255), default="")
+    executor_repository: Mapped[str] = mapped_column(String(255), default="")
+    executor_repository_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    executor_workflow: Mapped[str] = mapped_column(String(255), default="execute.yml")
+    executor_ref: Mapped[str] = mapped_column(String(255), default="main")
+    trusted_workflow_sha: Mapped[str] = mapped_column(String(64), default="")
+
+    # GitHub-assigned run identity, persisted from the dispatch/lookup response.
+    workflow_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    workflow_run_attempt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    workflow_run_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+
+    # Short-lived executor token — hash only, plus its lifecycle.
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    token_revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_downloaded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Server-computed output hashes.
+    patch_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    artifact_hashes: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Budgets (snapshot at dispatch) and accrued usage.
+    max_model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    max_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    max_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Lifecycle timestamps.
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancellation_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_reconciled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    failure_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    security_validation: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class ExecutionModelCall(Base):
+    """One model call made by a run through the restricted gateway (for the receipt)."""
+
+    __tablename__ = "execution_model_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ExecutionEvent(Base):
+    """An authenticated event/callback from a run. Idempotent per (run, key)."""
+
+    __tablename__ = "execution_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "idempotency_key", name="uq_exec_event_idem"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    workflow_run_attempt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    idempotency_key: Mapped[str] = mapped_column(String(128), default="")
+    kind: Mapped[str] = mapped_column(String(64), default="")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

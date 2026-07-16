@@ -30,6 +30,7 @@ from . import workspaces as ws
 from . import webhooks as webhooks_svc
 from .auth import AuthedUser, AuthError, JwksCache, JwtVerifier, bearer_token
 from .auth_client import AuthServiceClient, InstallationVerificationError
+from .executor.api import router as executor_router
 from .github_app import app_from_settings
 from .repository import PostgresJobStore
 from .settings import get_settings
@@ -52,20 +53,22 @@ async def _lifespan(_app: "FastAPI"):
     from .db import init_db
 
     init_db()
-    # Fail loud and actionable if production auth vars are missing.
-    try:
-        settings = get_settings()
-        missing = settings.missing_production_vars()
-        if missing:
-            import logging
+    # In production (Postgres), fail startup if required API-role config —
+    # including the public-beta execution settings — is missing. In dev/tests
+    # (SQLite) only warn, so the suite can boot without full production config.
+    settings = get_settings()
+    missing = settings.missing_production_vars(role="api")
+    if missing:
+        import logging
 
-            logging.getLogger("gnsis").warning(
-                "GNSIS starting with missing auth/GitHub settings; user routes "
-                "will reject requests until these are set: %s",
-                ", ".join(missing),
-            )
-    except Exception:  # noqa: BLE001 - never let the check crash startup
-        pass
+        message = (
+            "GNSIS API missing required settings: " + ", ".join(missing)
+        )
+        if settings.is_production:
+            raise RuntimeError(message)
+        logging.getLogger("gnsis").warning(
+            "%s (user routes will reject requests until these are set)", message
+        )
     yield
 
 
@@ -79,6 +82,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# The internal executor + model-gateway surface (OIDC-/run-token-authenticated).
+app.include_router(executor_router)
 
 
 # -- dependency providers (overridable in tests) ------------------------------
@@ -155,6 +161,15 @@ def _memory():
 
         return PostgresMemoryProvider()
     return NullMemoryProvider()
+
+
+def _require_execution_configured(settings) -> None:
+    """Reject job creation unless the fixed GitHub Actions provider is configured."""
+    if not settings.execution_provider_valid or settings.missing_execution_vars():
+        raise HTTPException(
+            status_code=503,
+            detail="public-beta execution is not configured (GNSIS_EXECUTION_PROVIDER=github_actions)",
+        )
 
 
 # -- schemas ------------------------------------------------------------------
@@ -361,6 +376,10 @@ def create_job(
     db: PostgresJobStore = Depends(store),
 ) -> JobResponse:
     settings = get_settings()
+    # The execution provider is fixed by server configuration and is NEVER read
+    # from job input. If it is missing or invalid, no job can be created — there
+    # is no local/Celery/Docker fallback to fall back to.
+    _require_execution_configured(settings)
     repo = ws.get_repository(workspace.id, req.repository_id)
     if repo is None:
         raise HTTPException(status_code=404, detail="repository not found")
@@ -441,11 +460,37 @@ def approve(
     workspace: WorkspaceRecord = Depends(current_workspace),
     db: PostgresJobStore = Depends(store),
 ) -> JobResponse:
-    _require_owned_job(db, workspace, job_id)
+    job = _require_owned_job(db, workspace, job_id)
     _require_awaiting(db, job_id)
+
+    # Bind the approval to the exact base SHA + patch hash of the validated run.
+    from .executor.approval import build_binding
+    from .executor.store import ExecutionStore
+
+    run = ExecutionStore().get_run_for_job(job_id)
+    if run is None or not run.patch_sha256:
+        raise HTTPException(status_code=409, detail="no validated execution to approve")
+    diff = db.get_diff(job_id)
+    from .executor.validation import sha256_text
+
+    if diff is None or sha256_text(diff.patch) != run.patch_sha256:
+        raise HTTPException(status_code=409, detail="stored patch does not match validated run")
+
+    repo = ws.get_repository(workspace.id, job.repository_id) if job.repository_id else None
+    binding = build_binding(
+        job=job,
+        run=run,
+        repo=repo,
+        installation_record_id=repo.github_installation_record_id if repo else None,
+        actor=user.subject,
+        verification=run.security_validation or "passed",
+        ttl_seconds=get_settings().executor_token_ttl_seconds * 4,
+        patch_sha256=run.patch_sha256,
+    )
     db.save_approval(
         Approval(job_id=job_id, decision="approved", actor=user.subject, note=req.note)
     )
+    db.merge_context(job_id, {"approval_binding": binding})
     job = db.set_status(job_id, JobStatus.APPROVED)
 
     from .tasks import publish_pr
@@ -477,6 +522,24 @@ def cancel(
     job = _require_owned_job(db, workspace, job_id)
     if is_terminal(job.status):
         raise HTTPException(status_code=409, detail=f"job is already '{job.status}'")
+
+    # Immediately mark cancellation + revoke the run token so no further model
+    # call or callback can succeed; the workflow itself is cancelled in the
+    # worker (network I/O) and reconciliation finalizes idempotently.
+    from .executor.store import ExecutionStore
+
+    run = ExecutionStore().get_run_for_job(job_id)
+    if run is not None:
+        store_ex = ExecutionStore()
+        store_ex.request_cancellation(run.id)
+        store_ex.revoke_token(run.id)
+        try:
+            from .tasks import cancel_execution
+
+            cancel_execution.delay(job_id)
+        except Exception:  # noqa: BLE001 - queue optional; reconciliation covers it
+            pass
+
     job = db.set_status(job_id, JobStatus.CANCELLED, error="cancelled by user")
     return _to_response(job)
 
