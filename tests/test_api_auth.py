@@ -74,6 +74,13 @@ class ApiAuthTestBase(unittest.TestCase):
         os.environ["GITHUB_APP_ID"] = "12345"
         os.environ["GITHUB_APP_PRIVATE_KEY"] = "key"
         os.environ["GITHUB_APP_SLUG"] = "genesis"
+        # Public-beta execution config so job creation is permitted.
+        os.environ["GNSIS_EXECUTION_PROVIDER"] = "github_actions"
+        os.environ["GNSIS_PUBLIC_API_URL"] = "https://api.gnsis.test"
+        os.environ["GNSIS_EXECUTOR_OWNER"] = "aubincorinaldiecooper-bit"
+        os.environ["GNSIS_EXECUTOR_REPO"] = "Gnsis-studio-"
+        os.environ["GNSIS_EXECUTOR_OIDC_AUDIENCE"] = "https://api.gnsis.studio"
+        os.environ["GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA"] = "0" * 40
         from gnsis.service import settings as settings_mod
 
         settings_mod._settings = None
@@ -260,10 +267,29 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
             json={"repository_id": repos[0]["id"], "instruction": "x"},
             headers=self.auth("user-1"),
         ).json()
-        # Force awaiting_approval so approve would otherwise be valid.
+        # Force awaiting_approval with a validated execution run + matching diff,
+        # so approve would otherwise be valid (and binds to the exact patch hash).
+        from gnsis.orchestration.models import Diff
+        from gnsis.service.executor.models import Budgets
+        from gnsis.service.executor.store import ExecutionStore
+        from gnsis.service.executor.validation import sha256_text
         from gnsis.service.repository import PostgresJobStore
 
-        PostgresJobStore().set_status(job["id"], "awaiting_approval")
+        store = PostgresJobStore()
+        patch = "diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -0,0 +1 @@\n+hi\n"
+        store.save_diff(Diff(job["id"], patch, files_changed=["x.txt"]))
+        exec_store = ExecutionStore()
+        run = exec_store.create_run(
+            job_id=job["id"], workspace_id=None, repository_id=None,
+            base_branch="main", base_sha="a" * 40, dispatch_nonce_hash="n",
+            executor_owner="o", executor_repository="r", executor_repository_id=1,
+            executor_workflow="execute.yml", executor_ref="main", trusted_workflow_sha="s",
+            budgets=Budgets(50, 500000, 100000, 3.0),
+        )
+        exec_store.set_patch_result(
+            run.id, patch_sha256=sha256_text(patch), artifact_hashes={}, security_validation="passed"
+        )
+        store.set_status(job["id"], "awaiting_approval")
         r = self.client.post(
             f"/jobs/{job['id']}/approve", json={}, headers=self.auth("user-2")
         )
