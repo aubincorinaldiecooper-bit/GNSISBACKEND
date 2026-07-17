@@ -200,19 +200,6 @@ class ExecutorGitHub:
         return urllib.request.urlopen(req, timeout=120)  # noqa: S310
 
     # -- customer CI observation -----------------------------------------
-
-    def commit_workflow_runs(self, owner: str, repo: str, sha: str, token: str) -> Dict[str, Any]:
-        status, _, body = _request("GET", f"{_API}/repos/{owner}/{repo}/actions/runs?head_sha={sha}", token=token)
-        return _json(status, body) or {}
-
-    def commit_check_suites(self, owner: str, repo: str, sha: str, token: str) -> Dict[str, Any]:
-        status, _, body = _request("GET", f"{_API}/repos/{owner}/{repo}/commits/{sha}/check-suites", token=token)
-        return _json(status, body) or {}
-
-    def pull_request(self, owner: str, repo: str, number: int, token: str) -> Dict[str, Any]:
-        status, _, body = _request("GET", f"{_API}/repos/{owner}/{repo}/pulls/{number}", token=token)
-        return _json(status, body) or {}
-
     def commit_check_runs(
         self, owner: str, repo: str, sha: str, token: str
     ) -> Dict[str, Any]:

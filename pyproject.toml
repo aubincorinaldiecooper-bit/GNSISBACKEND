@@ -15,24 +15,29 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-dependencies = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
-    "celery[redis]>=5.3",
-    "SQLAlchemy>=2.0",
-    "psycopg[binary]>=3.1",
-    "pydantic>=2",
-    "PyJWT[crypto]>=2.8",
-]
+# Core is standard-library only — no install-time dependencies.
+dependencies = []
 dynamic = ["version"]
 
 [project.optional-dependencies]
-# Test-only tools stay in the dev extra; backend runtime imports are declared in
-# the main project dependencies so editable installs work in CI and production.
+# `httpx` is required by FastAPI's TestClient, used by the service auth/tenancy
+# tests. It's a test-only dependency; the runtime service does not need it.
 dev = ["pytest>=7", "httpx>=0.27"]
-# Backwards-compatible deployment extra for optional service integrations not
-# imported by the backend package at test import time.
-service = ["claude-agent-sdk>=0.1"]
+# The Railway deployment surface (FastAPI API + Celery worker + Postgres).
+# The GNSIS core stays standard-library only; these are needed only to run the
+# service. Install with: pip install -e ".[service]"
+service = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "celery[redis]>=5.3",
+    "redis>=5.0",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2",
+    "PyJWT>=2.8",
+    "cryptography>=42",
+    "claude-agent-sdk>=0.1",
+]
 
 [project.scripts]
 gnsis = "gnsis.cli:main"

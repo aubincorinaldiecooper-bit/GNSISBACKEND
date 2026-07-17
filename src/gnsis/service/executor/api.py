@@ -209,25 +209,13 @@ def get_source(job_id: str, authorization: Optional[str] = Header(default=None))
     job = _job_store().get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    # Prepare upstream, validate headers and first byte before HTTP response start.
+    # Single use — claimed atomically.
+    if not store.claim_source_download(run.id):
+        raise HTTPException(status_code=409, detail="source already delivered")
     try:
-        prepared = src.prepare_source(settings, run, job.repo)
+        generator = src.stream_source(settings, run, job.repo)
     except src.SourceError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
-    # Single use is claimed only after preparation succeeds; close on races.
-    if not store.claim_source_download(run.id):
-        prepared.close()
-        raise HTTPException(status_code=409, detail="source already delivered")
-
-    def generator():
-        try:
-            yield from prepared.iter_bytes()
-        except src.SourceError as exc:
-            src.fail_streaming_source(prepared, store, run, _job_store(), str(exc))
-            raise
-        except Exception as exc:  # noqa: BLE001
-            src.fail_streaming_source(prepared, store, run, _job_store(), "source stream failed")
-            raise
     headers = {
         "Content-Type": "application/gzip",
         "X-GNSIS-Base-SHA": run.base_sha,

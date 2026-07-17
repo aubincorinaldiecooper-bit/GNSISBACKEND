@@ -322,21 +322,6 @@ class ExecutionStore:
             row.security_validation = security_validation
             s.flush()
 
-
-    def merge_receipt_context(self, run_id: str, updates: dict) -> None:
-        """Merge read-only observation metadata into the run receipt JSON.
-
-        The existing schema has no separate receipt table; artifact_hashes already
-        persists executor receipt-adjacent JSON, so CI observation is nested under
-        stable keys without a migration.
-        """
-        with session_scope() as s:
-            row = s.get(orm.ExecutionRun, run_id)
-            if row is None:
-                return
-            row.artifact_hashes = {**(row.artifact_hashes or {}), **updates}
-            s.flush()
-
     def touch_reconciled(self, run_id: str) -> None:
         with session_scope() as s:
             row = s.get(orm.ExecutionRun, run_id)
