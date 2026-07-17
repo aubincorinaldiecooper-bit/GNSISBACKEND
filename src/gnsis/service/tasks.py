@@ -21,7 +21,7 @@ import logging
 from typing import Optional
 
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import beat_init, worker_ready
 
 from ..memory.base import MemoryProvider, NullMemoryProvider
 from ..orchestration.models import JobRecord, LogEntry
@@ -48,8 +48,20 @@ celery_app.conf.update(
             "task": "gnsis.reconcile_executions",
             "schedule": 60.0,  # source-of-truth polling every minute
         },
+        "observe-customer-ci": {
+            "task": "gnsis.observe_customer_ci",
+            "schedule": 60.0,
+        },
     },
 )
+
+
+def _validate_role(role: str) -> None:
+    s = get_settings()
+    if s.is_production:
+        missing = s.missing_production_vars(role=role)
+        if missing:
+            raise RuntimeError(f"{role} missing required public-beta execution configuration: " + ", ".join(missing))
 
 
 @worker_ready.connect
@@ -58,14 +70,16 @@ def _ensure_schema(**_: object) -> None:
     from .db import init_db
 
     init_db()
-    s = get_settings()
-    if s.is_production:
-        missing = s.missing_production_vars(role="worker")
-        if missing:
-            raise RuntimeError(
-                "worker missing required public-beta execution configuration: "
-                + ", ".join(missing)
-            )
+    _validate_role("worker")
+
+
+@beat_init.connect
+def _ensure_beat_schema(**_: object) -> None:
+    """Create tables and validate the dedicated single-replica beat process."""
+    from .db import init_db
+
+    init_db()
+    _validate_role("beat")
 
 
 def _store() -> PostgresJobStore:
@@ -214,3 +228,12 @@ def reconcile_executions() -> str:
 
     repaired = reconcile_all(settings, _store())
     return f"reconciled:{repaired}"
+
+
+@celery_app.task(name="gnsis.observe_customer_ci")
+def observe_customer_ci() -> str:
+    """Poll customer PR CI after draft PR publication; idempotent recovery source."""
+    from .executor.ci import observe_all
+
+    observed = observe_all(settings, _store())
+    return f"ci-observed:{observed}"

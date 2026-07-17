@@ -11,13 +11,14 @@ moved off the approved base SHA it fails clearly and asks for a new run.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from typing import Any, Dict, Optional
 
 from ...memory.base import MemoryProvider, MemoryRecord
-from ...orchestration.models import PRMetadata
+from ...orchestration.models import LogEntry, PRMetadata
 from ...orchestration.status import JobStatus
 from ..github_app import GitHubApp, _request
 from .approval import verify_binding
@@ -32,10 +33,18 @@ class PublishError(RuntimeError):
     pass
 
 
+def _sanitize(text: object) -> str:
+    raw = str(text)
+    raw = re.sub(r"x-access-token:[^@\s]+@", "x-access-token:***@", raw)
+    raw = re.sub(r"(token |Bearer )[A-Za-z0-9_\-]+", r"\1***", raw, flags=re.I)
+    return raw[:500]
+
+
 def _git(args, cwd: str) -> str:
     proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise PublishError(f"{' '.join(args)} failed: {proc.stderr.strip()[:300]}")
+        safe_args = [re.sub(r"x-access-token:[^@\s]+@", "x-access-token:***@", str(a)) for a in args]
+        raise PublishError(f"{' '.join(safe_args)} failed: {_sanitize(proc.stderr)}")
     return proc.stdout
 
 
@@ -112,6 +121,7 @@ def publish_approved(
     branch = job.branch or f"gnsis/{job_id}"
     workdir = tempfile.mkdtemp(prefix=f"gnsis-publish-{job_id}-")
     url = f"https://x-access-token:{token}@github.com/{job.repo}.git"
+    pushed = False
     try:
         # Reconstruct the exact approved base commit and branch from it.
         _git(["git", "init", "-q"], workdir)
@@ -125,22 +135,47 @@ def publish_approved(
         _git(["git", "commit", "-m", _commit_message(job)], workdir)
         head_sha = _git(["git", "rev-parse", "HEAD"], workdir).strip()
         _git(["git", "push", "-u", "origin", branch], workdir)
-        pr = _open_draft_pr(job, branch, run.base_branch, token)
+        pushed = True
+        existing = job_store.get_pr_metadata(job_id)
+        if existing:
+            pr = {"number": existing.number, "html_url": existing.url, "draft": True}
+        else:
+            pr = _find_existing_open_pr(job, branch, run.base_branch, token)
+            if pr is None:
+                pr = _open_draft_pr(job, branch, run.base_branch, token)
+        meta = PRMetadata(
+            job_id=job_id,
+            number=pr["number"],
+            url=pr["html_url"],
+            branch=branch,
+            head_sha=head_sha,
+        )
+        job_store.save_pr_metadata(meta)
+        job_store.merge_context(
+            job_id,
+            {
+                "pr": {
+                    "number": pr["number"],
+                    "url": pr["html_url"],
+                    "draft": pr.get("draft", True),
+                },
+                "published_base_sha": run.base_sha,
+                "published_patch_sha256": run.patch_sha256,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        if pushed:
+            try:
+                _git(["git", "push", "origin", f":refs/heads/{branch}"], workdir)
+            except Exception:
+                job_store.merge_context(job_id, {"published_branch_needs_reuse": branch})
+        message = "publishing failed: " + _sanitize(exc)
+        job_store.set_status(job_id, JobStatus.FAILED, error=message)
+        job_store.append_log(LogEntry(job_id, "publish", "error", message, {"branch": branch, "pushed": pushed}))
+        raise PublishError(message) from exc
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
-    meta = PRMetadata(
-        job_id=job_id, number=pr["number"], url=pr["html_url"], branch=branch, head_sha=head_sha
-    )
-    job_store.save_pr_metadata(meta)
-    job_store.merge_context(
-        job_id,
-        {
-            "pr": {"number": pr["number"], "url": pr["html_url"], "draft": pr.get("draft", True)},
-            "published_base_sha": run.base_sha,
-            "published_patch_sha256": run.patch_sha256,
-        },
-    )
     job_store.set_status(job_id, JobStatus.COMPLETED)
 
     if memory is not None:
@@ -165,12 +200,26 @@ def _apply_exact_patch(path: str, patch: str) -> None:
             ["git", "apply", "--index", ".gnsis.patch"], cwd=path, capture_output=True, text=True
         )
         if proc.returncode != 0:
-            raise PublishError(f"exact patch did not apply: {proc.stderr.strip()[:300]}")
+            raise PublishError(f"exact patch did not apply: {_sanitize(proc.stderr)}")
     finally:
         try:
             os.remove(patch_file)
         except OSError:
             pass
+
+
+def _find_existing_open_pr(
+    job, branch: str, base_branch: str, token: str
+) -> Optional[Dict[str, Any]]:
+    owner, _, _ = job.repo.partition("/")
+    pulls = _request(
+        "GET",
+        f"{_API}/repos/{job.repo}/pulls?state=open&head={owner}:{branch}&base={base_branch}",
+        headers={"Authorization": f"token {token}"},
+    )
+    if isinstance(pulls, list) and pulls:
+        return pulls[0]
+    return None
 
 
 def _open_draft_pr(job, branch: str, base_branch: str, token: str) -> Dict[str, Any]:
