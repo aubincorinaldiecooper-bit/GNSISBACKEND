@@ -126,6 +126,9 @@ class RunSpec:
     model_gateway_url: str
     network_policy: str
     deadline_seconds: int
+    run_id: Optional[int] = None
+    run_attempt: Optional[int] = None
+    source_max_bytes: int = 262_144_000
     output_max_bytes: Dict[str, int] = field(default_factory=dict)
 
     def to_public_dict(self) -> dict:
@@ -149,6 +152,9 @@ class RunSpec:
             "model_gateway_url": self.model_gateway_url,
             "network_policy": self.network_policy,
             "deadline_seconds": self.deadline_seconds,
+            "run_id": self.run_id,
+            "run_attempt": self.run_attempt,
+            "source_max_bytes": self.source_max_bytes,
             "output_limits_bytes": dict(self.output_max_bytes),
             "output_files": ["patch.diff", "tests.json", "receipt.json", "events.jsonl"],
         }

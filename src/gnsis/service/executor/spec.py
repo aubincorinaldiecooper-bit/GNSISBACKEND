@@ -38,6 +38,9 @@ def build_run_spec(settings, job, run: ExecutionRunRecord) -> RunSpec:
         model_gateway_url=model_gateway_url(settings),
         network_policy=NETWORK_POLICY,
         deadline_seconds=settings.executor_timeout_seconds,
+        run_id=run.workflow_run_id,
+        run_attempt=run.workflow_run_attempt,
+        source_max_bytes=settings.executor_source_max_bytes,
         output_max_bytes={
             "patch.diff": settings.executor_patch_max_bytes,
             "tests.json": settings.executor_event_max_bytes,
