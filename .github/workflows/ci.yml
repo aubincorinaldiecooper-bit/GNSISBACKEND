@@ -53,6 +53,15 @@ jobs:
     env:
       DATABASE_URL: postgresql://gnsis:gnsis@localhost:5432/gnsis
       REDIS_URL: redis://localhost:6379/0
+      GNSIS_EXECUTION_PROVIDER: github_actions
+      GNSIS_PUBLIC_API_URL: https://api.test.invalid
+      GNSIS_EXECUTOR_OWNER: gnsis-test
+      GNSIS_EXECUTOR_REPO: executor-test
+      GNSIS_EXECUTOR_WORKFLOW: execute.yml
+      GNSIS_EXECUTOR_REF: main
+      GNSIS_EXECUTOR_OIDC_ISSUER: https://token.actions.githubusercontent.com
+      GNSIS_EXECUTOR_OIDC_AUDIENCE: https://api.gnsis.studio
+      GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

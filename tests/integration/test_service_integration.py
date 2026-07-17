@@ -168,6 +168,40 @@ class ApiTests(unittest.TestCase):
         )
         return {"Authorization": f"Bearer {tok}"}
 
+
+    def _seed_validated_execution(self, job_id):
+        from gnsis.service.executor.models import Budgets, ExecutionStatus
+        from gnsis.service.executor.store import ExecutionStore
+        from gnsis.service.executor.tokens import hash_secret
+        from gnsis.service.executor.validation import sha256_text
+
+        store = PostgresJobStore()
+        job = store.get_job(job_id)
+        diff = store.get_diff(job_id)
+        exec_store = ExecutionStore()
+        run = exec_store.create_run(
+            job_id=job_id,
+            workspace_id=job.workspace_id,
+            repository_id=job.repository_id,
+            base_branch=job.base_branch,
+            base_sha="b" * 40,
+            dispatch_nonce_hash=hash_secret("integration-nonce"),
+            executor_owner="gnsis-test",
+            executor_repository="executor-test",
+            executor_repository_id=1,
+            executor_workflow="execute.yml",
+            executor_ref="main",
+            trusted_workflow_sha="a" * 40,
+            budgets=Budgets(3, 500000, 1000, 0.10),
+        )
+        exec_store.set_status(run.id, ExecutionStatus.COMPLETED)
+        exec_store.set_patch_result(
+            run.id,
+            patch_sha256=sha256_text(diff.patch),
+            artifact_hashes={},
+            security_validation="integration-test",
+        )
+
     def test_create_then_drive_to_approval_and_approve(self):
         store = PostgresJobStore()
         with mock.patch("gnsis.service.tasks.run_job.delay"):
@@ -199,6 +233,7 @@ class ApiTests(unittest.TestCase):
             404,
         )
 
+        self._seed_validated_execution(job_id)
         with mock.patch("gnsis.service.tasks.publish_pr.delay"):
             ap = self.client.post(
                 f"/jobs/{job_id}/approve", json={"note": "ci"}, headers=self._hdr()
@@ -214,6 +249,50 @@ class ApiTests(unittest.TestCase):
         self.assertIn("gnsis", ids)
         self.assertIn("claude", ids)
 
+
+    def test_missing_executor_configuration_is_fail_closed(self):
+        from gnsis.service import settings as settings_mod
+
+        keys = [
+            "GNSIS_EXECUTION_PROVIDER",
+            "GNSIS_PUBLIC_API_URL",
+            "GNSIS_EXECUTOR_OWNER",
+            "GNSIS_EXECUTOR_REPO",
+            "GNSIS_EXECUTOR_WORKFLOW",
+            "GNSIS_EXECUTOR_REF",
+            "GNSIS_EXECUTOR_OIDC_ISSUER",
+            "GNSIS_EXECUTOR_OIDC_AUDIENCE",
+            "GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA",
+        ]
+        saved = {key: os.environ.get(key) for key in keys}
+        before_count = len(PostgresJobStore().list_jobs(limit=500))
+        try:
+            for key in keys:
+                os.environ.pop(key, None)
+            settings_mod._settings = None
+            with mock.patch("gnsis.service.tasks.run_job.delay") as delay:
+                resp = self.client.post(
+                    "/jobs",
+                    json={
+                        "repository_id": self.repo_id,
+                        "instruction": "do it",
+                        "engine": "mock",
+                    },
+                    headers=self._hdr(),
+                )
+            self.assertEqual(resp.status_code, 503, resp.text)
+            self.assertIn("public-beta execution is not configured", resp.text)
+            delay.assert_not_called()
+            after_count = len(PostgresJobStore().list_jobs(limit=500))
+            self.assertEqual(after_count, before_count)
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            settings_mod._settings = None
+
     def test_usage_is_returned_once_the_engine_reports_it(self):
         store = PostgresJobStore()
         with mock.patch("gnsis.service.tasks.run_job.delay"):
@@ -222,6 +301,7 @@ class ApiTests(unittest.TestCase):
                 json={"repository_id": self.repo_id, "instruction": "do it", "engine": "usage-spy"},
                 headers=self._hdr(),
             )
+        self.assertEqual(resp.status_code, 200, resp.text)
         job_id = resp.json()["id"]
         # fresh job: no usage reported yet
         self.assertEqual(
