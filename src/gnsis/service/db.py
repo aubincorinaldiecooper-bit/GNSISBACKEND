@@ -53,6 +53,8 @@ def get_sessionmaker():
 _ADDITIVE_COLUMNS = [
     ("jobs", "workspace_id", "VARCHAR(64)"),
     ("jobs", "repository_id", "VARCHAR(64)"),
+    # LiteLLM correlation key on the existing model-call table.
+    ("execution_model_calls", "event_id", "VARCHAR(64)"),
 ]
 
 

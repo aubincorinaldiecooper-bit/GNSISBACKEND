@@ -329,6 +329,59 @@ class ExecutionModelCall(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # Deterministic correlation key attached to the LiteLLM request metadata, so
+    # the LiteLLM usage callback can be tied back to this exact model call.
+    event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class UsageRecord(Base):
+    """One measured model request, as reported by LiteLLM and attributed to GNSIS.
+
+    This is the metering fact: what was consumed (tokens/cost/provider/model,
+    exactly as LiteLLM measured it) and who/what consumed it (workspace, user,
+    and — for native coding runs — run + trace event + repository; for external
+    virtual-key usage — application). It references the existing GNSIS records; it
+    is not a second trace system. Money is stored as an exact decimal string,
+    never binary floating point. ``litellm_request_id`` is unique so a replayed
+    callback is idempotent.
+    """
+
+    __tablename__ = "usage_records"
+    __table_args__ = (
+        UniqueConstraint("litellm_request_id", name="uq_usage_litellm_request_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    litellm_request_id: Mapped[str] = mapped_column(String(128), index=True)
+
+    # Attribution to existing GNSIS records.
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    trace_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    application_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    engine: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    phase: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    environment: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Measured usage (from LiteLLM).
+    provider: Mapped[str] = mapped_column(String(64), default="")
+    model: Mapped[str] = mapped_column(String(128), default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    request_status: Mapped[str] = mapped_column(String(32), default="success", index=True)
+    # Exact upstream cost as received, stored as a decimal string (never float).
+    upstream_cost: Mapped[str] = mapped_column(String(40), default="0")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    # For a retry, the litellm_request_id of the original request it retries.
+    retry_of: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
