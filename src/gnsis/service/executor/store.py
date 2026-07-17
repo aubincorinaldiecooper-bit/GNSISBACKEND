@@ -399,11 +399,14 @@ class ExecutionStore:
         input_tokens: int,
         output_tokens: int,
         cost_usd: float,
+        event_id: Optional[str] = None,
     ) -> Tuple[bool, Usage]:
         """Add actual usage and report whether the run is still within budget.
 
         A returned ``ok=False`` means the run has now exceeded a token/cost limit
-        and the caller must revoke the token.
+        and the caller must revoke the token. ``event_id`` is the correlation key
+        attached to the LiteLLM request so the usage callback can be tied back to
+        this exact model call.
         """
         with session_scope() as s:
             row = s.get(orm.ExecutionRun, run_id)
@@ -420,6 +423,7 @@ class ExecutionStore:
                     input_tokens=int(input_tokens),
                     output_tokens=int(output_tokens),
                     cost_usd=float(cost_usd),
+                    event_id=event_id,
                 )
             )
             within = (

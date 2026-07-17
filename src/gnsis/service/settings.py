@@ -136,6 +136,18 @@ class Settings:
     # exactly one beat replica; never use celery worker -B.
     service_role: str = "api"
 
+    # -- LiteLLM metering (separate service; never embedded in this process) ---
+    # When configured, native model requests route GNSIS -> LiteLLM -> provider,
+    # and LiteLLM reports measured usage back to the callback below. When unset,
+    # the gateway keeps its current direct OpenRouter path unchanged.
+    litellm_url: Optional[str] = None          # LiteLLM proxy base URL (OpenAI-compatible)
+    litellm_api_key: Optional[str] = None      # key GNSIS uses to call LiteLLM
+    litellm_callback_secret: Optional[str] = None  # shared secret LiteLLM sends to the callback
+
+    @property
+    def litellm_enabled(self) -> bool:
+        return bool(self.litellm_url and self.litellm_api_key)
+
     # -- provider / executor configuration state -----------------------------
     @property
     def execution_provider_valid(self) -> bool:
@@ -375,6 +387,9 @@ class Settings:
             run_max_cost_usd=_float("GNSIS_RUN_MAX_COST_USD", 3.00),
             run_allowed_models=allowed_models,
             service_role=os.environ.get("GNSIS_SERVICE_ROLE", "api"),
+            litellm_url=os.environ.get("GNSIS_LITELLM_URL"),
+            litellm_api_key=os.environ.get("GNSIS_LITELLM_API_KEY"),
+            litellm_callback_secret=os.environ.get("GNSIS_LITELLM_CALLBACK_SECRET"),
         )
 
 

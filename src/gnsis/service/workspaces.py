@@ -132,6 +132,13 @@ def get_workspace_by_subject(subject: str) -> Optional[WorkspaceRecord]:
         return _ws_record(row) if row else None
 
 
+def get_owner_subject(workspace_id: str) -> Optional[str]:
+    """The Better Auth subject that owns ``workspace_id`` (metering user_id)."""
+    with session_scope() as s:
+        row = s.get(orm.Workspace, workspace_id)
+        return row.owner_auth_subject if row else None
+
+
 # -- installations -------------------------------------------------------------
 
 

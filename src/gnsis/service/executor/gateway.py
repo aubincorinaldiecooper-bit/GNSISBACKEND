@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from .models import ExecutionRunRecord
@@ -80,6 +81,53 @@ def _default_upstream(settings, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise GatewayError(f"upstream unreachable: {exc.reason}", status=502) from exc
 
 
+def build_litellm_metadata(
+    settings, run: ExecutionRunRecord, body: Dict[str, Any], event_id: str
+) -> Dict[str, Any]:
+    """Deterministic attribution metadata for a native run's model request.
+
+    Every field is an explicit id from the authenticated run (or the agent's own
+    request metadata for engine/phase) — never a timestamp, token total, model
+    name, or ordering. LiteLLM echoes this back on its usage callback, which is
+    how the measurement is tied to the exact GNSIS run, trace event, workspace,
+    user, and repository.
+    """
+    from .. import workspaces as ws
+
+    agent_md = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    metadata = {
+        "workspace_id": run.workspace_id,
+        "user_id": ws.get_owner_subject(run.workspace_id) if run.workspace_id else None,
+        "run_id": run.job_id,
+        "repository_id": run.repository_id,
+        "model_call_event_id": event_id,
+        "trace_event_id": agent_md.get("trace_event_id") or event_id,
+        "engine": agent_md.get("engine") or "gnsis",
+        "phase": agent_md.get("phase"),
+    }
+    return {k: v for k, v in metadata.items() if v is not None}
+
+
+def _litellm_upstream(settings, payload: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Forward to the LiteLLM proxy (separate service) with attribution metadata."""
+    base = settings.litellm_url.rstrip("/")
+    forwarded = dict(payload)
+    forwarded["metadata"] = metadata
+    data = json.dumps(forwarded).encode("utf-8")
+    req = urllib.request.Request(f"{base}/chat/completions", data=data, method="POST")
+    req.add_header("Authorization", f"Bearer {settings.litellm_api_key}")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "gnsis-gateway")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise GatewayError(f"upstream error {exc.code}: {detail[:300]}", status=502) from exc
+    except urllib.error.URLError as exc:
+        raise GatewayError(f"upstream unreachable: {exc.reason}", status=502) from exc
+
+
 def handle_chat_completion(
     settings,
     store: ExecutionStore,
@@ -89,7 +137,7 @@ def handle_chat_completion(
     upstream: Optional[Callable[[Any, Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Validate, budget-check, forward, and account one chat-completion call."""
-    if not settings.openrouter_api_key:
+    if not (settings.litellm_enabled or settings.openrouter_api_key):
         raise GatewayError("model gateway not configured", status=503)
     if not isinstance(body, dict):
         raise GatewayError("invalid request body")
@@ -122,8 +170,17 @@ def handle_chat_completion(
     payload = {k: body[k] for k in _FORWARD_FIELDS if k in body}
     payload["model"] = model
 
-    caller = upstream or _default_upstream
-    data = caller(settings, payload)
+    # Correlation key attached to the LiteLLM request so its usage callback can be
+    # tied back to this exact model call (also stored on the model-call row).
+    event_id = uuid.uuid4().hex
+
+    if upstream is not None:
+        data = upstream(settings, payload)
+    elif settings.litellm_enabled:
+        metadata = build_litellm_metadata(settings, run, body, event_id)
+        data = _litellm_upstream(settings, payload, metadata)
+    else:
+        data = _default_upstream(settings, payload)
 
     usage = (data or {}).get("usage") or {}
     input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
@@ -137,6 +194,7 @@ def handle_chat_completion(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
+        event_id=event_id,
     )
     if not within:
         # This call pushed the run over budget: no further calls may be made.

@@ -86,6 +86,11 @@ app.add_middleware(
 # The internal executor + model-gateway surface (OIDC-/run-token-authenticated).
 app.include_router(executor_router)
 
+# The internal LiteLLM usage callback (shared-secret authenticated).
+from .usage_api import router as usage_router  # noqa: E402
+
+app.include_router(usage_router)
+
 
 # -- dependency providers (overridable in tests) ------------------------------
 
