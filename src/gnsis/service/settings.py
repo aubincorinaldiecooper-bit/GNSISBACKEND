@@ -148,6 +148,24 @@ class Settings:
     def litellm_enabled(self) -> bool:
         return bool(self.litellm_url and self.litellm_api_key)
 
+    # -- billing (markup + prepaid balance + Stripe refills) ------------------
+    # The markup is config-driven and versioned; it is never hardcoded per route.
+    # Every completed charge stores the exact rate it applied (see billing.py), so
+    # changing this later does not alter historical charges.
+    markup_rate: str = "0.05"                 # decimal string, e.g. 0.05 = 5%
+    rate_card_version: str = "beta-2026-07"
+    default_currency: str = "USD"
+    stripe_webhook_secret: Optional[str] = None  # whsec_... — verifies Stripe webhooks
+    # Estimated dollar hold placed before a native model request when a balance
+    # exists, released/settled by the usage callback. Keeps concurrent requests
+    # from overspending before the actual cost is known.
+    balance_reserve_estimate_usd: str = "0.05"
+
+    @property
+    def billing_enabled(self) -> bool:
+        """Prepaid balance enforcement is active once a Stripe webhook secret is set."""
+        return bool(self.stripe_webhook_secret)
+
     # -- provider / executor configuration state -----------------------------
     @property
     def execution_provider_valid(self) -> bool:
@@ -390,6 +408,11 @@ class Settings:
             litellm_url=os.environ.get("GNSIS_LITELLM_URL"),
             litellm_api_key=os.environ.get("GNSIS_LITELLM_API_KEY"),
             litellm_callback_secret=os.environ.get("GNSIS_LITELLM_CALLBACK_SECRET"),
+            markup_rate=os.environ.get("GNSIS_MARKUP_RATE", "0.05"),
+            rate_card_version=os.environ.get("GNSIS_RATE_CARD_VERSION", "beta-2026-07"),
+            default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
+            stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
+            balance_reserve_estimate_usd=os.environ.get("GNSIS_BALANCE_RESERVE_ESTIMATE_USD", "0.05"),
         )
 
 

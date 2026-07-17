@@ -56,9 +56,23 @@ async def litellm_usage_callback(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
     record, created = UsageStore().record(measured)
+
+    # When billing is configured, convert the measurement into an immutable
+    # charge + one balance debit (and settle any pre-request hold). Idempotent —
+    # a replayed callback neither re-records nor re-charges.
+    charged = False
+    if settings.billing_enabled:
+        from .billing import BillingError, BillingStore
+
+        try:
+            _, charged = BillingStore().charge_usage(settings, record.id)
+        except BillingError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.message)
+
     return {
         "accepted": True,
         "duplicate": not created,
         "usage_id": record.id,
         "litellm_request_id": record.litellm_request_id,
+        "charged": charged,
     }
