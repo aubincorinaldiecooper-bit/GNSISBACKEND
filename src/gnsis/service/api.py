@@ -15,6 +15,7 @@ legacy ``GNSIS_API_KEY`` remains only as an internal/emergency path
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -289,6 +290,132 @@ def me(
             "repository_count": len(repos),
         },
     }
+
+
+# -- utility dashboard --------------------------------------------------------
+# Read-only, workspace-scoped views over metering (PR 1) and billing (PR 2), plus
+# the Stripe refill initiation. Everything monetary is returned as an exact
+# decimal string. No data crosses a workspace boundary: each query is filtered by
+# the caller's resolved workspace id.
+
+
+@app.get("/v1/dashboard/overview")
+def dashboard_overview(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .dashboard import DashboardStore
+
+    settings = get_settings()
+    ov = DashboardStore().overview(workspace.id, currency=settings.default_currency)
+    result = asdict(ov)
+    result.update(
+        {
+            "workspace_id": workspace.id,
+            "billing_enabled": settings.billing_enabled,
+            "refill_enabled": settings.refill_enabled,
+        }
+    )
+    return result
+
+
+@app.get("/v1/dashboard/usage")
+def dashboard_usage(
+    limit: int = 50,
+    offset: int = 0,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .dashboard import DashboardStore
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    ds = DashboardStore()
+    items = ds.usage_ledger(workspace.id, limit=limit, offset=offset)
+    return {
+        "items": [asdict(i) for i in items],
+        "limit": limit,
+        "offset": offset,
+        "total": ds.usage_count(workspace.id),
+    }
+
+
+@app.get("/v1/dashboard/transactions")
+def dashboard_transactions(
+    limit: int = 50,
+    offset: int = 0,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .dashboard import DashboardStore
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    ds = DashboardStore()
+    entries = ds.transactions(workspace.id, limit=limit, offset=offset)
+    return {
+        "items": [asdict(e) for e in entries],
+        "limit": limit,
+        "offset": offset,
+        "total": ds.transaction_count(workspace.id),
+    }
+
+
+@app.get("/v1/dashboard/runs")
+def dashboard_runs(
+    limit: int = 50,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> dict:
+    from .dashboard import DashboardStore
+
+    settings = get_settings()
+    limit = max(1, min(limit, 200))
+    jobs = [j for j in db.list_jobs(limit=500) if j.workspace_id == workspace.id][:limit]
+    spend = DashboardStore().run_spend(workspace.id, [j.id for j in jobs])
+    runs = [
+        {
+            "id": j.id,
+            "repo": j.repo,
+            "instruction": j.instruction,
+            "engine": j.engine,
+            "status": j.status,
+            "branch": j.branch,
+            "error": j.error,
+            "created_at": j.created_at,
+            "updated_at": j.updated_at,
+            "spend": spend.get(j.id, "0"),
+            "currency": settings.default_currency,
+        }
+        for j in jobs
+    ]
+    return {"runs": runs, "limit": limit, "currency": settings.default_currency}
+
+
+class RefillRequest(BaseModel):
+    amount_usd: str = Field(..., description="Refill amount in whole/decimal USD, e.g. \"25\".")
+
+
+@app.post("/v1/billing/refill")
+def create_refill(
+    req: RefillRequest,
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Open a hosted Stripe Checkout page for a prepaid refill.
+
+    The payment is credited by the signed Stripe webhook (PR 2), never by the
+    browser redirect. Returns the Checkout URL for the frontend to redirect to.
+    """
+    from .stripe_checkout import RefillError, create_refill_session
+
+    settings = get_settings()
+    try:
+        return create_refill_session(
+            settings,
+            workspace_id=workspace.id,
+            amount_usd=req.amount_usd,
+            user_email=user.email,
+        )
+    except RefillError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
 # -- GitHub installations -----------------------------------------------------
