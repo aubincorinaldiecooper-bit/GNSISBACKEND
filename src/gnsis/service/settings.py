@@ -131,8 +131,9 @@ class Settings:
         default_factory=lambda: list(DEFAULT_ALLOWED_MODELS)
     )
 
-    # Which Railway service this process is: "api" or "worker". Drives which
-    # settings are required at startup. Defaults to "api".
+    # Which Railway service this process is: "api", "worker" or "beat". Drives which
+    # settings are required at startup. Defaults to "api". Production must run
+    # exactly one beat replica; never use celery worker -B.
     service_role: str = "api"
 
     # -- provider / executor configuration state -----------------------------
@@ -227,7 +228,13 @@ class Settings:
         role = role or self.service_role
         missing: List[str] = []
 
-        # Both roles need the GitHub App private key + id: the API mints
+        if role == "beat":
+            # Beat only enqueues periodic recovery/observation tasks. It needs the
+            # database and Redis (validated by from_env) plus broker backend; do
+            # not require API-only secrets or GitHub/App executor credentials.
+            return []
+
+        # API and worker need the GitHub App private key + id: the API mints
         # customer source tokens; the worker dispatches and publishes.
         for name, value in (
             ("GITHUB_APP_ID", self.github_app_id),
@@ -237,7 +244,7 @@ class Settings:
             if not value:
                 missing.append(name)
 
-        # Every role needs the public-beta execution configuration: without it
+        # API and worker need the public-beta execution configuration: without it
         # there is no permitted way to run a user job.
         missing.extend(self.missing_execution_vars())
 
