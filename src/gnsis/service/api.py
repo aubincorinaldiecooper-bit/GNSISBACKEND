@@ -91,6 +91,11 @@ from .usage_api import router as usage_router  # noqa: E402
 
 app.include_router(usage_router)
 
+# The Stripe prepaid-refill webhook (signature-verified).
+from .stripe_webhook import router as stripe_router  # noqa: E402
+
+app.include_router(stripe_router)
+
 
 # -- dependency providers (overridable in tests) ------------------------------
 

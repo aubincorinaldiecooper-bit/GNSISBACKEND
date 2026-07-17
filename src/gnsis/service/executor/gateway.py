@@ -161,26 +161,49 @@ def handle_chat_completion(
     if not isinstance(messages, list) or not messages:
         raise GatewayError("messages is required")
 
-    # Reserve a call slot within budget (atomic).
+    # Correlation key attached to the LiteLLM request so its usage callback can be
+    # tied back to this exact model call (also stored on the model-call row).
+    event_id = uuid.uuid4().hex
+
+    # Pre-request balance control: place an estimated hold so concurrent requests
+    # cannot overspend before the actual cost is known. Requires LiteLLM (its
+    # usage callback settles the hold into the real debit or releases it).
+    billing_hold = bool(
+        settings.billing_enabled and settings.litellm_enabled and run.workspace_id
+    )
+    if billing_hold:
+        from ..billing import BillingStore
+
+        if not BillingStore().reserve(run.workspace_id, settings.balance_reserve_estimate_usd, event_id):
+            raise GatewayError("insufficient balance", status=402)
+
+    # Reserve a model-call slot within budget (atomic).
     ok, reason = store.reserve_model_call(run.id)
     if not ok:
+        if billing_hold:
+            from ..billing import BillingStore
+
+            BillingStore().release(event_id)
         raise GatewayError(f"model budget: {reason}", status=402)
 
     # Build a sanitised upstream payload — only known fields, forced model.
     payload = {k: body[k] for k in _FORWARD_FIELDS if k in body}
     payload["model"] = model
 
-    # Correlation key attached to the LiteLLM request so its usage callback can be
-    # tied back to this exact model call (also stored on the model-call row).
-    event_id = uuid.uuid4().hex
+    try:
+        if upstream is not None:
+            data = upstream(settings, payload)
+        elif settings.litellm_enabled:
+            metadata = build_litellm_metadata(settings, run, body, event_id)
+            data = _litellm_upstream(settings, payload, metadata)
+        else:
+            data = _default_upstream(settings, payload)
+    except Exception:
+        if billing_hold:
+            from ..billing import BillingStore
 
-    if upstream is not None:
-        data = upstream(settings, payload)
-    elif settings.litellm_enabled:
-        metadata = build_litellm_metadata(settings, run, body, event_id)
-        data = _litellm_upstream(settings, payload, metadata)
-    else:
-        data = _default_upstream(settings, payload)
+            BillingStore().release(event_id)
+        raise
 
     usage = (data or {}).get("usage") or {}
     input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)

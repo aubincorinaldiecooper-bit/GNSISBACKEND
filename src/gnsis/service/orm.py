@@ -404,6 +404,101 @@ class ExecutionEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+# -- billing: immutable charges, prepaid balance ledger, reservations ----------
+
+
+class UsageCharge(Base):
+    """An immutable retail charge derived from one measured usage record.
+
+    Stores the *exact* pricing decision applied at the time (upstream, markup
+    rate, service fee, retail, rate-card version) as decimal strings, so it is a
+    historical fact that is never recomputed when the current markup changes. At
+    most one charge exists per usage record (unique ``usage_record_id``).
+    """
+
+    __tablename__ = "usage_charges"
+    __table_args__ = (
+        UniqueConstraint("usage_record_id", name="uq_charge_usage_record"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    usage_record_id: Mapped[str] = mapped_column(String(64), index=True)
+    litellm_request_id: Mapped[str] = mapped_column(String(128), index=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    trace_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    application_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    # Exact applied pricing (decimal strings; never floats).
+    upstream_cost: Mapped[str] = mapped_column(String(40), default="0")
+    markup_rate: Mapped[str] = mapped_column(String(40), default="0")
+    service_fee: Mapped[str] = mapped_column(String(40), default="0")
+    retail_cost: Mapped[str] = mapped_column(String(40), default="0")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    rate_card_version: Mapped[str] = mapped_column(String(64), default="")
+    billing_status: Mapped[str] = mapped_column(String(32), default="charged", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BalanceTransaction(Base):
+    """One signed movement in a workspace's prepaid balance ledger.
+
+    The current balance is derivable as the sum of ``signed_amount`` over all
+    rows for the workspace. Money moves only through this table; nothing edits a
+    prior row. Idempotency is enforced by a unique ``idempotency_key`` and, for
+    Stripe-sourced rows, a unique ``stripe_event_id`` (nullable — non-Stripe rows
+    leave it null).
+    """
+
+    __tablename__ = "balance_transactions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_txn_idempotency_key"),
+        UniqueConstraint("stripe_event_id", name="uq_txn_stripe_event_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    transaction_type: Mapped[str] = mapped_column(String(32), index=True)
+    signed_amount: Mapped[str] = mapped_column(String(40), default="0")  # +credit / -debit
+    usage_charge_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    stripe_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    stripe_payment_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(191))
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class BalanceReservation(Base):
+    """A short-lived hold placed before an upstream request whose cost is unknown.
+
+    ``available = ledger balance − sum(active reservations)``. The usage callback
+    settles the reservation into the actual debit; a failed request releases it.
+    Keyed by the gateway's per-request correlation id so settlement is idempotent.
+    """
+
+    __tablename__ = "balance_reservations"
+    __table_args__ = (
+        UniqueConstraint("reservation_key", name="uq_reservation_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    reservation_key: Mapped[str] = mapped_column(String(128))
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active/settled/released
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class WorkspaceBilling(Base):
+    """Per-workspace lock anchor, so balance reservations serialise safely."""
+
+    __tablename__ = "workspace_billing"
+
+    workspace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class AgentMemory(Base):
     """Long-term, repo-scoped agent memory. Only approved records are written."""
 
