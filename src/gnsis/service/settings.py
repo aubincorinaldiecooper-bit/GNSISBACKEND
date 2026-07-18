@@ -161,10 +161,25 @@ class Settings:
     # from overspending before the actual cost is known.
     balance_reserve_estimate_usd: str = "0.05"
 
+    # Stripe refill (Checkout Session creation). The secret key lets the API open
+    # a hosted Stripe Checkout page for a prepaid top-up; the completed payment is
+    # credited by the webhook (PR 2), never by the redirect. Refill is only
+    # offered when both the secret key and a frontend URL (for the return links)
+    # are configured. ``stripe_api_base`` is overridable so tests never hit Stripe.
+    stripe_secret_key: Optional[str] = None      # sk_live_/sk_test_...
+    stripe_api_base: str = "https://api.stripe.com"
+    refill_min_usd: str = "5"
+    refill_max_usd: str = "500"
+
     @property
     def billing_enabled(self) -> bool:
         """Prepaid balance enforcement is active once a Stripe webhook secret is set."""
         return bool(self.stripe_webhook_secret)
+
+    @property
+    def refill_enabled(self) -> bool:
+        """Hosted-checkout refills need a Stripe secret key and a return URL."""
+        return bool(self.stripe_secret_key and self.frontend_url)
 
     # -- provider / executor configuration state -----------------------------
     @property
@@ -413,6 +428,10 @@ class Settings:
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
             stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
             balance_reserve_estimate_usd=os.environ.get("GNSIS_BALANCE_RESERVE_ESTIMATE_USD", "0.05"),
+            stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY"),
+            stripe_api_base=os.environ.get("STRIPE_API_BASE", "https://api.stripe.com"),
+            refill_min_usd=os.environ.get("GNSIS_REFILL_MIN_USD", "5"),
+            refill_max_usd=os.environ.get("GNSIS_REFILL_MAX_USD", "500"),
         )
 
 
