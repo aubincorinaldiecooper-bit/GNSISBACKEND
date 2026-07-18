@@ -95,16 +95,22 @@ def _safe_card(pm: dict) -> Optional[dict]:
     }
 
 
+def default_payment_method_id(settings, customer_id: str) -> Optional[str]:
+    """The customer's default PaymentMethod id (for off-session charges), or None."""
+    if not customer_id:
+        return None
+    customer = stripe_client.retrieve_customer(settings, customer_id)
+    pm_id = (customer.get("invoice_settings") or {}).get("default_payment_method")
+    if isinstance(pm_id, dict):
+        pm_id = pm_id.get("id")
+    return pm_id or None
+
+
 def default_card_metadata(settings, customer_id: str) -> Optional[dict]:
     """Safe display metadata for the customer's default card, or ``None``."""
     if not customer_id:
         return None
-    customer = stripe_client.retrieve_customer(settings, customer_id)
-    invoice_settings = customer.get("invoice_settings") or {}
-    pm_id = invoice_settings.get("default_payment_method")
-    # Fall back to a legacy default source if no invoice-settings default is set.
-    if isinstance(pm_id, dict):
-        pm_id = pm_id.get("id")
+    pm_id = default_payment_method_id(settings, customer_id)
     if not pm_id:
         return None
     pm = stripe_client.retrieve_payment_method(settings, pm_id)

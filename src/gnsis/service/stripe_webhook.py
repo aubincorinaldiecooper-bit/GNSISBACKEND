@@ -105,7 +105,25 @@ def handle_event(event: dict, store: Optional[BillingStore] = None) -> dict:
             stripe_payment_reference=obj.get("id"), payment_reference=payment_ref,
             currency=currency,
         )
+        # Reconcile a matching auto-refill attempt (no-op for ordinary refills).
+        from .auto_refill import mark_attempt_by_pi
+
+        mark_attempt_by_pi(payment_ref, succeeded=True)
         return {"handled": True, "type": etype, "created": created}
+
+    if etype == "payment_intent.payment_failed":
+        # Off-session auto-refill failure: never credit; classify + reconcile the
+        # attempt so the failure streak / cooldown / auto-pause advance.
+        pi_id = obj.get("id")
+        err = obj.get("last_payment_error") or {}
+        from .auto_refill import mark_attempt_by_pi
+
+        mark_attempt_by_pi(
+            pi_id, succeeded=False,
+            failure_code=err.get("decline_code") or err.get("code"),
+            failure_message=err.get("message"),
+        )
+        return {"handled": True, "type": etype, "created": False}
 
     if etype in ("charge.refunded", "refund.created", "charge.dispute.created"):
         refunded = obj.get("amount_refunded") or obj.get("amount")

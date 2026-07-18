@@ -548,6 +548,77 @@ class VirtualKey(Base):
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AutoRefillConfig(Base):
+    """Per-workspace auto-refill policy + runtime state.
+
+    Off-session charging requires explicit, timestamped consent. Guardrails
+    (per-attempt / per-day count / daily + monthly dollar caps, cooldown, and an
+    automatic pause after repeated failures) are all enforced server-side. Never
+    treat auto-refill as active unless ``enabled`` AND ``consent`` AND a
+    ``payment_method_id`` are all set and it is not ``paused``.
+    """
+
+    __tablename__ = "auto_refill_config"
+
+    workspace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Money as exact decimal strings.
+    threshold: Mapped[str] = mapped_column(String(40), default="0")
+    refill_amount: Mapped[str] = mapped_column(String(40), default="0")
+    max_refill_amount: Mapped[str] = mapped_column(String(40), default="0")
+    max_refills_per_day: Mapped[int] = mapped_column(Integer, default=3)
+    daily_cap: Mapped[str] = mapped_column(String(40), default="0")
+    monthly_cap: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    payment_method_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Explicit, timestamped authorization for off-session charging.
+    consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Failure handling / runtime state.
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    pause_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class AutoRefillAttempt(Base):
+    """Immutable-ish audit record of one auto-refill attempt.
+
+    The trigger context (balance, threshold, amount) is written once and never
+    changed; ``status`` / PaymentIntent id / failure fields advance through the
+    state machine (pending -> processing -> succeeded | requires_action | failed |
+    cancelled). The Stripe idempotency key is unique per attempt, so retries of
+    the same attempt never create a second PaymentIntent.
+    """
+
+    __tablename__ = "auto_refill_attempts"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_autorefill_idempotency_key"),
+        UniqueConstraint("stripe_payment_intent_id", name="uq_autorefill_pi"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    trigger_balance: Mapped[str] = mapped_column(String(40), default="0")
+    threshold: Mapped[str] = mapped_column(String(40), default="0")
+    refill_amount: Mapped[str] = mapped_column(String(40), default="0")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    stripe_payment_intent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(191))
+    failure_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    failure_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class AgentMemory(Base):
     """Long-term, repo-scoped agent memory. Only approved records are written."""
 
