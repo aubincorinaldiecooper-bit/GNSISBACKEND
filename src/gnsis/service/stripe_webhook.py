@@ -91,12 +91,19 @@ def handle_event(event: dict, store: Optional[BillingStore] = None) -> dict:
         amount = obj.get("amount_received")
         if amount is None:
             amount = obj.get("amount_total")
+        # Payment-level key: the underlying PaymentIntent id. For a Checkout
+        # session it is ``payment_intent``; for a PaymentIntent event it is the
+        # object's own id. Both events for one payment resolve to the same value,
+        # so together with the unique ``payment_reference`` they can never credit
+        # the same payment twice — even though they are distinct Stripe events.
+        payment_ref = obj.get("payment_intent") or obj.get("id")
         if not workspace_id or not paid or not amount:
             return {"handled": False, "reason": "not a completed, attributable payment"}
         _, created = store.top_up(
             workspace_id, _dollars(amount),
             idempotency_key=f"stripe:{event_id}", stripe_event_id=event_id,
-            stripe_payment_reference=obj.get("id"), currency=currency,
+            stripe_payment_reference=obj.get("id"), payment_reference=payment_ref,
+            currency=currency,
         )
         return {"handled": True, "type": etype, "created": created}
 

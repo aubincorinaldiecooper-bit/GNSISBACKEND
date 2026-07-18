@@ -455,6 +455,10 @@ class BalanceTransaction(Base):
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_txn_idempotency_key"),
         UniqueConstraint("stripe_event_id", name="uq_txn_stripe_event_id"),
+        # Payment-level idempotency: at most one credit per underlying payment,
+        # so two *different* events describing the same payment (e.g. a Checkout
+        # session completion and its PaymentIntent success) can never both credit.
+        UniqueConstraint("payment_reference", name="uq_txn_payment_reference"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -464,6 +468,9 @@ class BalanceTransaction(Base):
     usage_charge_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     stripe_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     stripe_payment_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Stable per-payment key (e.g. the Stripe PaymentIntent id). Nullable: only
+    # payment-sourced rows set it; usage debits / manual adjustments leave it null.
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(191))
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -491,11 +498,22 @@ class BalanceReservation(Base):
 
 
 class WorkspaceBilling(Base):
-    """Per-workspace lock anchor, so balance reservations serialise safely."""
+    """Per-workspace billing anchor.
+
+    Doubles as the row-lock used to serialise balance reservations *and* the
+    durable home of the workspace's persistent Stripe Customer id. Storing the
+    Customer here (rather than on ``workspaces``) keeps the billing concern in
+    one table and lets the same ``with_for_update`` lock make get-or-create of
+    the Customer concurrency-safe.
+    """
 
     __tablename__ = "workspace_billing"
+    __table_args__ = (
+        UniqueConstraint("stripe_customer_id", name="uq_workspace_billing_customer"),
+    )
 
     workspace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
