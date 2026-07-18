@@ -181,6 +181,14 @@ class Settings:
     stripe_api_base: str = "https://api.stripe.com"
     refill_min_usd: str = "5"
     refill_max_usd: str = "500"
+    # Stripe Tax — OFF unless explicitly enabled AND your Stripe account has Tax
+    # activated with a registered origin. We never hard-code a tax code or assert
+    # registration; enabling this only turns on `automatic_tax` on Checkout so
+    # Stripe computes tax per your dashboard configuration.
+    stripe_tax_enabled: bool = False
+    # Optional named Customer Portal configuration id; when unset, Stripe uses the
+    # account's default portal configuration (set in the Stripe dashboard).
+    stripe_portal_configuration_id: Optional[str] = None
 
     @property
     def billing_enabled(self) -> bool:
@@ -446,6 +454,8 @@ class Settings:
             stripe_api_base=os.environ.get("STRIPE_API_BASE", "https://api.stripe.com"),
             refill_min_usd=os.environ.get("GNSIS_REFILL_MIN_USD", "5"),
             refill_max_usd=os.environ.get("GNSIS_REFILL_MAX_USD", "500"),
+            stripe_tax_enabled=os.environ.get("GNSIS_STRIPE_TAX_ENABLED", "").lower() in ("1", "true", "yes"),
+            stripe_portal_configuration_id=os.environ.get("GNSIS_STRIPE_PORTAL_CONFIGURATION_ID"),
         )
 
 

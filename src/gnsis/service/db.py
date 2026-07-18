@@ -55,6 +55,10 @@ _ADDITIVE_COLUMNS = [
     ("jobs", "repository_id", "VARCHAR(64)"),
     # LiteLLM correlation key on the existing model-call table.
     ("execution_model_calls", "event_id", "VARCHAR(64)"),
+    # Wallet billing: persistent Stripe Customer per workspace + payment-level
+    # idempotency key on the ledger.
+    ("workspace_billing", "stripe_customer_id", "VARCHAR(255)"),
+    ("balance_transactions", "payment_reference", "VARCHAR(255)"),
 ]
 
 

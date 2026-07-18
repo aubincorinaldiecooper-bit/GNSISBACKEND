@@ -146,6 +146,33 @@ class BillingStore:
             return [_txn_view(r) for r in rows]
 
     # -- ledger writes (idempotent) --------------------------------------
+    def _find_existing_txn(self, s, idempotency_key, stripe_event_id, payment_reference):
+        """Return an existing ledger row matching any idempotency dimension.
+
+        Three independent guards converge to the first winner: the caller's
+        ``idempotency_key`` (structural), the Stripe *event* id (redelivery/retry
+        of the same event), and the *payment* reference (two different events for
+        the same underlying payment). Any hit means "already credited".
+        """
+        row = (
+            s.query(orm.BalanceTransaction)
+            .filter(orm.BalanceTransaction.idempotency_key == idempotency_key)
+            .one_or_none()
+        )
+        if row is None and stripe_event_id:
+            row = (
+                s.query(orm.BalanceTransaction)
+                .filter(orm.BalanceTransaction.stripe_event_id == stripe_event_id)
+                .one_or_none()
+            )
+        if row is None and payment_reference:
+            row = (
+                s.query(orm.BalanceTransaction)
+                .filter(orm.BalanceTransaction.payment_reference == payment_reference)
+                .one_or_none()
+            )
+        return row
+
     def _add_transaction(
         self,
         *,
@@ -155,21 +182,12 @@ class BillingStore:
         idempotency_key: str,
         stripe_event_id: Optional[str] = None,
         stripe_payment_reference: Optional[str] = None,
+        payment_reference: Optional[str] = None,
         usage_charge_id: Optional[str] = None,
         currency: str = "USD",
     ) -> Tuple[TransactionView, bool]:
         with session_scope() as s:
-            existing = (
-                s.query(orm.BalanceTransaction)
-                .filter(orm.BalanceTransaction.idempotency_key == idempotency_key)
-                .one_or_none()
-            )
-            if existing is None and stripe_event_id:
-                existing = (
-                    s.query(orm.BalanceTransaction)
-                    .filter(orm.BalanceTransaction.stripe_event_id == stripe_event_id)
-                    .one_or_none()
-                )
+            existing = self._find_existing_txn(s, idempotency_key, stripe_event_id, payment_reference)
             if existing is not None:
                 return _txn_view(existing), False
             row = orm.BalanceTransaction(
@@ -180,6 +198,7 @@ class BillingStore:
                 usage_charge_id=usage_charge_id,
                 stripe_event_id=stripe_event_id,
                 stripe_payment_reference=stripe_payment_reference,
+                payment_reference=payment_reference,
                 idempotency_key=idempotency_key,
                 currency=currency,
             )
@@ -187,25 +206,16 @@ class BillingStore:
             try:
                 s.flush()
             except IntegrityError:
+                # Lost a race on any unique guard — converge to the winner.
                 s.rollback()
-                existing = (
-                    s.query(orm.BalanceTransaction)
-                    .filter(orm.BalanceTransaction.idempotency_key == idempotency_key)
-                    .one_or_none()
-                )
-                if existing is None and stripe_event_id:
-                    existing = (
-                        s.query(orm.BalanceTransaction)
-                        .filter(orm.BalanceTransaction.stripe_event_id == stripe_event_id)
-                        .one()
-                    )
+                existing = self._find_existing_txn(s, idempotency_key, stripe_event_id, payment_reference)
                 return _txn_view(existing), False
             return _txn_view(row), True
 
     def top_up(
         self, workspace_id: str, amount, *, idempotency_key: str,
         stripe_event_id: Optional[str] = None, stripe_payment_reference: Optional[str] = None,
-        currency: str = "USD",
+        payment_reference: Optional[str] = None, currency: str = "USD",
     ) -> Tuple[TransactionView, bool]:
         amt = Decimal(str(amount))
         if amt <= 0:
@@ -213,7 +223,8 @@ class BillingStore:
         return self._add_transaction(
             workspace_id=workspace_id, transaction_type=TOP_UP, signed_amount=amt,
             idempotency_key=idempotency_key, stripe_event_id=stripe_event_id,
-            stripe_payment_reference=stripe_payment_reference, currency=currency,
+            stripe_payment_reference=stripe_payment_reference,
+            payment_reference=payment_reference, currency=currency,
         )
 
     def credit(self, workspace_id: str, amount, *, idempotency_key: str, currency: str = "USD"):

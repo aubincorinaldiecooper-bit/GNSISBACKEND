@@ -192,31 +192,40 @@ class RefillTests(DashboardTestBase):
 
     def test_refill_creates_checkout_session(self):
         self._enable_refill()
-        import gnsis.service.stripe_checkout as sc
+        import gnsis.service.stripe_client as scl
 
-        captured = {}
+        checkout_body = {}
+        seen = []
 
-        def fake_post(url, data, headers, timeout=30):
-            captured["url"] = url
-            captured["data"] = data.decode()
-            return 200, json.dumps({"id": "cs_test_1", "url": "https://checkout.stripe.test/c/cs_test_1"})
+        def fake(method, url, headers, body=None, timeout=30):
+            seen.append(url)
+            if url.endswith("/v1/customers"):
+                return 200, json.dumps({"id": "cus_1", "invoice_settings": {}})
+            if url.endswith("/v1/checkout/sessions"):
+                checkout_body["data"] = body.decode()
+                return 200, json.dumps({"id": "cs_test_1", "url": "https://checkout.stripe.test/c/cs_test_1"})
+            return 200, "{}"
 
-        orig = sc._http_post
-        sc._http_post = fake_post
+        orig = scl._http_request
+        scl._http_request = fake
         try:
             r = self.client.post(
                 "/v1/billing/refill", json={"amount_usd": "25"}, headers=self.auth("user-1")
             )
         finally:
-            sc._http_post = orig
+            scl._http_request = orig
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertEqual(body["url"], "https://checkout.stripe.test/c/cs_test_1")
         self.assertEqual(body["session_id"], "cs_test_1")
-        # The Stripe call carried workspace attribution and the right amount (cents).
-        self.assertIn("metadata%5Bworkspace_id%5D", captured["data"])
-        self.assertIn("%5Bunit_amount%5D=2500", captured["data"])  # $25.00 -> 2500 cents
-        self.assertTrue(captured["url"].endswith("/v1/checkout/sessions"))
+        data = checkout_body["data"]
+        # Reuses the workspace Customer, attributes it, charges the right cents,
+        # and creates a paid invoice. Tax stays off (not configured).
+        self.assertIn("customer=cus_1", data)
+        self.assertIn("metadata%5Bworkspace_id%5D", data)
+        self.assertIn("%5Bunit_amount%5D=2500", data)  # $25.00 -> 2500 cents
+        self.assertIn("invoice_creation%5Benabled%5D=true", data)
+        self.assertNotIn("automatic_tax", data)
 
     def test_refill_rejects_out_of_range_amount(self):
         self._enable_refill()

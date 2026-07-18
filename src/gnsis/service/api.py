@@ -418,6 +418,37 @@ def create_refill(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+@app.get("/v1/billing/summary")
+def billing_summary_route(
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Pay-as-you-go summary: GNSIS-owned balances/spend + safe Stripe card meta."""
+    from .wallet import billing_summary
+
+    return billing_summary(get_settings(), workspace.id, email=user.email)
+
+
+@app.post("/v1/billing/portal")
+def billing_portal_route(
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Open a Stripe Customer Portal session (payment methods, invoices, receipts)."""
+    from .billing import BillingError
+    from .wallet import create_portal_url
+
+    settings = get_settings()
+    if not settings.frontend_url:
+        raise HTTPException(status_code=503, detail="billing portal is not configured")
+    return_url = f"{settings.frontend_url.rstrip('/')}/billing"
+    try:
+        url = create_portal_url(settings, workspace.id, email=user.email, return_url=return_url)
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return {"url": url}
+
+
 # -- virtual keys (customer-issued, LiteLLM-enforced budgets) ------------------
 
 
