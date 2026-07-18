@@ -418,6 +418,71 @@ def create_refill(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+# -- virtual keys (customer-issued, LiteLLM-enforced budgets) ------------------
+
+
+class CreateVirtualKeyRequest(BaseModel):
+    key_alias: str = Field(..., description="A human label for the key, e.g. \"prod app\".")
+    max_budget_usd: Optional[str] = Field(default=None, description="Per-key spend cap in USD.")
+    budget_duration: Optional[str] = Field(default=None, description="e.g. \"30d\" / \"monthly\".")
+    models: Optional[List[str]] = Field(default=None, description="Optional model allowlist.")
+
+
+@app.get("/v1/dashboard/keys")
+def list_virtual_keys(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyStore
+
+    settings = get_settings()
+    keys = VirtualKeyStore().list_for_workspace(workspace.id)
+    return {"items": [asdict(k) for k in keys], "enabled": settings.virtual_keys_enabled}
+
+
+@app.post("/v1/dashboard/keys")
+def create_virtual_key(
+    req: CreateVirtualKeyRequest,
+    user: AuthedUser = Depends(current_user),
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Issue a virtual key. The secret is returned **once** and never stored."""
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    settings = get_settings()
+    try:
+        view, secret = VirtualKeyStore().create(
+            settings,
+            workspace_id=workspace.id,
+            user_id=user.subject,
+            key_alias=req.key_alias,
+            max_budget=req.max_budget_usd,
+            budget_duration=req.budget_duration,
+            models=req.models,
+        )
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return {
+        "key": secret,
+        "virtual_key": asdict(view),
+        "warning": "Store this key now — it will not be shown again.",
+    }
+
+
+@app.delete("/v1/dashboard/keys/{key_id}")
+def revoke_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    settings = get_settings()
+    try:
+        view = VirtualKeyStore().revoke(settings, workspace.id, key_id)
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
 # -- GitHub installations -----------------------------------------------------
 
 

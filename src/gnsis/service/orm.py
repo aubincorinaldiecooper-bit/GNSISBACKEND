@@ -499,6 +499,37 @@ class WorkspaceBilling(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class VirtualKey(Base):
+    """A LiteLLM virtual key issued to a workspace for external (non-native) use.
+
+    GNSIS never stores the secret key value — only LiteLLM's hashed token (the
+    key's durable id), a short display prefix, and the enforced budget. The secret
+    is returned to the caller exactly once, at creation. Per-key budgets are
+    enforced by LiteLLM; usage flows back through the same metering callback
+    (attributed by ``workspace_id`` / ``application_name``) and draws the prepaid
+    balance like any other usage.
+    """
+
+    __tablename__ = "virtual_keys"
+    __table_args__ = (
+        UniqueConstraint("litellm_token", name="uq_virtual_key_token"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
+    key_alias: Mapped[str] = mapped_column(String(128), default="")
+    application_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    litellm_token: Mapped[str] = mapped_column(String(255))  # LiteLLM hashed id (never the secret)
+    key_prefix: Mapped[str] = mapped_column(String(32), default="")  # e.g. "sk-...ab12" for display
+    max_budget: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)  # decimal string USD
+    budget_duration: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # e.g. "30d"
+    models: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # csv allowlist ("" = account default)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active/revoked
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AgentMemory(Base):
     """Long-term, repo-scoped agent memory. Only approved records are written."""
 
