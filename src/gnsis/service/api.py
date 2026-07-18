@@ -449,6 +449,62 @@ def billing_portal_route(
     return {"url": url}
 
 
+class AutoRefillRequest(BaseModel):
+    enabled: bool = False
+    threshold: str = "0"
+    refill_amount: str = "0"
+    max_refill_amount: str = "0"
+    max_refills_per_day: int = 3
+    daily_cap: str = "0"
+    monthly_cap: Optional[str] = None
+    consent: bool = False
+
+
+@app.get("/v1/billing/auto-refill")
+def get_auto_refill(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .auto_refill import get_config, list_attempts
+
+    return {
+        "config": asdict(get_config(workspace.id)),
+        "attempts": [asdict(a) for a in list_attempts(workspace.id)],
+    }
+
+
+@app.put("/v1/billing/auto-refill")
+def put_auto_refill(
+    req: AutoRefillRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Save the auto-refill policy. Enabling requires consent + a saved card;
+    the workspace's default Stripe payment method is used for off-session charges."""
+    from . import stripe_customers
+    from .auto_refill import AutoRefillError, save_config
+    from .stripe_client import StripeError
+
+    settings = get_settings()
+    payment_method_id = None
+    if req.enabled and settings.stripe_secret_key:
+        customer_id = stripe_customers.get_customer_id(workspace.id)
+        if customer_id:
+            try:
+                payment_method_id = stripe_customers.default_payment_method_id(settings, customer_id)
+            except StripeError:
+                payment_method_id = None
+    try:
+        cfg = save_config(
+            settings, workspace.id,
+            enabled=req.enabled, threshold=req.threshold, refill_amount=req.refill_amount,
+            max_refill_amount=req.max_refill_amount, max_refills_per_day=req.max_refills_per_day,
+            daily_cap=req.daily_cap, monthly_cap=req.monthly_cap,
+            payment_method_id=payment_method_id, consent=req.consent,
+        )
+    except AutoRefillError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(cfg)
+
+
 # -- virtual keys (customer-issued, LiteLLM-enforced budgets) ------------------
 
 

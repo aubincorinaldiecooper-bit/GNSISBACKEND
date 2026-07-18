@@ -68,6 +68,9 @@ async def litellm_usage_callback(
             _, charged = BillingStore().charge_usage(settings, record.id)
         except BillingError as exc:
             raise HTTPException(status_code=exc.status, detail=exc.message)
+        # Auto-refill is NOT triggered from the request path (a down broker must
+        # never block metering). A periodic beat sweep evaluates low-balance
+        # workspaces — see gnsis.auto_refill_sweep in tasks.py.
 
     return {
         "accepted": True,

@@ -52,6 +52,10 @@ celery_app.conf.update(
             "task": "gnsis.observe_customer_ci",
             "schedule": 60.0,
         },
+        "auto-refill-sweep": {
+            "task": "gnsis.auto_refill_sweep",
+            "schedule": 60.0,  # threshold-triggered top-ups, off the request path
+        },
     },
 )
 
@@ -237,3 +241,18 @@ def observe_customer_ci() -> str:
 
     observed = observe_all(settings, _store())
     return f"ci-observed:{observed}"
+
+
+@celery_app.task(name="gnsis.auto_refill_sweep")
+def auto_refill_sweep() -> str:
+    """Periodic auto-refill trigger — evaluates low-balance workspaces off the
+    request path so a broker/worker outage never blocks metering.
+
+    The per-workspace lock + single-active-attempt invariant in
+    :func:`auto_refill.evaluate_and_maybe_refill` make overlapping sweeps and
+    duplicate deliveries collapse to at most one in-flight refill per workspace.
+    """
+    from .auto_refill import sweep
+
+    started = sweep(get_settings())
+    return f"auto-refill-swept:{started}"

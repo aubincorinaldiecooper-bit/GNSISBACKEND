@@ -20,11 +20,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 class StripeError(Exception):
-    def __init__(self, message: str, status: int = 502, code: Optional[str] = None):
+    def __init__(
+        self, message: str, status: int = 502, code: Optional[str] = None,
+        decline_code: Optional[str] = None, payment_intent_id: Optional[str] = None,
+    ):
         super().__init__(message)
         self.message = message
         self.status = status
         self.code = code
+        self.decline_code = decline_code
+        self.payment_intent_id = payment_intent_id
 
 
 def _flatten(params: Dict[str, Any], prefix: str = "") -> List[Tuple[str, str]]:
@@ -98,9 +103,16 @@ def _request(
         data = {}
     if status >= 400:
         err = data.get("error") if isinstance(data, dict) else None
-        message = (err or {}).get("message") if isinstance(err, dict) else None
-        code = (err or {}).get("code") if isinstance(err, dict) else None
-        raise StripeError(message or f"Stripe error {status}", status=502, code=code)
+        err = err if isinstance(err, dict) else {}
+        pi = err.get("payment_intent")
+        pi_id = pi.get("id") if isinstance(pi, dict) else None
+        raise StripeError(
+            err.get("message") or f"Stripe error {status}",
+            status=502,
+            code=err.get("code"),
+            decline_code=err.get("decline_code"),
+            payment_intent_id=pi_id,
+        )
     return data
 
 
@@ -176,3 +188,35 @@ def create_portal_session(settings, *, customer_id: str, return_url: str) -> dic
     if settings.stripe_portal_configuration_id:
         params["configuration"] = settings.stripe_portal_configuration_id
     return _request(settings, "POST", "/v1/billing_portal/sessions", params)
+
+
+def create_off_session_payment_intent(
+    settings,
+    *,
+    customer_id: str,
+    payment_method_id: str,
+    amount_cents: int,
+    currency: str,
+    workspace_id: str,
+    idempotency_key: str,
+) -> dict:
+    """Charge the saved card off-session (auto-refill).
+
+    Confirmed immediately. On success returns the PaymentIntent (status
+    ``succeeded``); when the bank requires authentication or declines, Stripe
+    returns a 402 that :func:`_request` raises as :class:`StripeError` with
+    ``code`` (e.g. ``authentication_required`` / ``card_declined``),
+    ``decline_code``, and the ``payment_intent_id``.
+    """
+    params: Dict[str, Any] = {
+        "amount": amount_cents,
+        "currency": currency,
+        "customer": customer_id,
+        "payment_method": payment_method_id,
+        "off_session": True,
+        "confirm": True,
+        "metadata": {"workspace_id": workspace_id, "source": "auto_refill"},
+    }
+    return _request(
+        settings, "POST", "/v1/payment_intents", params, idempotency_key=idempotency_key
+    )
