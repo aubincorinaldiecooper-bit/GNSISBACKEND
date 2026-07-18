@@ -143,10 +143,21 @@ class Settings:
     litellm_url: Optional[str] = None          # LiteLLM proxy base URL (OpenAI-compatible)
     litellm_api_key: Optional[str] = None      # key GNSIS uses to call LiteLLM
     litellm_callback_secret: Optional[str] = None  # shared secret LiteLLM sends to the callback
+    # LiteLLM master key — admin credential used ONLY server-side to issue/revoke
+    # customer virtual keys via LiteLLM's key-management API. Never sent to a
+    # browser or an agent. When unset, the virtual-key endpoints report 503.
+    litellm_master_key: Optional[str] = None
+    virtual_key_max_budget_usd: str = "50"     # ceiling a customer may set per key
+    virtual_key_default_budget_usd: str = "10"
 
     @property
     def litellm_enabled(self) -> bool:
         return bool(self.litellm_url and self.litellm_api_key)
+
+    @property
+    def virtual_keys_enabled(self) -> bool:
+        """Issuing customer virtual keys needs the LiteLLM proxy + master key."""
+        return bool(self.litellm_url and self.litellm_master_key)
 
     # -- billing (markup + prepaid balance + Stripe refills) ------------------
     # The markup is config-driven and versioned; it is never hardcoded per route.
@@ -423,6 +434,9 @@ class Settings:
             litellm_url=os.environ.get("GNSIS_LITELLM_URL"),
             litellm_api_key=os.environ.get("GNSIS_LITELLM_API_KEY"),
             litellm_callback_secret=os.environ.get("GNSIS_LITELLM_CALLBACK_SECRET"),
+            litellm_master_key=os.environ.get("GNSIS_LITELLM_MASTER_KEY"),
+            virtual_key_max_budget_usd=os.environ.get("GNSIS_VIRTUAL_KEY_MAX_BUDGET_USD", "50"),
+            virtual_key_default_budget_usd=os.environ.get("GNSIS_VIRTUAL_KEY_DEFAULT_BUDGET_USD", "10"),
             markup_rate=os.environ.get("GNSIS_MARKUP_RATE", "0.05"),
             rate_card_version=os.environ.get("GNSIS_RATE_CARD_VERSION", "beta-2026-07"),
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
