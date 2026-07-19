@@ -55,6 +55,20 @@ _ADDITIVE_COLUMNS = [
     ("jobs", "repository_id", "VARCHAR(64)"),
     # LiteLLM correlation key on the existing model-call table.
     ("execution_model_calls", "event_id", "VARCHAR(64)"),
+    # Ledger-integrity fields on the append-only usage ledger (PR-G1): explicit
+    # idempotency, provider request id, dual cost, reconciliation state.
+    ("usage_records", "idempotency_key", "VARCHAR(191)"),
+    ("usage_records", "provider_request_id", "VARCHAR(191)"),
+    ("usage_records", "genesis_calculated_cost", "VARCHAR(40)"),
+    ("usage_records", "cost_source", "VARCHAR(24)"),
+    ("usage_records", "reconciliation_state", "VARCHAR(24)"),
+    ("usage_records", "error_category", "VARCHAR(48)"),
+    # Versioned pricing (G3).
+    ("usage_records", "reconciliation_reason", "VARCHAR(48)"),
+    ("usage_records", "pricing_version_id", "VARCHAR(64)"),
+    # Public gateway attribution (G4).
+    ("usage_records", "project_id", "VARCHAR(64)"),
+    ("usage_records", "virtual_key_id", "VARCHAR(64)"),
 ]
 
 

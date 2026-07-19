@@ -332,8 +332,23 @@ class BillingStore:
                     self._settle_reservation(s, usage.trace_event_id)
                 return _charge_view(existing), False
 
+            # Never invent a $0 charge for a row whose cost is unknown. Release the
+            # pre-request hold (compute did happen) but leave the usage row flagged
+            # ``needs_reconciliation`` so the missing cost is surfaced, not buried.
+            if getattr(usage, "reconciliation_state", "resolved") == "needs_reconciliation":
+                if usage.trace_event_id:
+                    self._settle_reservation(s, usage.trace_event_id)
+                return None, False
+
+            # Bill on the best available basis: the provider-reported cost when
+            # known, otherwise the Genesis-calculated cost (from versioned pricing).
+            if getattr(usage, "cost_source", "provider_reported") == "provider_reported":
+                cost_basis = usage.upstream_cost
+            else:
+                cost_basis = getattr(usage, "genesis_calculated_cost", None) or usage.upstream_cost or "0"
+
             q = rates.quote(
-                settings, upstream_cost=usage.upstream_cost,
+                settings, upstream_cost=cost_basis,
                 workspace_id=usage.workspace_id, provider=usage.provider, model=usage.model,
                 currency=usage.currency,
             )

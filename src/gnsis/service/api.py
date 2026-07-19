@@ -15,6 +15,7 @@ legacy ``GNSIS_API_KEY`` remains only as an internal/emergency path
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -95,6 +96,11 @@ app.include_router(usage_router)
 from .stripe_webhook import router as stripe_router  # noqa: E402
 
 app.include_router(stripe_router)
+
+# The public OpenAI-compatible gateway (Genesis virtual-key authenticated).
+from .public_gateway import router as public_gateway_router  # noqa: E402
+
+app.include_router(public_gateway_router)
 
 
 # -- dependency providers (overridable in tests) ------------------------------
@@ -288,6 +294,285 @@ def me(
             "installation_count": len(active),
             "repository_count": len(repos),
         },
+    }
+
+
+# -- virtual keys (Genesis-native scoped inference credentials) ----------------
+
+
+class CreateVirtualKeyRequest(BaseModel):
+    name: str = Field(default="", description="Human label for the key.")
+    mode: str = Field(default="live", description="\"live\" or \"test\".")
+    project_id: Optional[str] = None
+    environment_id: Optional[str] = None
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    allowed_providers: Optional[List[str]] = None
+    allowed_models: Optional[List[str]] = None
+    soft_limit: Optional[str] = None
+    hard_limit: Optional[str] = None
+    per_run_limit: Optional[str] = None
+    daily_limit: Optional[str] = None
+    monthly_limit: Optional[str] = None
+    expires_at: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+@app.post("/v1/virtual-keys")
+def create_virtual_key(
+    req: CreateVirtualKeyRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Issue a Genesis-native virtual key. The secret is returned **once**."""
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    settings = get_settings()
+    try:
+        view, secret = VirtualKeyStore().create(
+            settings,
+            workspace_id=workspace.id,
+            name=req.name, mode=req.mode,
+            project_id=req.project_id, environment_id=req.environment_id,
+            user_id=req.user_id, team_id=req.team_id,
+            allowed_providers=req.allowed_providers, allowed_models=req.allowed_models,
+            soft_limit=req.soft_limit, hard_limit=req.hard_limit,
+            per_run_limit=req.per_run_limit, daily_limit=req.daily_limit,
+            monthly_limit=req.monthly_limit, expires_at=req.expires_at, metadata=req.metadata,
+        )
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return {
+        "key": secret,
+        "virtual_key": asdict(view),
+        "warning": "Store this key now — it will not be shown again.",
+    }
+
+
+@app.get("/v1/virtual-keys")
+def list_virtual_keys(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyStore
+
+    keys = VirtualKeyStore().list_for_workspace(workspace.id)
+    return {"items": [asdict(k) for k in keys]}
+
+
+@app.get("/v1/virtual-keys/{key_id}")
+def get_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyStore
+
+    view = VirtualKeyStore().get(workspace.id, key_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="virtual key not found")
+    return asdict(view)
+
+
+@app.post("/v1/virtual-keys/{key_id}/disable")
+def disable_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    try:
+        view = VirtualKeyStore().disable(workspace.id, key_id)
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+@app.post("/v1/virtual-keys/{key_id}/rotate")
+def rotate_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Retire a key and issue a successor with the same scopes (secret shown once)."""
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    try:
+        view, secret = VirtualKeyStore().rotate(get_settings(), workspace.id, key_id)
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return {
+        "key": secret,
+        "virtual_key": asdict(view),
+        "warning": "Store this key now — it will not be shown again.",
+    }
+
+
+# -- usage events (read) -------------------------------------------------------
+
+
+@app.get("/v1/usage-events")
+def list_usage_events(
+    limit: int = 50,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Recent usage events for the caller's workspace. Provider cost and Genesis
+    cost are separate fields; a ``reconciliation_state`` surfaces unpriced rows.
+    (Cursor pagination + richer filters land with the REST standardization PR.)"""
+    from .usage import UsageStore
+
+    limit = max(1, min(limit, 200))
+    items = UsageStore().list_for_workspace(workspace.id, limit=limit)
+    return {"items": [asdict(i) for i in items]}
+
+
+# -- versioned model pricing ---------------------------------------------------
+
+
+class AddPricingRequest(BaseModel):
+    provider: str
+    model: str
+    input_price: str = Field(..., description="Per-token input price, decimal string.")
+    output_price: str = Field(..., description="Per-token output price, decimal string.")
+    cached_input_price: Optional[str] = None
+    reasoning_price: Optional[str] = None
+    currency: str = "USD"
+    effective_start: Optional[str] = Field(default=None, description="ISO-8601; default now.")
+    source: Optional[str] = None
+
+
+@app.get("/v1/pricing")
+def list_pricing(
+    provider: Optional[str] = None,
+    user: AuthedUser = Depends(current_user),
+) -> dict:
+    """The currently-effective rate card (authenticated read; not workspace-scoped)."""
+    from .pricing import PricingStore
+
+    return {"items": [asdict(p) for p in PricingStore().list_current(provider)]}
+
+
+@app.post("/v1/pricing", dependencies=[Depends(require_internal_key)])
+def add_pricing(req: AddPricingRequest) -> dict:
+    """Publish a new price version (admin, internal key). Closes the prior open
+    window for this provider/model so history is preserved, never overwritten."""
+    from datetime import datetime
+
+    from .pricing import PricingError, PricingStore
+
+    start = None
+    if req.effective_start:
+        try:
+            start = datetime.fromisoformat(req.effective_start.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="effective_start must be ISO-8601")
+    try:
+        view = PricingStore().add_price(
+            provider=req.provider, model=req.model,
+            input_price=req.input_price, output_price=req.output_price,
+            cached_input_price=req.cached_input_price, reasoning_price=req.reasoning_price,
+            currency=req.currency, effective_start=start, source=req.source,
+        )
+    except PricingError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+# -- spending limits + balances ------------------------------------------------
+
+
+class CreateLimitRequest(BaseModel):
+    scope_type: str
+    scope_id: str
+    limit_type: str
+    amount: str
+    enforcement_mode: str = "block"
+    warning_threshold: Optional[str] = None
+    reset_period: Optional[str] = None
+    currency: str = "USD"
+    effective_at: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class UpdateLimitRequest(BaseModel):
+    enabled: Optional[bool] = None
+    amount: Optional[str] = None
+    warning_threshold: Optional[str] = None
+    enforcement_mode: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+def _parse_dt(value: Optional[str]):
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="timestamp must be ISO-8601")
+
+
+@app.post("/v1/limits")
+def create_limit(
+    req: CreateLimitRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .limits import LimitError, LimitStore
+
+    try:
+        view = LimitStore().create(
+            workspace_id=workspace.id, scope_type=req.scope_type, scope_id=req.scope_id,
+            limit_type=req.limit_type, amount=req.amount, enforcement_mode=req.enforcement_mode,
+            warning_threshold=req.warning_threshold, reset_period=req.reset_period,
+            currency=req.currency, effective_at=_parse_dt(req.effective_at),
+            expires_at=_parse_dt(req.expires_at),
+        )
+    except LimitError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+@app.get("/v1/limits")
+def list_limits(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .limits import LimitStore
+
+    return {"items": [asdict(p) for p in LimitStore().list_for_workspace(workspace.id)]}
+
+
+@app.patch("/v1/limits/{limit_id}")
+def update_limit(
+    limit_id: str,
+    req: UpdateLimitRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .limits import LimitError, LimitStore
+
+    try:
+        view = LimitStore().update(
+            workspace.id, limit_id, enabled=req.enabled, amount=req.amount,
+            warning_threshold=req.warning_threshold, enforcement_mode=req.enforcement_mode,
+            expires_at=_parse_dt(req.expires_at),
+        )
+    except LimitError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+@app.get("/v1/balances")
+def get_balances(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .billing import BillingStore
+    from .rates import to_money_str
+
+    b = BillingStore()
+    bal = b.balance(workspace.id)
+    avail = b.available(workspace.id)
+    return {
+        "workspace_id": workspace.id,
+        "currency": get_settings().default_currency or "USD",
+        "balance": to_money_str(bal),
+        "available": to_money_str(avail),
+        "reserved": to_money_str(bal - avail),
     }
 
 

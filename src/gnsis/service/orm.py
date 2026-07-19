@@ -350,15 +350,27 @@ class UsageRecord(Base):
     __tablename__ = "usage_records"
     __table_args__ = (
         UniqueConstraint("litellm_request_id", name="uq_usage_litellm_request_id"),
+        # Explicit caller-supplied idempotency (distinct from the provider/callback
+        # dedup key above). Nullable so most rows leave it unset; unique when set.
+        UniqueConstraint("idempotency_key", name="uq_usage_idempotency_key"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     litellm_request_id: Mapped[str] = mapped_column(String(128), index=True)
+    # Caller-supplied logical-operation key (e.g. one attempt of one model call).
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(191), nullable=True)
+    # The provider's own request id (distinct from litellm_request_id); useful for
+    # provider-side reconciliation and distinguishing a retry from a new call.
+    provider_request_id: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
 
     # Attribution to existing GNSIS records.
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # The Genesis virtual key the request was made with (for per-key attribution
+    # + limits). Null for non-gateway (native run / callback) usage.
+    virtual_key_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     trace_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
@@ -376,9 +388,24 @@ class UsageRecord(Base):
     reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     request_status: Mapped[str] = mapped_column(String(32), default="success", index=True)
-    # Exact upstream cost as received, stored as a decimal string (never float).
+    # Provider-reported cost, exactly as received, as a decimal string (never
+    # float). Kept verbatim; the Genesis-calculated cost is stored separately so
+    # neither overwrites the other and discrepancies can be flagged.
     upstream_cost: Mapped[str] = mapped_column(String(40), default="0")
+    genesis_calculated_cost: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
+    # Where the provider cost came from: "provider_reported" or "unknown". An
+    # "unknown" cost is NEVER silently treated as $0 — the row is flagged below.
+    cost_source: Mapped[str] = mapped_column(String(24), default="provider_reported")
+    # "resolved" | "needs_reconciliation". Unknown pricing / cost, or a meaningful
+    # provider-vs-calculated discrepancy, must surface here rather than mis-bill.
+    reconciliation_state: Mapped[str] = mapped_column(String(24), default="resolved", index=True)
+    # Why a row needs reconciliation: unknown_cost / unknown_pricing / cost_discrepancy.
+    reconciliation_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    # The model_pricing row used to compute genesis_calculated_cost (historical).
+    pricing_version_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Classified failure bucket (e.g. provider_timeout, rate_limited, auth_error).
+    error_category: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, index=True)
     # For a retry, the litellm_request_id of the original request it retries.
     retry_of: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
 
@@ -497,6 +524,158 @@ class WorkspaceBilling(Base):
 
     workspace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LimitPolicy(Base):
+    """A configurable spending-limit policy over one scope.
+
+    Deterministic + auditable: the engine finds every applicable policy for a
+    request and applies the most restrictive valid one. Enforcement is
+    configurable per policy (observe / warn / block) so limits are never globally
+    disabled — they are opt-in and tunable.
+    """
+
+    __tablename__ = "limit_policies"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)  # owning workspace
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    scope_type: Mapped[str] = mapped_column(String(24), index=True)  # workspace/project/environment/user/team/virtual_key
+    scope_id: Mapped[str] = mapped_column(String(64), index=True)
+    limit_type: Mapped[str] = mapped_column(String(16))              # per_run/daily/monthly/total
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    warning_threshold: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # 0..1
+    enforcement_mode: Mapped[str] = mapped_column(String(16), default="block")  # observe_only/warn/block
+    reset_period: Mapped[str] = mapped_column(String(12), default="month")      # run/day/month/never
+    effective_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class LimitDecision(Base):
+    """Immutable audit of one policy evaluation for one request."""
+
+    __tablename__ = "limit_decisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), index=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    policy_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    policy_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # for key-inline limits
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_id: Mapped[str] = mapped_column(String(64))
+    limit_type: Mapped[str] = mapped_column(String(16))
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    previous_usage: Mapped[str] = mapped_column(String(40), default="0")
+    reserved_amount: Mapped[str] = mapped_column(String(40), default="0")
+    actual_usage: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    enforcement_mode: Mapped[str] = mapped_column(String(16))
+    result: Mapped[str] = mapped_column(String(12), index=True)  # ok/warn/block
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LimitReservation(Base):
+    """A per-scope, per-window in-flight hold so concurrent requests cannot all
+    spend the same remaining allowance before their charges land."""
+
+    __tablename__ = "limit_reservations"
+    __table_args__ = (
+        # One hold per request per (scope, window). ``window_key`` is part of the
+        # key because a single request legitimately holds against several windows
+        # of the same scope (e.g. a workspace daily *and* monthly cap); this mirrors
+        # how active holds are summed (scope_type + scope_id + window_key).
+        UniqueConstraint(
+            "reservation_key", "scope_type", "scope_id", "window_key", name="uq_limit_resv"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    reservation_key: Mapped[str] = mapped_column(String(64), index=True)  # the Genesis request id
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_id: Mapped[str] = mapped_column(String(64), index=True)
+    window_key: Mapped[str] = mapped_column(String(48), index=True)
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    status: Mapped[str] = mapped_column(String(12), default="active", index=True)  # active/released/settled
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ModelPricing(Base):
+    """A versioned price for one (provider, model) over a time window.
+
+    The row id **is** the pricing version referenced by each usage event, so a
+    price change never rewrites historical cost: an event keeps the version that
+    was effective when it happened. Per-token prices are exact decimal strings
+    (never float). ``effective_end`` NULL means "current".
+    """
+
+    __tablename__ = "model_pricing"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # == pricing_version_id
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(128), index=True)
+    # Per-token prices as decimal strings.
+    input_price: Mapped[str] = mapped_column(String(40), default="0")
+    output_price: Mapped[str] = mapped_column(String(40), default="0")
+    cached_input_price: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    reasoning_price: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    effective_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    effective_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class VirtualKey(Base):
+    """A Genesis-native scoped inference credential (``gns_live_/gns_test_``).
+
+    Genesis issues, hashes, and validates these itself — the full secret is
+    returned exactly once at creation and is NEVER stored or retrievable
+    afterwards; only a SHA-256 (optionally peppered) ``key_hash`` and a non-secret
+    ``key_prefix`` for display/logging are kept. Keys carry attribution scopes
+    (workspace/project/environment/user/team), provider/model allowlists, and
+    per-scope spend limits. Prefer ``disable``/``rotate`` over destructive delete.
+    """
+
+    __tablename__ = "virtual_keys"
+    __table_args__ = (
+        UniqueConstraint("key_hash", name="uq_virtual_key_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(128), index=True)  # sha256 hex; never the secret
+    key_prefix: Mapped[str] = mapped_column(String(32), default="")  # e.g. "gns_live_ab12cd…"
+    mode: Mapped[str] = mapped_column(String(8), default="live")     # live | test
+    name: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active/disabled/rotated
+
+    # Attribution scopes (workspace required; the rest optional).
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    environment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    # Restrictions ("" / null = unrestricted). CSV of provider / "provider/model".
+    allowed_providers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    allowed_models: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Per-key spend limits (decimal strings; null = unset). Enforced by the limits
+    # engine (a later PR); stored here as the key's own policy inputs.
+    soft_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    hard_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    per_run_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    daily_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    monthly_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_to: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # successor key id
+    key_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentMemory(Base):

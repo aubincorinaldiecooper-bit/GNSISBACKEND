@@ -161,6 +161,11 @@ class Settings:
     # from overspending before the actual cost is known.
     balance_reserve_estimate_usd: str = "0.05"
 
+    # Optional server-side pepper mixed into the Genesis virtual-key hash. Keys are
+    # high-entropy so plain SHA-256 is sufficient; a pepper adds defence-in-depth
+    # if the key_hash column ever leaks. Rotating it invalidates existing keys.
+    virtual_key_pepper: str = ""
+
     @property
     def billing_enabled(self) -> bool:
         """Prepaid balance enforcement is active once a Stripe webhook secret is set."""
@@ -413,6 +418,7 @@ class Settings:
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
             stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
             balance_reserve_estimate_usd=os.environ.get("GNSIS_BALANCE_RESERVE_ESTIMATE_USD", "0.05"),
+            virtual_key_pepper=os.environ.get("GNSIS_VIRTUAL_KEY_PEPPER", ""),
         )
 
 
