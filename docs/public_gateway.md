@@ -41,7 +41,9 @@ no pricing is flagged `needs_reconciliation` — never billed a silent $0.
 `"stream": true` is passed through untouched (SSE). Genesis injects
 `stream_options.include_usage` and meters from the final usage chunk once the
 stream ends. If the provider sends no usage chunk, the event is recorded
-`needs_reconciliation` rather than guessed.
+`needs_reconciliation` (reason `missing_usage`) rather than guessed: the
+pre-request hold is released and **no charge is created** — a $0 cost computed
+from zero tokens is never settled as free.
 
 ## Structured errors
 

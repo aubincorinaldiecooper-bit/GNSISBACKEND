@@ -197,6 +197,34 @@ class StreamingTests(GatewayTestBase):
         self.assertEqual(u[0].input_tokens + u[0].output_tokens, 150)
         self.assertEqual(Decimal(u[0].genesis_calculated_cost), Decimal("0.005"))
 
+    def test_streaming_without_usage_chunk_flags_reconciliation_not_free(self):
+        # Provider streams content but never sends a final usage chunk. The request
+        # must NOT be silently recorded as a free $0 charge — it's flagged for
+        # reconciliation and the pre-request hold is released (nothing charged).
+        def _no_usage_stream(settings, provider, payload):
+            yield b'data: {"id":"c","choices":[{"delta":{"content":"hel"}}]}\n\n'
+            yield b'data: {"id":"c","choices":[{"delta":{"content":"lo"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+        self.pg._forward_stream = _no_usage_stream
+        r = self.client.post(
+            "/v1/chat/completions",
+            json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            headers={"Authorization": f"Bearer {self.secret}"},
+        )
+        self.assertEqual(r.status_code, 200)
+        u = self.usage()
+        self.assertEqual(len(u), 1)
+        self.assertEqual(u[0].reconciliation_state, "needs_reconciliation")
+        self.assertEqual(u[0].reconciliation_reason, "missing_usage")
+        # No silent $0 charge, and the pre-request hold is released (balance and
+        # available both back to the full top-up).
+        from gnsis.service.billing import BillingStore
+
+        self.assertIsNone(BillingStore().get_charge_for_usage(u[0].id))
+        self.assertEqual(self.balance(), Decimal("25.00"))
+        self.assertEqual(BillingStore().available("ws-1"), Decimal("25.00"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,8 @@ from ..orchestration.models import new_id
 # Relative tolerance before a provider-vs-calculated gap is flagged.
 _DISCREPANCY_TOLERANCE = Decimal("0.05")  # 5%
 _ZERO = Decimal("0")
+# Request statuses that denote a completed (billable) request.
+_SUCCESS_STATES = frozenset({"success", "succeeded", "ok", "completed"})
 
 
 class PricingError(Exception):
@@ -195,8 +197,12 @@ def price_usage_record(settings, usage_record_id: str) -> None:
 
     - priced + provider cost known → store genesis cost; flag ``cost_discrepancy``
       (informational, still billable on the provider figure) if they diverge.
-    - priced + provider cost unknown → store genesis cost; **resolve** (billable
-      on the genesis figure).
+    - priced + provider cost unknown + usage measured → store genesis cost;
+      **resolve** (billable on the genesis figure).
+    - priced + provider cost unknown + **no usage reported** on a *successful*
+      request → ``needs_reconciliation`` (missing_usage). A $0 cost computed from
+      zero tokens is the absence of a measurement, not a real basis, so it is
+      never settled as free (e.g. a stream that ended without its usage chunk).
     - unpriced + provider cost unknown → ``needs_reconciliation`` (unknown_pricing).
     - unpriced + provider cost known → stays billable on the provider figure.
     """
@@ -209,6 +215,22 @@ def price_usage_record(settings, usage_record_id: str) -> None:
         provider_known = getattr(u, "cost_source", "provider_reported") == "provider_reported"
 
         if pricing is not None:
+            # A successful request whose provider cost is unknown *and* that
+            # reported no tokens at all has no real cost basis — pricing zero
+            # tokens yields $0, which would silently settle a billable request as
+            # free. Keep it flagged so the missing usage is reconciled, not buried.
+            # (A *failed* request legitimately has no usage → falls through to $0.)
+            succeeded = (u.request_status or "") in _SUCCESS_STATES
+            measured_tokens = (
+                (u.input_tokens or 0) + (u.output_tokens or 0)
+                + (u.cached_tokens or 0) + (u.reasoning_tokens or 0)
+            )
+            if not provider_known and succeeded and measured_tokens == 0:
+                u.reconciliation_state = "needs_reconciliation"
+                u.reconciliation_reason = "missing_usage"
+                s.flush()
+                return
+
             genesis = calculate_cost(
                 pricing, input_tokens=u.input_tokens, output_tokens=u.output_tokens,
                 cached_tokens=u.cached_tokens, reasoning_tokens=u.reasoning_tokens,

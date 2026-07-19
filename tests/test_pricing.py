@@ -178,6 +178,41 @@ class ReconciliationTests(unittest.TestCase):
         self.assertIsNone(u.reconciliation_reason)
         self.assertEqual(u.reconciliation_state, "resolved")
 
+    def test_successful_request_missing_usage_stays_needs_reconciliation(self):
+        from gnsis.service.billing import BillingStore
+        from gnsis.service.pricing import price_usage_record
+
+        # Priced model, provider cost unknown, but ZERO tokens reported (usage
+        # omitted — e.g. a stream that ended without its final usage chunk). Must
+        # NOT resolve to a silent $0 charge just because pricing×0 == 0.
+        rec = _usage("rmiss", cost=None, cost_source="unknown",
+                     reconciliation_state="needs_reconciliation", inp=0, out=0)
+        price_usage_record(self.settings(), rec.id)
+        u = self._reget(rec.id)
+        self.assertEqual(u.reconciliation_state, "needs_reconciliation")
+        self.assertEqual(u.reconciliation_reason, "missing_usage")
+        # And billing must not invent a $0 charge for it.
+        BillingStore().top_up("ws-1", "25", idempotency_key="seed")
+        charge, charged = BillingStore().charge_usage(self.settings(), rec.id)
+        self.assertIsNone(charge)
+        self.assertFalse(charged)
+
+    def test_failed_request_zero_tokens_resolves_not_reconciliation(self):
+        from gnsis.service.pricing import price_usage_record
+        from gnsis.service.usage import MeasuredUsage, UsageStore
+
+        # A *failed* request legitimately has no usage and no charge — it must
+        # resolve (no charge), not get stuck needing reconciliation.
+        u = MeasuredUsage(
+            litellm_request_id="rfail", workspace_id="ws-1", user_id="u", provider="anthropic",
+            model="m", input_tokens=0, output_tokens=0, cached_tokens=0, reasoning_tokens=0,
+            duration_ms=1, request_status="error", upstream_cost="0", currency="USD",
+            cost_source="unknown", reconciliation_state="resolved",
+        )
+        rec, _ = UsageStore().record(u)
+        price_usage_record(self.settings(), rec.id)
+        self.assertEqual(self._reget(rec.id).reconciliation_state, "resolved")
+
     def test_unpriced_unknown_cost_needs_reconciliation(self):
         from gnsis.service.billing import BillingStore
         from gnsis.service.pricing import price_usage_record

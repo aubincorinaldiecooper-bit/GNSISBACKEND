@@ -32,15 +32,19 @@ string.
 
 Runs when a usage row is first recorded (before charging):
 
-| provider cost | priced? | outcome |
-|---|---|---|
-| known | yes | store Genesis cost + version; **bill on the provider figure**; flag `cost_discrepancy` if they differ > 5% (both values kept) |
-| unknown | yes | store Genesis cost + version; **resolve**; bill on the Genesis figure |
-| unknown | no | `needs_reconciliation`, reason `unknown_pricing` — **never a silent $0** |
-| known | no | stays billable on the provider figure (Genesis cost null) |
+| provider cost | priced? | usage | outcome |
+|---|---|---|---|
+| known | yes | any | store Genesis cost + version; **bill on the provider figure**; flag `cost_discrepancy` if they differ > 5% (both values kept) |
+| unknown | yes | tokens reported | store Genesis cost + version; **resolve**; bill on the Genesis figure |
+| unknown | yes | **none, on a successful request** | `needs_reconciliation`, reason `missing_usage` — pricing×0 tokens is the *absence* of a measurement, **never a silent $0** (e.g. a stream that ended without its usage chunk) |
+| unknown | no | any | `needs_reconciliation`, reason `unknown_pricing` — **never a silent $0** |
+| known | no | any | stays billable on the provider figure (Genesis cost null) |
 
-Billing (`charge_usage`) uses the provider-reported cost when known, otherwise the
-Genesis-calculated cost, and still skips any row left `needs_reconciliation`.
+A *failed* request legitimately reports no usage and carries no charge, so it
+resolves normally (the `missing_usage` guard only applies to **successful**
+requests). Billing (`charge_usage`) uses the provider-reported cost when known,
+otherwise the Genesis-calculated cost, and still skips any row left
+`needs_reconciliation` — surfacing it rather than burying it as free.
 
 ## Historical preservation
 
