@@ -367,6 +367,10 @@ class UsageRecord(Base):
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # The Genesis virtual key the request was made with (for per-key attribution
+    # + limits). Null for non-gateway (native run / callback) usage.
+    virtual_key_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     trace_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)

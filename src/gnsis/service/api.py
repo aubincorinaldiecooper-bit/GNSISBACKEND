@@ -97,6 +97,11 @@ from .stripe_webhook import router as stripe_router  # noqa: E402
 
 app.include_router(stripe_router)
 
+# The public OpenAI-compatible gateway (Genesis virtual-key authenticated).
+from .public_gateway import router as public_gateway_router  # noqa: E402
+
+app.include_router(public_gateway_router)
+
 
 # -- dependency providers (overridable in tests) ------------------------------
 
@@ -397,6 +402,24 @@ def rotate_virtual_key(
         "virtual_key": asdict(view),
         "warning": "Store this key now — it will not be shown again.",
     }
+
+
+# -- usage events (read) -------------------------------------------------------
+
+
+@app.get("/v1/usage-events")
+def list_usage_events(
+    limit: int = 50,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Recent usage events for the caller's workspace. Provider cost and Genesis
+    cost are separate fields; a ``reconciliation_state`` surfaces unpriced rows.
+    (Cursor pagination + richer filters land with the REST standardization PR.)"""
+    from .usage import UsageStore
+
+    limit = max(1, min(limit, 200))
+    items = UsageStore().list_for_workspace(workspace.id, limit=limit)
+    return {"items": [asdict(i) for i in items]}
 
 
 # -- versioned model pricing ---------------------------------------------------

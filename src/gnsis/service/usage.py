@@ -89,6 +89,8 @@ class MeasuredUsage:
     genesis_calculated_cost: Optional[str] = None
     cost_source: str = "provider_reported"
     reconciliation_state: str = "resolved"
+    project_id: Optional[str] = None
+    virtual_key_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,8 @@ class UsageRecordView:
     upstream_cost: str
     currency: str
     retry_of: Optional[str]
+    project_id: Optional[str] = None
+    virtual_key_id: Optional[str] = None
     idempotency_key: Optional[str] = None
     provider_request_id: Optional[str] = None
     genesis_calculated_cost: Optional[str] = None
@@ -217,6 +221,8 @@ def _to_view(row: orm.UsageRecord) -> UsageRecordView:
         workspace_id=row.workspace_id,
         user_id=row.user_id,
         team_id=row.team_id,
+        project_id=row.project_id,
+        virtual_key_id=row.virtual_key_id,
         run_id=row.run_id,
         trace_event_id=row.trace_event_id,
         repository_id=row.repository_id,
@@ -286,6 +292,8 @@ class UsageStore:
                 workspace_id=usage.workspace_id,
                 user_id=usage.user_id,
                 team_id=usage.team_id,
+                project_id=usage.project_id,
+                virtual_key_id=usage.virtual_key_id,
                 run_id=usage.run_id,
                 trace_event_id=usage.trace_event_id,
                 repository_id=usage.repository_id,

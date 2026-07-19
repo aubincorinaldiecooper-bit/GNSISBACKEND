@@ -66,6 +66,9 @@ _ADDITIVE_COLUMNS = [
     # Versioned pricing (G3).
     ("usage_records", "reconciliation_reason", "VARCHAR(48)"),
     ("usage_records", "pricing_version_id", "VARCHAR(64)"),
+    # Public gateway attribution (G4).
+    ("usage_records", "project_id", "VARCHAR(64)"),
+    ("usage_records", "virtual_key_id", "VARCHAR(64)"),
 ]
 
 
