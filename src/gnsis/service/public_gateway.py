@@ -189,13 +189,16 @@ def _meter(settings, key, *, provider: str, requested_model: str, data: Dict[str
             price_usage_record(settings, rec.id)
         except Exception:  # noqa: BLE001 — pricing must never break a completed response
             pass
+    retail = None
     if settings.billing_enabled:
         from .billing import BillingError, BillingStore
 
         try:
-            BillingStore().charge_usage(settings, rec.id)
+            charge, _ = BillingStore().charge_usage(settings, rec.id)
+            retail = charge.retail_cost if charge else None
         except BillingError:
             pass
+    return retail
 
 
 def _release_hold(settings, key, request_id: str) -> None:
@@ -217,6 +220,57 @@ def _reserve_or_402(settings, key, request_id: str) -> None:
             )
 
 
+def _limit_context(key, run_id: str):
+    from .limits import LimitContext
+
+    return LimitContext(
+        workspace_id=key.workspace_id, run_id=run_id,
+        project_id=key.project_id, environment_id=key.environment_id,
+        user_id=key.user_id or None, team_id=key.team_id, virtual_key_id=key.id,
+        key_limits={
+            "soft_limit": key.soft_limit, "hard_limit": key.hard_limit,
+            "per_run_limit": key.per_run_limit, "daily_limit": key.daily_limit,
+            "monthly_limit": key.monthly_limit,
+        },
+    )
+
+
+def _enforce_limits_or_deny(settings, key, run_id: str, request_id: str) -> None:
+    """Evaluate configurable spending policies; block (releasing the balance hold)
+    if a ``block`` policy would be exceeded. Warn/observe modes allow the request."""
+    if not getattr(key, "workspace_id", None):
+        return
+    from .limits import PolicyEngine
+
+    ctx = _limit_context(key, run_id)
+    result = PolicyEngine().evaluate(settings, ctx, settings.balance_reserve_estimate_usd, request_id)
+    if result.result == "block":
+        _release_hold(settings, key, request_id)
+        raise GatewayError(
+            "spending_limit_exceeded",
+            "This request would exceed a configured spending limit.",
+            status=402, details={"scope": result.block_scope, "limit_id": result.block_limit_id},
+        )
+
+
+def _reconcile_limits(request_id: str, actual_cost=None) -> None:
+    from .limits import PolicyEngine
+
+    try:
+        PolicyEngine().reconcile(request_id, actual_cost)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _release_limits(request_id: str) -> None:
+    from .limits import PolicyEngine
+
+    try:
+        PolicyEngine().release(request_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def handle_chat_completion(
     settings, key, body: Dict[str, Any], request_id: str, *,
     header_run_id: Optional[str] = None,
@@ -230,6 +284,7 @@ def handle_chat_completion(
     check_permitted(key, provider, model)
     run_id = _resolve_run_id(body, header_run_id)
     _reserve_or_402(settings, key, request_id)
+    _enforce_limits_or_deny(settings, key, run_id, request_id)
 
     fwd = forward or _forward
     started = datetime.now(timezone.utc)
@@ -237,9 +292,11 @@ def handle_chat_completion(
         data = fwd(settings, provider, _sanitize(body, model))
     except GatewayError:
         _release_hold(settings, key, request_id)
+        _release_limits(request_id)
         raise
     except Exception as exc:  # noqa: BLE001
         _release_hold(settings, key, request_id)
+        _release_limits(request_id)
         # The provider failed after the hold; record the failed attempt (no charge)
         # and release. Billing correctness beats pretending it was metered clean.
         _meter(settings, key, provider=provider, requested_model=model, data={}, run_id=run_id,
@@ -247,8 +304,9 @@ def handle_chat_completion(
         raise GatewayError("provider_error", f"upstream provider error: {exc}", status=502) from exc
 
     duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
-    _meter(settings, key, provider=provider, requested_model=model, data=data, run_id=run_id,
-           request_id=request_id, duration_ms=duration_ms)
+    retail = _meter(settings, key, provider=provider, requested_model=model, data=data, run_id=run_id,
+                    request_id=request_id, duration_ms=duration_ms)
+    _reconcile_limits(request_id, retail)
     return 200, data, run_id
 
 
@@ -264,6 +322,7 @@ def stream_chat_completion(
     check_permitted(key, provider, model)
     run_id = _resolve_run_id(body, header_run_id)
     _reserve_or_402(settings, key, request_id)
+    _enforce_limits_or_deny(settings, key, run_id, request_id)
 
     payload = _sanitize(body, model)
     payload["stream"] = True
@@ -291,13 +350,15 @@ def stream_chat_completion(
                 yield raw
         except Exception:  # noqa: BLE001
             _release_hold(settings, key, request_id)
+            _release_limits(request_id)
             _meter(settings, key, provider=provider, requested_model=model, data={}, run_id=run_id,
                    request_id=request_id, duration_ms=0, status="error")
             raise
         duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
-        _meter(settings, key, provider=provider, requested_model=model,
-               data=captured.get("data") or {}, run_id=run_id, request_id=request_id,
-               duration_ms=duration_ms)
+        retail = _meter(settings, key, provider=provider, requested_model=model,
+                        data=captured.get("data") or {}, run_id=run_id, request_id=request_id,
+                        duration_ms=duration_ms)
+        _reconcile_limits(request_id, retail)
 
     return _gen()
 

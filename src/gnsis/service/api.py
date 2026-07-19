@@ -474,6 +474,108 @@ def add_pricing(req: AddPricingRequest) -> dict:
     return asdict(view)
 
 
+# -- spending limits + balances ------------------------------------------------
+
+
+class CreateLimitRequest(BaseModel):
+    scope_type: str
+    scope_id: str
+    limit_type: str
+    amount: str
+    enforcement_mode: str = "block"
+    warning_threshold: Optional[str] = None
+    reset_period: Optional[str] = None
+    currency: str = "USD"
+    effective_at: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class UpdateLimitRequest(BaseModel):
+    enabled: Optional[bool] = None
+    amount: Optional[str] = None
+    warning_threshold: Optional[str] = None
+    enforcement_mode: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+def _parse_dt(value: Optional[str]):
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="timestamp must be ISO-8601")
+
+
+@app.post("/v1/limits")
+def create_limit(
+    req: CreateLimitRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .limits import LimitError, LimitStore
+
+    try:
+        view = LimitStore().create(
+            workspace_id=workspace.id, scope_type=req.scope_type, scope_id=req.scope_id,
+            limit_type=req.limit_type, amount=req.amount, enforcement_mode=req.enforcement_mode,
+            warning_threshold=req.warning_threshold, reset_period=req.reset_period,
+            currency=req.currency, effective_at=_parse_dt(req.effective_at),
+            expires_at=_parse_dt(req.expires_at),
+        )
+    except LimitError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+@app.get("/v1/limits")
+def list_limits(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .limits import LimitStore
+
+    return {"items": [asdict(p) for p in LimitStore().list_for_workspace(workspace.id)]}
+
+
+@app.patch("/v1/limits/{limit_id}")
+def update_limit(
+    limit_id: str,
+    req: UpdateLimitRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .limits import LimitError, LimitStore
+
+    try:
+        view = LimitStore().update(
+            workspace.id, limit_id, enabled=req.enabled, amount=req.amount,
+            warning_threshold=req.warning_threshold, enforcement_mode=req.enforcement_mode,
+            expires_at=_parse_dt(req.expires_at),
+        )
+    except LimitError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+@app.get("/v1/balances")
+def get_balances(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .billing import BillingStore
+    from .rates import to_money_str
+
+    b = BillingStore()
+    bal = b.balance(workspace.id)
+    avail = b.available(workspace.id)
+    return {
+        "workspace_id": workspace.id,
+        "currency": get_settings().default_currency or "USD",
+        "balance": to_money_str(bal),
+        "available": to_money_str(avail),
+        "reserved": to_money_str(bal - avail),
+    }
+
+
 # -- GitHub installations -----------------------------------------------------
 
 

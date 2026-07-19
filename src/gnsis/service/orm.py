@@ -526,6 +526,76 @@ class WorkspaceBilling(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class LimitPolicy(Base):
+    """A configurable spending-limit policy over one scope.
+
+    Deterministic + auditable: the engine finds every applicable policy for a
+    request and applies the most restrictive valid one. Enforcement is
+    configurable per policy (observe / warn / block) so limits are never globally
+    disabled — they are opt-in and tunable.
+    """
+
+    __tablename__ = "limit_policies"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)  # owning workspace
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    scope_type: Mapped[str] = mapped_column(String(24), index=True)  # workspace/project/environment/user/team/virtual_key
+    scope_id: Mapped[str] = mapped_column(String(64), index=True)
+    limit_type: Mapped[str] = mapped_column(String(16))              # per_run/daily/monthly/total
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    warning_threshold: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # 0..1
+    enforcement_mode: Mapped[str] = mapped_column(String(16), default="block")  # observe_only/warn/block
+    reset_period: Mapped[str] = mapped_column(String(12), default="month")      # run/day/month/never
+    effective_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class LimitDecision(Base):
+    """Immutable audit of one policy evaluation for one request."""
+
+    __tablename__ = "limit_decisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), index=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    policy_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    policy_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # for key-inline limits
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_id: Mapped[str] = mapped_column(String(64))
+    limit_type: Mapped[str] = mapped_column(String(16))
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    previous_usage: Mapped[str] = mapped_column(String(40), default="0")
+    reserved_amount: Mapped[str] = mapped_column(String(40), default="0")
+    actual_usage: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    enforcement_mode: Mapped[str] = mapped_column(String(16))
+    result: Mapped[str] = mapped_column(String(12), index=True)  # ok/warn/block
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class LimitReservation(Base):
+    """A per-scope, per-window in-flight hold so concurrent requests cannot all
+    spend the same remaining allowance before their charges land."""
+
+    __tablename__ = "limit_reservations"
+    __table_args__ = (
+        UniqueConstraint("reservation_key", "scope_type", "scope_id", name="uq_limit_resv"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    reservation_key: Mapped[str] = mapped_column(String(64), index=True)  # the Genesis request id
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_id: Mapped[str] = mapped_column(String(64), index=True)
+    window_key: Mapped[str] = mapped_column(String(48), index=True)
+    amount: Mapped[str] = mapped_column(String(40), default="0")
+    status: Mapped[str] = mapped_column(String(12), default="active", index=True)  # active/released/settled
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class ModelPricing(Base):
     """A versioned price for one (provider, model) over a time window.
 
