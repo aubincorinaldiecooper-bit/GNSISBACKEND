@@ -15,6 +15,7 @@ legacy ``GNSIS_API_KEY`` remains only as an internal/emergency path
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -288,6 +289,113 @@ def me(
             "installation_count": len(active),
             "repository_count": len(repos),
         },
+    }
+
+
+# -- virtual keys (Genesis-native scoped inference credentials) ----------------
+
+
+class CreateVirtualKeyRequest(BaseModel):
+    name: str = Field(default="", description="Human label for the key.")
+    mode: str = Field(default="live", description="\"live\" or \"test\".")
+    project_id: Optional[str] = None
+    environment_id: Optional[str] = None
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    allowed_providers: Optional[List[str]] = None
+    allowed_models: Optional[List[str]] = None
+    soft_limit: Optional[str] = None
+    hard_limit: Optional[str] = None
+    per_run_limit: Optional[str] = None
+    daily_limit: Optional[str] = None
+    monthly_limit: Optional[str] = None
+    expires_at: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+@app.post("/v1/virtual-keys")
+def create_virtual_key(
+    req: CreateVirtualKeyRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Issue a Genesis-native virtual key. The secret is returned **once**."""
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    settings = get_settings()
+    try:
+        view, secret = VirtualKeyStore().create(
+            settings,
+            workspace_id=workspace.id,
+            name=req.name, mode=req.mode,
+            project_id=req.project_id, environment_id=req.environment_id,
+            user_id=req.user_id, team_id=req.team_id,
+            allowed_providers=req.allowed_providers, allowed_models=req.allowed_models,
+            soft_limit=req.soft_limit, hard_limit=req.hard_limit,
+            per_run_limit=req.per_run_limit, daily_limit=req.daily_limit,
+            monthly_limit=req.monthly_limit, expires_at=req.expires_at, metadata=req.metadata,
+        )
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return {
+        "key": secret,
+        "virtual_key": asdict(view),
+        "warning": "Store this key now — it will not be shown again.",
+    }
+
+
+@app.get("/v1/virtual-keys")
+def list_virtual_keys(
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyStore
+
+    keys = VirtualKeyStore().list_for_workspace(workspace.id)
+    return {"items": [asdict(k) for k in keys]}
+
+
+@app.get("/v1/virtual-keys/{key_id}")
+def get_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyStore
+
+    view = VirtualKeyStore().get(workspace.id, key_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="virtual key not found")
+    return asdict(view)
+
+
+@app.post("/v1/virtual-keys/{key_id}/disable")
+def disable_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    try:
+        view = VirtualKeyStore().disable(workspace.id, key_id)
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
+@app.post("/v1/virtual-keys/{key_id}/rotate")
+def rotate_virtual_key(
+    key_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Retire a key and issue a successor with the same scopes (secret shown once)."""
+    from .virtual_keys import VirtualKeyError, VirtualKeyStore
+
+    try:
+        view, secret = VirtualKeyStore().rotate(get_settings(), workspace.id, key_id)
+    except VirtualKeyError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return {
+        "key": secret,
+        "virtual_key": asdict(view),
+        "warning": "Store this key now — it will not be shown again.",
     }
 
 

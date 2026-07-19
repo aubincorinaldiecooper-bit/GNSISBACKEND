@@ -518,6 +518,56 @@ class WorkspaceBilling(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class VirtualKey(Base):
+    """A Genesis-native scoped inference credential (``gns_live_/gns_test_``).
+
+    Genesis issues, hashes, and validates these itself — the full secret is
+    returned exactly once at creation and is NEVER stored or retrievable
+    afterwards; only a SHA-256 (optionally peppered) ``key_hash`` and a non-secret
+    ``key_prefix`` for display/logging are kept. Keys carry attribution scopes
+    (workspace/project/environment/user/team), provider/model allowlists, and
+    per-scope spend limits. Prefer ``disable``/``rotate`` over destructive delete.
+    """
+
+    __tablename__ = "virtual_keys"
+    __table_args__ = (
+        UniqueConstraint("key_hash", name="uq_virtual_key_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(128), index=True)  # sha256 hex; never the secret
+    key_prefix: Mapped[str] = mapped_column(String(32), default="")  # e.g. "gns_live_ab12cd…"
+    mode: Mapped[str] = mapped_column(String(8), default="live")     # live | test
+    name: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active/disabled/rotated
+
+    # Attribution scopes (workspace required; the rest optional).
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    environment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    # Restrictions ("" / null = unrestricted). CSV of provider / "provider/model".
+    allowed_providers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    allowed_models: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Per-key spend limits (decimal strings; null = unset). Enforced by the limits
+    # engine (a later PR); stored here as the key's own policy inputs.
+    soft_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    hard_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    per_run_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    daily_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    monthly_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_to: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # successor key id
+    key_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AgentMemory(Base):
     """Long-term, repo-scoped agent memory. Only approved records are written."""
 
