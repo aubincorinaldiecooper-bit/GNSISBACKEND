@@ -396,6 +396,10 @@ class UsageRecord(Base):
     # "resolved" | "needs_reconciliation". Unknown pricing / cost, or a meaningful
     # provider-vs-calculated discrepancy, must surface here rather than mis-bill.
     reconciliation_state: Mapped[str] = mapped_column(String(24), default="resolved", index=True)
+    # Why a row needs reconciliation: unknown_cost / unknown_pricing / cost_discrepancy.
+    reconciliation_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    # The model_pricing row used to compute genesis_calculated_cost (historical).
+    pricing_version_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     # Classified failure bucket (e.g. provider_timeout, rate_limited, auth_error).
     error_category: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, index=True)
     # For a retry, the litellm_request_id of the original request it retries.
@@ -515,6 +519,32 @@ class WorkspaceBilling(Base):
     __tablename__ = "workspace_billing"
 
     workspace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ModelPricing(Base):
+    """A versioned price for one (provider, model) over a time window.
+
+    The row id **is** the pricing version referenced by each usage event, so a
+    price change never rewrites historical cost: an event keeps the version that
+    was effective when it happened. Per-token prices are exact decimal strings
+    (never float). ``effective_end`` NULL means "current".
+    """
+
+    __tablename__ = "model_pricing"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # == pricing_version_id
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(128), index=True)
+    # Per-token prices as decimal strings.
+    input_price: Mapped[str] = mapped_column(String(40), default="0")
+    output_price: Mapped[str] = mapped_column(String(40), default="0")
+    cached_input_price: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    reasoning_price: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    effective_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    effective_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

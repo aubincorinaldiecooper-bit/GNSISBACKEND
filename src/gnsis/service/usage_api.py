@@ -57,6 +57,19 @@ async def litellm_usage_callback(
 
     record, created = UsageStore().record(measured)
 
+    # Price the measurement from the versioned pricing table: compute the
+    # Genesis cost, stamp the pricing version, and reconcile state (resolve an
+    # unknown provider cost when priced, flag a provider-vs-calculated
+    # discrepancy). Best-effort + only for a freshly-created row; a replay skips
+    # it. Runs BEFORE charging so the charge sees the reconciled cost basis.
+    if created:
+        try:
+            from .pricing import price_usage_record
+
+            price_usage_record(settings, record.id)
+        except Exception:  # noqa: BLE001 — pricing must never fail metering
+            pass
+
     # When billing is configured, convert the measurement into an immutable
     # charge + one balance debit (and settle any pre-request hold). Idempotent —
     # a replayed callback neither re-records nor re-charges.

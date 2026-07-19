@@ -399,6 +399,58 @@ def rotate_virtual_key(
     }
 
 
+# -- versioned model pricing ---------------------------------------------------
+
+
+class AddPricingRequest(BaseModel):
+    provider: str
+    model: str
+    input_price: str = Field(..., description="Per-token input price, decimal string.")
+    output_price: str = Field(..., description="Per-token output price, decimal string.")
+    cached_input_price: Optional[str] = None
+    reasoning_price: Optional[str] = None
+    currency: str = "USD"
+    effective_start: Optional[str] = Field(default=None, description="ISO-8601; default now.")
+    source: Optional[str] = None
+
+
+@app.get("/v1/pricing")
+def list_pricing(
+    provider: Optional[str] = None,
+    user: AuthedUser = Depends(current_user),
+) -> dict:
+    """The currently-effective rate card (authenticated read; not workspace-scoped)."""
+    from .pricing import PricingStore
+
+    return {"items": [asdict(p) for p in PricingStore().list_current(provider)]}
+
+
+@app.post("/v1/pricing", dependencies=[Depends(require_internal_key)])
+def add_pricing(req: AddPricingRequest) -> dict:
+    """Publish a new price version (admin, internal key). Closes the prior open
+    window for this provider/model so history is preserved, never overwritten."""
+    from datetime import datetime
+
+    from .pricing import PricingError, PricingStore
+
+    start = None
+    if req.effective_start:
+        try:
+            start = datetime.fromisoformat(req.effective_start.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="effective_start must be ISO-8601")
+    try:
+        view = PricingStore().add_price(
+            provider=req.provider, model=req.model,
+            input_price=req.input_price, output_price=req.output_price,
+            cached_input_price=req.cached_input_price, reasoning_price=req.reasoning_price,
+            currency=req.currency, effective_start=start, source=req.source,
+        )
+    except PricingError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    return asdict(view)
+
+
 # -- GitHub installations -----------------------------------------------------
 
 

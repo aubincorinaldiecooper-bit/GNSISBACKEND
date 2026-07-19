@@ -63,6 +63,9 @@ _ADDITIVE_COLUMNS = [
     ("usage_records", "cost_source", "VARCHAR(24)"),
     ("usage_records", "reconciliation_state", "VARCHAR(24)"),
     ("usage_records", "error_category", "VARCHAR(48)"),
+    # Versioned pricing (G3).
+    ("usage_records", "reconciliation_reason", "VARCHAR(48)"),
+    ("usage_records", "pricing_version_id", "VARCHAR(64)"),
 ]
 
 

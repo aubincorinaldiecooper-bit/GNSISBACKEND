@@ -121,6 +121,8 @@ class UsageRecordView:
     genesis_calculated_cost: Optional[str] = None
     cost_source: str = "provider_reported"
     reconciliation_state: str = "resolved"
+    reconciliation_reason: Optional[str] = None
+    pricing_version_id: Optional[str] = None
     error_category: Optional[str] = None
     created_at: str = ""
 
@@ -238,6 +240,8 @@ def _to_view(row: orm.UsageRecord) -> UsageRecordView:
         genesis_calculated_cost=row.genesis_calculated_cost,
         cost_source=row.cost_source,
         reconciliation_state=row.reconciliation_state,
+        reconciliation_reason=row.reconciliation_reason,
+        pricing_version_id=row.pricing_version_id,
         error_category=row.error_category,
         created_at=row.created_at.isoformat() if row.created_at else "",
     )
