@@ -154,16 +154,31 @@ def calculate_cost(
     pricing: PricingView, *, input_tokens: int, output_tokens: int,
     cached_tokens: int = 0, reasoning_tokens: int = 0,
 ) -> str:
-    """Genesis-calculated provider cost from token counts × the version's prices."""
+    """Genesis-calculated provider cost from token counts × the version's prices.
+
+    Per OpenAI/LiteLLM usage semantics ``cached_tokens`` is the cached subset
+    *within* ``input_tokens`` and ``reasoning_tokens`` the reasoning subset
+    *within* ``output_tokens`` — not separate token counts. So each subset is
+    priced at its special rate and only the **remainder** at the base rate; the
+    subset is never added on top of the aggregate, which would double-charge
+    those tokens (and spuriously inflate the provider-vs-Genesis discrepancy).
+    """
     inp = Decimal(pricing.input_price or "0")
     out = Decimal(pricing.output_price or "0")
     cached = Decimal(pricing.cached_input_price) if pricing.cached_input_price else inp
     reasoning = Decimal(pricing.reasoning_price) if pricing.reasoning_price else out
+    # Clamp each subset to its aggregate so the two parts always sum back to the
+    # aggregate, even on malformed provider detail counts (never a negative
+    # remainder, never more cached tokens than prompt tokens).
+    in_total = max(input_tokens, 0)
+    out_total = max(output_tokens, 0)
+    cached_billed = min(max(cached_tokens, 0), in_total)
+    reasoning_billed = min(max(reasoning_tokens, 0), out_total)
     total = (
-        Decimal(input_tokens) * inp
-        + Decimal(output_tokens) * out
-        + Decimal(cached_tokens) * cached
-        + Decimal(reasoning_tokens) * reasoning
+        Decimal(in_total - cached_billed) * inp
+        + Decimal(cached_billed) * cached
+        + Decimal(out_total - reasoning_billed) * out
+        + Decimal(reasoning_billed) * reasoning
     )
     return to_money_str(total)
 

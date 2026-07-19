@@ -33,12 +33,12 @@ def _configure():
 
 
 def _usage(rid, *, provider="anthropic", model="m", cost=None, cost_source="provider_reported",
-           reconciliation_state="resolved", inp=100, out=50, ws="ws-1"):
+           reconciliation_state="resolved", inp=100, out=50, cached=0, reasoning=0, ws="ws-1"):
     from gnsis.service.usage import MeasuredUsage, UsageStore
 
     u = MeasuredUsage(
         litellm_request_id=rid, workspace_id=ws, user_id="u", provider=provider, model=model,
-        input_tokens=inp, output_tokens=out, cached_tokens=0, reasoning_tokens=0,
+        input_tokens=inp, output_tokens=out, cached_tokens=cached, reasoning_tokens=reasoning,
         duration_ms=1, request_status="success", upstream_cost=(cost or "0"), currency="USD",
         cost_source=cost_source, reconciliation_state=reconciliation_state,
     )
@@ -74,10 +74,49 @@ class PricingStoreTests(unittest.TestCase):
 
         p = self.ps.add_price(provider="anthropic", model="m", input_price="0.00001",
                               output_price="0.00003")
-        # cached defaults to input price, reasoning defaults to output price.
+        # cached defaults to input price, reasoning defaults to output price. Cached
+        # is a subset of input_tokens and reasoning a subset of output_tokens, so at
+        # the default rates the total equals plain input×inp + output×out — the
+        # subsets are NOT added on top (that would double-charge them).
         cost = calculate_cost(p, input_tokens=100, output_tokens=50, cached_tokens=10, reasoning_tokens=5)
-        expected = Decimal("100")*Decimal("0.00001") + Decimal("50")*Decimal("0.00003") \
-            + Decimal("10")*Decimal("0.00001") + Decimal("5")*Decimal("0.00003")
+        expected = Decimal("100")*Decimal("0.00001") + Decimal("50")*Decimal("0.00003")
+        self.assertEqual(Decimal(cost), expected)
+
+    def test_calculate_cost_prices_subset_not_added_on_top(self):
+        from gnsis.service.pricing import calculate_cost
+
+        # Distinct special rates: cached cheaper than input, reasoning pricier than
+        # output. The cached subset is billed at the cached rate and the remaining
+        # (input-cached) at the input rate; likewise for reasoning within output.
+        p = self.ps.add_price(provider="anthropic", model="m", input_price="0.00010",
+                              output_price="0.00020", cached_input_price="0.00001",
+                              reasoning_price="0.00040")
+        cost = calculate_cost(p, input_tokens=100, output_tokens=50, cached_tokens=30, reasoning_tokens=20)
+        expected = (
+            Decimal("70") * Decimal("0.00010")   # non-cached prompt
+            + Decimal("30") * Decimal("0.00001")  # cached prompt
+            + Decimal("30") * Decimal("0.00020")  # non-reasoning completion
+            + Decimal("20") * Decimal("0.00040")  # reasoning completion
+        )
+        self.assertEqual(Decimal(cost), expected)
+        # The old (buggy) formula added the subsets on top of the full aggregates;
+        # the fixed cost must be strictly less than that double-billed amount.
+        double_billed = (
+            Decimal("100") * Decimal("0.00010") + Decimal("50") * Decimal("0.00020")
+            + Decimal("30") * Decimal("0.00001") + Decimal("20") * Decimal("0.00040")
+        )
+        self.assertLess(Decimal(cost), double_billed)
+
+    def test_calculate_cost_clamps_oversized_subset(self):
+        from gnsis.service.pricing import calculate_cost
+
+        # Malformed provider data (cached > prompt) must not go negative or
+        # over-count: the two parts still sum to the aggregate.
+        p = self.ps.add_price(provider="anthropic", model="m", input_price="0.00010",
+                              output_price="0.00020", cached_input_price="0.00001")
+        cost = calculate_cost(p, input_tokens=5, output_tokens=10, cached_tokens=999)
+        # All 5 prompt tokens billed at the cached rate; nothing negative.
+        expected = Decimal("5") * Decimal("0.00001") + Decimal("10") * Decimal("0.00020")
         self.assertEqual(Decimal(cost), expected)
 
 
@@ -153,6 +192,25 @@ class ReconciliationTests(unittest.TestCase):
         charge, charged = BillingStore().charge_usage(self.settings(), rec.id)
         self.assertIsNone(charge)
         self.assertFalse(charged)
+
+    def test_cached_tokens_not_double_charged_end_to_end(self):
+        from gnsis.service.pricing import price_usage_record
+
+        # A model with a distinct (cheaper) cached rate. 80 of the 100 prompt
+        # tokens are cached; genesis cost must price the cached subset once at the
+        # cached rate, not add it on top of the full-rate prompt total.
+        self.ps.add_price(provider="openai", model="cached-m", input_price="0.00010",
+                          output_price="0.00020", cached_input_price="0.00001")
+        rec = _usage("rc", provider="openai", model="cached-m", cost=None, cost_source="unknown",
+                     reconciliation_state="needs_reconciliation", inp=100, out=50, cached=80)
+        price_usage_record(self.settings(), rec.id)
+        u = self._reget(rec.id)
+        expected = (
+            Decimal("20") * Decimal("0.00010")   # non-cached prompt
+            + Decimal("80") * Decimal("0.00001")  # cached prompt (once, cached rate)
+            + Decimal("50") * Decimal("0.00020")  # completion
+        )
+        self.assertEqual(Decimal(u.genesis_calculated_cost), expected)
 
     def test_historical_pricing_preserved_on_rate_change(self):
         from gnsis.service.pricing import price_usage_record

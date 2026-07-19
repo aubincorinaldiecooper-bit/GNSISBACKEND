@@ -16,9 +16,17 @@ previous open window at the new start, so windows never overlap.
 
 ## Cost calculation
 
-`calculate_cost` = Σ tokensₖ × priceₖ. `cached_input_price` defaults to
-`input_price` and `reasoning_price` to `output_price` when unset. The result is
-an exact decimal string.
+`cached_tokens` is the cached subset **within** `prompt_tokens` and
+`reasoning_tokens` the reasoning subset **within** `completion_tokens` (OpenAI /
+LiteLLM usage semantics), so `calculate_cost` prices each subset once at its
+special rate and the *remainder* at the base rate:
+`(input−cached)·input_price + cached·cached_input_price + (output−reasoning)·output_price + reasoning·reasoning_price`.
+The subset is never added on top of the aggregate (that would double-charge
+those tokens and spuriously inflate the provider-vs-Genesis discrepancy).
+`cached_input_price` defaults to `input_price` and `reasoning_price` to
+`output_price` when unset; each subset is clamped to its aggregate so malformed
+detail counts can't go negative or over-count. The result is an exact decimal
+string.
 
 ## Reconciliation on each usage event (`price_usage_record`)
 
