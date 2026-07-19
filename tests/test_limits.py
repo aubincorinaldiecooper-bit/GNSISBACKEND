@@ -103,6 +103,42 @@ class LimitEngineTests(unittest.TestCase):
         r3 = self.engine.evaluate(self.settings(), self.ctx(run_id="run-3"), "0.05", "rC")
         self.assertEqual(r3.result, "ok")
 
+    def test_key_soft_and_hard_place_single_hold(self):
+        # A key's soft + hard limits are both virtual_key/total policies. Two
+        # applicable policies on the SAME scope+window must collapse to one hold —
+        # not two (which would both double-count exposure and hit the reservation
+        # unique constraint → IntegrityError).
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        ctx = self.ctx(key_limits={"soft_limit": "10", "hard_limit": "100"})
+        r = self.engine.evaluate(self.settings(), ctx, "0.05", "rKey")
+        self.assertEqual(r.result, "ok")
+        with session_scope() as s:
+            held = s.query(orm.LimitReservation).filter(
+                orm.LimitReservation.reservation_key == "rKey").all()
+            self.assertEqual(len(held), 1)
+            self.assertEqual((held[0].scope_type, held[0].window_key), ("virtual_key", "total"))
+
+    def test_workspace_daily_and_monthly_hold_both_windows(self):
+        # Same scope, DIFFERENT windows → two distinct holds must coexist (the
+        # uniqueness constraint includes window_key).
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        self.store.create(workspace_id="ws-1", scope_type="workspace", scope_id="ws-1",
+                          limit_type="daily", amount="100", enforcement_mode="block")
+        self.store.create(workspace_id="ws-1", scope_type="workspace", scope_id="ws-1",
+                          limit_type="monthly", amount="500", enforcement_mode="block")
+        r = self.engine.evaluate(self.settings(), self.ctx(), "0.05", "rBoth")
+        self.assertEqual(r.result, "ok")
+        with session_scope() as s:
+            windows = {
+                row.window_key for row in s.query(orm.LimitReservation).filter(
+                    orm.LimitReservation.reservation_key == "rBoth").all()
+            }
+            self.assertEqual(len(windows), 2)  # one day-window hold + one month-window hold
+
 
 class LimitGatewayTests(unittest.TestCase):
     def setUp(self):
@@ -157,6 +193,20 @@ class LimitGatewayTests(unittest.TestCase):
         LimitStore().create(workspace_id="ws-1", scope_type="workspace", scope_id="ws-1",
                             limit_type="monthly", amount="100", enforcement_mode="block")
         self.assertEqual(self._call().status_code, 200)
+
+    def test_key_soft_and_hard_limits_no_conflict(self):
+        # A key carrying BOTH soft and hard limits (both generous) must be allowed,
+        # not fail with a 500 from a duplicate reservation insert.
+        from gnsis.service.virtual_keys import VirtualKeyStore
+
+        _v, secret = VirtualKeyStore().create(self.settings, workspace_id="ws-1", name="both",
+                                              allowed_models=[MODEL], soft_limit="10", hard_limit="100")
+        r = self.client.post(
+            "/v1/chat/completions",
+            json={"model": MODEL, "messages": [{"role": "user", "content": "hi"}]},
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
 
     def test_key_hard_limit_enforced(self):
         # A tiny per-key hard limit blocks via the key's inline policy.

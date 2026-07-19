@@ -300,7 +300,12 @@ class PolicyEngine:
             overall = "ok"
             block_scope = block_limit = None
             warnings: List[str] = []
-            to_hold = []
+            # Keyed by (scope_type, scope_id, window_key): several policies can share
+            # one scope+window (e.g. a key's soft *and* hard limit are both
+            # virtual_key/total), and they place a single hold for the request's
+            # estimated exposure — not one per policy (which would both double-count
+            # the in-flight exposure and violate the reservation's uniqueness).
+            to_hold: Dict[tuple, None] = {}
             decisions = []
 
             for a in applicable:
@@ -330,7 +335,7 @@ class PolicyEngine:
 
                 decisions.append((a, committed, result))
                 if result != "block" and a.enforcement_mode in ("warn", "block"):
-                    to_hold.append((a, window_key))
+                    to_hold[(a.scope_type, a.scope_id, window_key)] = None
 
             # Persist every decision (audit).
             for a, committed, result in decisions:
@@ -346,11 +351,12 @@ class PolicyEngine:
                 s.flush()  # keep the audit trail even on a block
                 return EvalResult(result="block", block_scope=block_scope, block_limit_id=block_limit)
 
-            # Place holds so concurrent requests see this request's exposure.
-            for a, window_key in to_hold:
+            # Place holds so concurrent requests see this request's exposure — one
+            # per distinct (scope, window), deduplicated above.
+            for scope_type, scope_id, window_key in to_hold:
                 s.add(orm.LimitReservation(
                     id=new_id("lresv"), reservation_key=request_id, workspace_id=ctx.workspace_id,
-                    scope_type=a.scope_type, scope_id=a.scope_id, window_key=window_key,
+                    scope_type=scope_type, scope_id=scope_id, window_key=window_key,
                     amount=to_money_str(estimate), status="active",
                 ))
             s.flush()

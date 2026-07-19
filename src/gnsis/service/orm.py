@@ -582,7 +582,13 @@ class LimitReservation(Base):
 
     __tablename__ = "limit_reservations"
     __table_args__ = (
-        UniqueConstraint("reservation_key", "scope_type", "scope_id", name="uq_limit_resv"),
+        # One hold per request per (scope, window). ``window_key`` is part of the
+        # key because a single request legitimately holds against several windows
+        # of the same scope (e.g. a workspace daily *and* monthly cap); this mirrors
+        # how active holds are summed (scope_type + scope_id + window_key).
+        UniqueConstraint(
+            "reservation_key", "scope_type", "scope_id", "window_key", name="uq_limit_resv"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

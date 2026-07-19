@@ -38,10 +38,13 @@ usage is filled in at reconcile.
 
 ## Concurrency safety
 
-Evaluation runs **under the per-workspace lock** (the billing anchor), and each
-enforced policy places a per-scope, per-window **reservation** for the request's
-estimated exposure (`limit_reservations`). So several concurrent requests cannot
-all consume the same remaining allowance — the second sees the first's hold. When
+Evaluation runs **under the per-workspace lock** (the billing anchor), and the
+enforced policies place **one reservation per distinct (scope, window)** for the
+request's estimated exposure (`limit_reservations`) — deduplicated, so a key's
+soft *and* hard limit (both `virtual_key`/`total`) share a single hold rather than
+double-counting, while a workspace daily *and* monthly cap hold against their two
+separate windows. So several concurrent requests cannot all consume the same
+remaining allowance — the second sees the first's hold. When
 the real charge lands, `reconcile` releases the hold (the charge now counts in
 committed spend); a failed request `release`s it. This is the same
 reserve-then-reconcile pattern as the balance hold — never a read-then-write race.
