@@ -350,10 +350,18 @@ class UsageRecord(Base):
     __tablename__ = "usage_records"
     __table_args__ = (
         UniqueConstraint("litellm_request_id", name="uq_usage_litellm_request_id"),
+        # Explicit caller-supplied idempotency (distinct from the provider/callback
+        # dedup key above). Nullable so most rows leave it unset; unique when set.
+        UniqueConstraint("idempotency_key", name="uq_usage_idempotency_key"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     litellm_request_id: Mapped[str] = mapped_column(String(128), index=True)
+    # Caller-supplied logical-operation key (e.g. one attempt of one model call).
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(191), nullable=True)
+    # The provider's own request id (distinct from litellm_request_id); useful for
+    # provider-side reconciliation and distinguishing a retry from a new call.
+    provider_request_id: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
 
     # Attribution to existing GNSIS records.
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
@@ -376,9 +384,20 @@ class UsageRecord(Base):
     reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     request_status: Mapped[str] = mapped_column(String(32), default="success", index=True)
-    # Exact upstream cost as received, stored as a decimal string (never float).
+    # Provider-reported cost, exactly as received, as a decimal string (never
+    # float). Kept verbatim; the Genesis-calculated cost is stored separately so
+    # neither overwrites the other and discrepancies can be flagged.
     upstream_cost: Mapped[str] = mapped_column(String(40), default="0")
+    genesis_calculated_cost: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
+    # Where the provider cost came from: "provider_reported" or "unknown". An
+    # "unknown" cost is NEVER silently treated as $0 — the row is flagged below.
+    cost_source: Mapped[str] = mapped_column(String(24), default="provider_reported")
+    # "resolved" | "needs_reconciliation". Unknown pricing / cost, or a meaningful
+    # provider-vs-calculated discrepancy, must surface here rather than mis-bill.
+    reconciliation_state: Mapped[str] = mapped_column(String(24), default="resolved", index=True)
+    # Classified failure bucket (e.g. provider_timeout, rate_limited, auth_error).
+    error_category: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, index=True)
     # For a retry, the litellm_request_id of the original request it retries.
     retry_of: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
 

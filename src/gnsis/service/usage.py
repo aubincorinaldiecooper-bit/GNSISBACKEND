@@ -82,6 +82,13 @@ class MeasuredUsage:
     phase: Optional[str] = None
     environment: Optional[str] = None
     retry_of: Optional[str] = None
+    # Ledger-integrity fields (PR-G1).
+    idempotency_key: Optional[str] = None
+    provider_request_id: Optional[str] = None
+    error_category: Optional[str] = None
+    genesis_calculated_cost: Optional[str] = None
+    cost_source: str = "provider_reported"
+    reconciliation_state: str = "resolved"
 
 
 @dataclass(frozen=True)
@@ -109,11 +116,21 @@ class UsageRecordView:
     upstream_cost: str
     currency: str
     retry_of: Optional[str]
+    idempotency_key: Optional[str] = None
+    provider_request_id: Optional[str] = None
+    genesis_calculated_cost: Optional[str] = None
+    cost_source: str = "provider_reported"
+    reconciliation_state: str = "resolved"
+    error_category: Optional[str] = None
     created_at: str = ""
 
     @property
     def upstream_cost_decimal(self) -> Decimal:
         return Decimal(self.upstream_cost or "0")
+
+    @property
+    def needs_reconciliation(self) -> bool:
+        return self.reconciliation_state == "needs_reconciliation"
 
 
 def _opt(value: object) -> Optional[str]:
@@ -145,6 +162,21 @@ def parse_callback(body: dict) -> MeasuredUsage:
     if not workspace_id or not user_id:
         raise UsageValidationError("metadata.workspace_id and metadata.user_id are required")
 
+    # Cost provenance: never silently treat a missing provider cost as $0. A
+    # *successful* request whose cost is unknown is flagged for reconciliation
+    # (the real cost is computed from versioned pricing later, or resolved by an
+    # operator); a *failed* request legitimately carries no charge.
+    raw_cost = body.get("upstream_cost")
+    cost_present = raw_cost not in (None, "")
+    status = str(body.get("request_status") or "success")
+    succeeded = status in ("success", "succeeded", "ok", "completed")
+    if cost_present:
+        cost_source, reconciliation_state = "provider_reported", "resolved"
+    elif not succeeded:
+        cost_source, reconciliation_state = "unknown", "resolved"
+    else:
+        cost_source, reconciliation_state = "unknown", "needs_reconciliation"
+
     return MeasuredUsage(
         litellm_request_id=str(request_id),
         workspace_id=str(workspace_id),
@@ -164,10 +196,15 @@ def parse_callback(body: dict) -> MeasuredUsage:
         cached_tokens=_int(body.get("cached_tokens"), "cached_tokens"),
         reasoning_tokens=_int(body.get("reasoning_tokens"), "reasoning_tokens"),
         duration_ms=_int(body.get("duration_ms"), "duration_ms"),
-        request_status=str(body.get("request_status") or "success"),
-        upstream_cost=_to_decimal_str(body.get("upstream_cost"), "upstream_cost"),
+        request_status=status,
+        upstream_cost=_to_decimal_str(raw_cost, "upstream_cost"),
         currency=str(body.get("currency") or "USD"),
         retry_of=_opt(body.get("retry_of")),
+        idempotency_key=_opt(md.get("idempotency_key") or body.get("idempotency_key")),
+        provider_request_id=_opt(body.get("provider_request_id") or md.get("provider_request_id")),
+        error_category=_opt(body.get("error_category")),
+        cost_source=cost_source,
+        reconciliation_state=reconciliation_state,
     )
 
 
@@ -196,6 +233,12 @@ def _to_view(row: orm.UsageRecord) -> UsageRecordView:
         upstream_cost=row.upstream_cost,
         currency=row.currency,
         retry_of=row.retry_of,
+        idempotency_key=row.idempotency_key,
+        provider_request_id=row.provider_request_id,
+        genesis_calculated_cost=row.genesis_calculated_cost,
+        cost_source=row.cost_source,
+        reconciliation_state=row.reconciliation_state,
+        error_category=row.error_category,
         created_at=row.created_at.isoformat() if row.created_at else "",
     )
 
@@ -203,23 +246,39 @@ def _to_view(row: orm.UsageRecord) -> UsageRecordView:
 class UsageStore:
     """Durable, idempotent, workspace-isolated access to ``usage_records``."""
 
+    def _find_existing(self, s, usage: MeasuredUsage):
+        """A prior row for the same provider/callback id OR the same explicit
+        caller idempotency key — either means "already recorded"."""
+        row = (
+            s.query(orm.UsageRecord)
+            .filter(orm.UsageRecord.litellm_request_id == usage.litellm_request_id)
+            .one_or_none()
+        )
+        if row is None and usage.idempotency_key:
+            row = (
+                s.query(orm.UsageRecord)
+                .filter(orm.UsageRecord.idempotency_key == usage.idempotency_key)
+                .one_or_none()
+            )
+        return row
+
     def record(self, usage: MeasuredUsage) -> tuple[UsageRecordView, bool]:
         """Persist a measurement. Returns ``(record, created)``.
 
-        Idempotent on ``litellm_request_id``: a duplicate callback returns the
-        existing record with ``created=False`` and never inserts a second row.
+        Idempotent on ``litellm_request_id`` *and* the explicit
+        ``idempotency_key``: a duplicate callback (provider retry or webhook
+        redelivery) returns the existing record with ``created=False`` and never
+        inserts a second billable row.
         """
         with session_scope() as s:
-            existing = (
-                s.query(orm.UsageRecord)
-                .filter(orm.UsageRecord.litellm_request_id == usage.litellm_request_id)
-                .one_or_none()
-            )
+            existing = self._find_existing(s, usage)
             if existing is not None:
                 return _to_view(existing), False
             row = orm.UsageRecord(
                 id=new_id("usage"),
                 litellm_request_id=usage.litellm_request_id,
+                idempotency_key=usage.idempotency_key,
+                provider_request_id=usage.provider_request_id,
                 workspace_id=usage.workspace_id,
                 user_id=usage.user_id,
                 team_id=usage.team_id,
@@ -239,20 +298,22 @@ class UsageStore:
                 duration_ms=usage.duration_ms,
                 request_status=usage.request_status,
                 upstream_cost=usage.upstream_cost,
+                genesis_calculated_cost=usage.genesis_calculated_cost,
                 currency=usage.currency,
+                cost_source=usage.cost_source,
+                reconciliation_state=usage.reconciliation_state,
+                error_category=usage.error_category,
                 retry_of=usage.retry_of,
             )
             s.add(row)
             try:
                 s.flush()
             except IntegrityError:
-                # Lost a concurrent race on the unique constraint — re-read.
+                # Lost a concurrent race on a unique constraint — re-read.
                 s.rollback()
-                existing = (
-                    s.query(orm.UsageRecord)
-                    .filter(orm.UsageRecord.litellm_request_id == usage.litellm_request_id)
-                    .one()
-                )
+                existing = self._find_existing(s, usage)
+                if existing is None:
+                    raise
                 return _to_view(existing), False
             return _to_view(row), True
 
@@ -288,5 +349,33 @@ class UsageStore:
             return (
                 s.query(orm.UsageRecord)
                 .filter(orm.UsageRecord.workspace_id == workspace_id)
+                .count()
+            )
+
+    def list_needs_reconciliation(
+        self, workspace_id: str, *, limit: int = 100
+    ) -> List[UsageRecordView]:
+        """Usage rows flagged for reconciliation (unknown cost, etc.)."""
+        with session_scope() as s:
+            rows = (
+                s.query(orm.UsageRecord)
+                .filter(
+                    orm.UsageRecord.workspace_id == workspace_id,
+                    orm.UsageRecord.reconciliation_state == "needs_reconciliation",
+                )
+                .order_by(orm.UsageRecord.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [_to_view(r) for r in rows]
+
+    def count_needs_reconciliation(self, workspace_id: str) -> int:
+        with session_scope() as s:
+            return (
+                s.query(orm.UsageRecord)
+                .filter(
+                    orm.UsageRecord.workspace_id == workspace_id,
+                    orm.UsageRecord.reconciliation_state == "needs_reconciliation",
+                )
                 .count()
             )
