@@ -99,6 +99,12 @@ class ExecutionRunRecord:
     security_validation: Optional[str]
     created_at: str = ""
     updated_at: str = ""
+    # Intelligence context pinned at dispatch (see ExecutionRun). Defaulted so
+    # legacy runs and direct test constructions are unaffected.
+    policy_name: Optional[str] = None
+    policy_version: Optional[int] = None
+    policy_hash: Optional[str] = None
+    memory_ids: list = field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -130,6 +136,13 @@ class RunSpec:
     run_attempt: Optional[int] = None
     source_max_bytes: int = 262_144_000
     output_max_bytes: Dict[str, int] = field(default_factory=dict)
+    # Trusted, hash-verified system policy: {name, version, content, content_hash,
+    # parent_version} or None (executor falls back to a minimal built-in policy).
+    policy: Optional[Dict] = None
+    # Bounded, tenant-scoped repository memory: a list of
+    # {memory_id, kind, content, selection_reason}. Delivered as a SEPARATE field
+    # — the executor must never concatenate it into the instruction.
+    memory_context: list = field(default_factory=list)
 
     def to_public_dict(self) -> dict:
         return {
@@ -157,4 +170,6 @@ class RunSpec:
             "source_max_bytes": self.source_max_bytes,
             "output_limits_bytes": dict(self.output_max_bytes),
             "output_files": ["patch.diff", "tests.json", "receipt.json", "events.jsonl"],
+            "policy": self.policy,
+            "memory_context": list(self.memory_context),
         }

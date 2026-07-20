@@ -69,6 +69,16 @@ _ADDITIVE_COLUMNS = [
     # Public gateway attribution (G4).
     ("usage_records", "project_id", "VARCHAR(64)"),
     ("usage_records", "virtual_key_id", "VARCHAR(64)"),
+    # CodeMemory scoping + provenance on the pre-existing agent_memory table.
+    ("agent_memory", "workspace_id", "VARCHAR(64)"),
+    ("agent_memory", "repository_id", "VARCHAR(64)"),
+    ("agent_memory", "memory_id", "VARCHAR(64)"),
+    ("agent_memory", "source_job_id", "VARCHAR(64)"),
+    # Pinned intelligence context on each historical run (policy version + memory).
+    ("execution_runs", "policy_name", "VARCHAR(128)"),
+    ("execution_runs", "policy_version", "INTEGER"),
+    ("execution_runs", "policy_hash", "VARCHAR(64)"),
+    ("execution_runs", "memory_ids", "JSON"),
 ]
 
 

@@ -34,7 +34,14 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class MemoryRecord:
-    """One durable, repo-scoped memory."""
+    """One durable, repo-scoped memory.
+
+    ``repo`` has always been the primary namespace. The optional
+    ``workspace_id``/``repository_id`` add tenant-strict scoping, ``memory_id`` is
+    a stable public handle assigned on write, and ``source_job_id`` records the
+    approved job that produced it. All four default to ``None`` so existing
+    callers and providers are unaffected.
+    """
 
     repo: str
     content: str
@@ -44,6 +51,10 @@ class MemoryRecord:
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+    workspace_id: Optional[str] = None
+    repository_id: Optional[str] = None
+    memory_id: Optional[str] = None
+    source_job_id: Optional[str] = None
 
 
 class MemoryProvider(ABC):

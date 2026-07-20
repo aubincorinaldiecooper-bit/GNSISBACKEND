@@ -311,6 +311,15 @@ class ExecutionRun(Base):
     failure_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     security_validation: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
+    # Intelligence context pinned at dispatch, so a run permanently retains the
+    # exact trusted policy version and the exact memory it was allowed to see —
+    # deterministic across retries and auditable historically. Nullable: legacy
+    # runs and runs dispatched before the intelligence loop carry none.
+    policy_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    policy_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    policy_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    memory_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -679,7 +688,17 @@ class VirtualKey(Base):
 
 
 class AgentMemory(Base):
-    """Long-term, repo-scoped agent memory. Only approved records are written."""
+    """Long-term, repo-scoped agent memory. Only approved records are written.
+
+    Scoping is layered: ``repo`` (the globally-unique ``owner/name``) has always
+    namespaced a row to one repository; ``workspace_id`` + ``repository_id`` add
+    tenant-strict isolation on top, so CodeMemory can guarantee one workspace's
+    memory is never surfaced to another even if two ever shared a name. ``memory_id``
+    is a stable public handle (distinct from the autoincrement PK) that can be
+    pinned onto a run and echoed in its receipt without exposing the row id;
+    ``source_job_id`` records which job's *approved* outcome produced the memory.
+    All four are nullable so pre-existing rows remain valid (additive migration).
+    """
 
     __tablename__ = "agent_memory"
 
@@ -689,6 +708,11 @@ class AgentMemory(Base):
     content: Mapped[str] = mapped_column(Text)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     approved: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Tenant-strict scoping + provenance (nullable for legacy rows).
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    memory_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    source_job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

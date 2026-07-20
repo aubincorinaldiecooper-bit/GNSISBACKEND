@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from sqlalchemy import or_
+
 from ..memory.base import MemoryProvider, MemoryRecord
 from ..orchestration.models import (
     Approval,
@@ -378,12 +380,30 @@ class PostgresResourceStore:
             return [self._version_to_dataclass(r) for r in rows]
 
 
+def _mem_to_record(row: orm.AgentMemory) -> MemoryRecord:
+    return MemoryRecord(
+        repo=row.repo,
+        content=row.content,
+        kind=row.kind,
+        metadata=dict(row.meta or {}),
+        approved=row.approved,
+        created_at=row.created_at.isoformat() if row.created_at else "",
+        workspace_id=row.workspace_id,
+        repository_id=row.repository_id,
+        memory_id=row.memory_id,
+        source_job_id=row.source_job_id,
+    )
+
+
 class PostgresMemoryProvider(MemoryProvider):
     """Durable, repo-scoped long-term memory backed by Postgres.
 
     This is the chosen memory backend for GNSIS. It honors the two invariants:
     writes are refused unless ``approved`` is true, and every read is filtered to
     a single repo, so one project's memory never leaks into another's context.
+    The scoped read helpers (:meth:`recent_scoped`, :meth:`by_memory_ids`) add
+    tenant-strict ``workspace_id`` filtering for the CodeMemory application layer;
+    the base :class:`MemoryProvider` contract (repo/query/limit) is unchanged.
     """
 
     name = "postgres"
@@ -391,6 +411,7 @@ class PostgresMemoryProvider(MemoryProvider):
     def write(self, record: MemoryRecord):
         if not record.approved:
             return None  # approval-gated
+        memory_id = record.memory_id or new_id("mem")
         with session_scope() as s:
             s.add(
                 orm.AgentMemory(
@@ -399,8 +420,14 @@ class PostgresMemoryProvider(MemoryProvider):
                     content=record.content,
                     meta=dict(record.metadata),
                     approved=True,
+                    workspace_id=record.workspace_id,
+                    repository_id=record.repository_id,
+                    memory_id=memory_id,
+                    source_job_id=record.source_job_id,
                 )
             )
+        # Reflect the assigned handle back to the caller without another read.
+        record.memory_id = memory_id
         return record
 
     def search(self, repo: str, query: str, limit: int = 5):
@@ -425,14 +452,70 @@ class PostgresMemoryProvider(MemoryProvider):
                 .limit(limit)
                 .all()
             )
-            return [
-                MemoryRecord(
-                    repo=r.repo,
-                    content=r.content,
-                    kind=r.kind,
-                    metadata=dict(r.meta or {}),
-                    approved=r.approved,
-                    created_at=r.created_at.isoformat() if r.created_at else "",
+            return [_mem_to_record(r) for r in rows]
+
+    # -- scoped reads for the CodeMemory application layer ------------------
+    def recent_scoped(
+        self,
+        *,
+        repo: str,
+        workspace_id: Optional[str],
+        repository_id: Optional[str],
+        limit: int = 200,
+    ) -> List[MemoryRecord]:
+        """Most-recent approved memories for a repo, tenant-strict.
+
+        Scopes to ``repo`` (globally-unique ``owner/name``) and, when a
+        ``workspace_id`` is given, to rows owned by that workspace *or* legacy
+        rows with no workspace set — never another workspace's rows. Ordered by
+        id descending so the result is deterministic for a given DB state.
+        """
+        with session_scope() as s:
+            q = s.query(orm.AgentMemory).filter(
+                orm.AgentMemory.repo == repo,
+                orm.AgentMemory.approved.is_(True),
+            )
+            if workspace_id:
+                q = q.filter(
+                    or_(
+                        orm.AgentMemory.workspace_id == workspace_id,
+                        orm.AgentMemory.workspace_id.is_(None),
+                    )
                 )
-                for r in rows
-            ]
+            rows = q.order_by(orm.AgentMemory.id.desc()).limit(limit).all()
+            return [_mem_to_record(r) for r in rows]
+
+    def by_memory_ids(
+        self,
+        *,
+        memory_ids: List[str],
+        workspace_id: Optional[str],
+        repository_id: Optional[str],
+        repo: Optional[str] = None,
+    ) -> List[MemoryRecord]:
+        """Look up specific memories by their stable handles, tenant-strict.
+
+        Used to reconstruct the exact memory a run was pinned to. Applies the
+        same workspace scoping as :meth:`recent_scoped` so a pinned id from
+        another workspace can never be resolved.
+        """
+        if not memory_ids:
+            return []
+        with session_scope() as s:
+            q = s.query(orm.AgentMemory).filter(
+                orm.AgentMemory.memory_id.in_(list(memory_ids)),
+                orm.AgentMemory.approved.is_(True),
+            )
+            if repo:
+                q = q.filter(orm.AgentMemory.repo == repo)
+            if workspace_id:
+                q = q.filter(
+                    or_(
+                        orm.AgentMemory.workspace_id == workspace_id,
+                        orm.AgentMemory.workspace_id.is_(None),
+                    )
+                )
+            rows = q.all()
+            by_id = {r.memory_id: _mem_to_record(r) for r in rows}
+            # Preserve the caller's order and drop ids that didn't resolve.
+            return [by_id[m] for m in memory_ids if m in by_id]

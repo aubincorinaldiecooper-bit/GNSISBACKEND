@@ -83,6 +83,10 @@ def _to_record(row: orm.ExecutionRun) -> ExecutionRunRecord:
         security_validation=row.security_validation,
         created_at=_iso(row.created_at),
         updated_at=_iso(row.updated_at),
+        policy_name=row.policy_name,
+        policy_version=row.policy_version,
+        policy_hash=row.policy_hash,
+        memory_ids=list(row.memory_ids or []),
     )
 
 
@@ -106,6 +110,10 @@ class ExecutionStore:
         executor_ref: str,
         trusted_workflow_sha: str,
         budgets: Budgets,
+        policy_name: Optional[str] = None,
+        policy_version: Optional[int] = None,
+        policy_hash: Optional[str] = None,
+        memory_ids: Optional[List[str]] = None,
     ) -> ExecutionRunRecord:
         run_id = new_id("exec")
         with session_scope() as s:
@@ -129,6 +137,11 @@ class ExecutionStore:
                 max_input_tokens=budgets.max_input_tokens,
                 max_output_tokens=budgets.max_output_tokens,
                 max_cost_usd=budgets.max_cost_usd,
+                # Pinned intelligence context (immutable for this run).
+                policy_name=policy_name,
+                policy_version=policy_version,
+                policy_hash=policy_hash,
+                memory_ids=list(memory_ids) if memory_ids else None,
             )
             s.add(row)
             s.flush()
