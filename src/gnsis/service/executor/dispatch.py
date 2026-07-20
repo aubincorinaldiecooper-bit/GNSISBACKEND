@@ -14,7 +14,8 @@ spec. The workflow input carries no instruction, repo, SHA, credential or budget
 
 from __future__ import annotations
 
-from typing import Optional
+import logging
+from typing import TYPE_CHECKING, Optional
 
 from ..github_app import GitHubApp
 from .github import ExecutorGitHub, GitHubHTTPError
@@ -22,6 +23,50 @@ from .installation import DISPATCH_PERMISSIONS, resolve_executor_installation
 from .models import Budgets, ExecutionRunRecord, FailureCategory
 from .store import ExecutionStore
 from .tokens import hash_secret, new_nonce
+
+if TYPE_CHECKING:  # avoid import cost/cycles on the hot path
+    from ..codememory import MemorySelection
+    from ..policy_store import ResolvedPolicy
+
+logger = logging.getLogger("gnsis.executor.dispatch")
+
+
+def _emit_context_events(
+    store: ExecutionStore,
+    run: ExecutionRunRecord,
+    job,
+    policy: "Optional[ResolvedPolicy]",
+    memory_selection: "Optional[MemorySelection]",
+) -> None:
+    """Record the pinned policy + memory selection on the native event ledger.
+
+    Observability only — a failure here must never block a dispatch, so it is
+    swallowed. Idempotent per run (stable idempotency keys).
+    """
+    try:
+        if policy is not None:
+            store.record_event(
+                run.id, job_id=job.id, workflow_run_attempt=None, sequence=0,
+                idempotency_key=f"policy-pinned:{run.id}", kind="policy_pinned",
+                payload={
+                    "name": policy.name,
+                    "version": policy.version,
+                    "content_hash": policy.content_hash,
+                },
+            )
+        if memory_selection is not None:
+            store.record_event(
+                run.id, job_id=job.id, workflow_run_attempt=None, sequence=0,
+                idempotency_key=f"memory-selected:{run.id}", kind="memory_selected",
+                payload={
+                    "count": len(memory_selection.memory_ids),
+                    "memory_ids": list(memory_selection.memory_ids),
+                    "truncated": memory_selection.truncated,
+                    "total_available": memory_selection.total_available,
+                },
+            )
+    except Exception:  # noqa: BLE001 - observability must not break dispatch
+        logger.exception("failed to record intelligence-context events for run %s", run.id)
 
 
 class DispatchError(RuntimeError):
@@ -69,8 +114,16 @@ def dispatch_execution(
     base_sha: str,
     app: Optional[GitHubApp] = None,
     github: Optional[ExecutorGitHub] = None,
+    policy: "Optional[ResolvedPolicy]" = None,
+    memory_selection: "Optional[MemorySelection]" = None,
 ) -> ExecutionRunRecord:
-    """Create the run record and dispatch the fixed workflow. Raises on failure."""
+    """Create the run record and dispatch the fixed workflow. Raises on failure.
+
+    ``policy`` and ``memory_selection``, when provided, are *pinned* onto the run
+    record here so the run permanently retains the exact policy version and the
+    exact memory it was allowed to see — reconstructed deterministically at
+    fetch time by :func:`gnsis.service.executor.spec.build_run_spec`.
+    """
     if not settings.execution_provider_valid:
         raise DispatchError("execution provider is not github_actions")
     missing = settings.missing_execution_vars()
@@ -131,7 +184,14 @@ def dispatch_execution(
         executor_ref=settings.executor_ref,
         trusted_workflow_sha=trusted_sha,
         budgets=budgets_from_settings(settings),
+        policy_name=policy.name if policy else None,
+        policy_version=policy.version if policy else None,
+        policy_hash=policy.content_hash if policy else None,
+        memory_ids=memory_selection.memory_ids if memory_selection else None,
     )
+
+    # 4b) Record the pinned policy + memory selection on the native event ledger.
+    _emit_context_events(store, run, job, policy, memory_selection)
 
     # 5) Dispatch the fixed workflow with ONLY job_id + dispatch_nonce.
     try:

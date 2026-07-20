@@ -179,6 +179,9 @@ def publish_approved(
     job_store.set_status(job_id, JobStatus.COMPLETED)
 
     if memory is not None:
+        # Only a human-approved, successfully-published change reaches memory, and
+        # it is written tenant-scoped + provenance-tagged so CodeMemory can safely
+        # retrieve it for future runs on this repository (and never another's).
         memory.write(
             MemoryRecord(
                 repo=job.repo,
@@ -186,6 +189,9 @@ def publish_approved(
                 kind="accepted_change",
                 metadata={"job_id": job_id, "pr": pr["number"], "files": diff.files_changed},
                 approved=True,
+                workspace_id=job.workspace_id,
+                repository_id=job.repository_id,
+                source_job_id=job_id,
             )
         )
     return meta

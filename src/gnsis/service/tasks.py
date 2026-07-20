@@ -92,6 +92,35 @@ def _memory() -> MemoryProvider:
     return NullMemoryProvider()
 
 
+def _resolve_policy_for_run():
+    """The trusted policy version to pin on a run (None → executor fallback)."""
+    try:
+        from .policy_store import resolve_active_policy
+
+        return resolve_active_policy()
+    except Exception:  # noqa: BLE001 - never block a run on policy resolution
+        logger.exception("policy resolution failed; dispatching without a pinned policy")
+        return None
+
+
+def _retrieve_memory_for_job(job: JobRecord):
+    """A bounded, tenant-scoped memory slice to pin on a run (best-effort)."""
+    if settings.memory_backend != "postgres":
+        return None
+    try:
+        from .codememory import CodeMemory
+
+        return CodeMemory().retrieve_for_task(
+            repo=job.repo,
+            instruction=job.instruction,
+            workspace_id=job.workspace_id,
+            repository_id=job.repository_id,
+        )
+    except Exception:  # noqa: BLE001 - memory is enhancement, never block a run
+        logger.exception("memory retrieval failed; dispatching without memory context")
+        return None
+
+
 def resolve_installation_id(job: JobRecord) -> Optional[int]:
     """The customer GitHub App installation this job's repository belongs to.
 
@@ -169,6 +198,13 @@ def run_job(job_id: str) -> str:
         )
         raise RuntimeError(f"no installation resolvable for job {job_id}")
 
+    # Resolve the trusted policy version + a bounded, tenant-scoped memory slice
+    # to pin onto this run. Policy resolution seeds v1 on first use and is
+    # essentially local; memory is a best-effort enhancement, so a failure there
+    # must never block the run (it dispatches with no memory instead).
+    policy = _resolve_policy_for_run()
+    memory_selection = _retrieve_memory_for_job(job)
+
     try:
         app = _app()
         base_sha = resolve_base_sha(
@@ -178,7 +214,13 @@ def run_job(job_id: str) -> str:
             base_branch=job.base_branch,
         )
         run = dispatch_execution(
-            settings, ExecutionStore(), job=job, base_sha=base_sha, app=app
+            settings,
+            ExecutionStore(),
+            job=job,
+            base_sha=base_sha,
+            app=app,
+            policy=policy,
+            memory_selection=memory_selection,
         )
     except DispatchError as exc:
         store.set_status(job_id, JobStatus.FAILED, error=f"dispatch failed: {exc}")
