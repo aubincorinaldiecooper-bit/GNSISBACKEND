@@ -322,11 +322,61 @@ class CodeMemory:
                     "outcome_decision": outcome_decision,
                     "workspace_id": workspace_id,
                     "repository_id": repository_id,
+                    "item_key": kind,
                 },
             )
         if written is None:
             return None
         return self._to_item(written, "recorded")
+
+    def record_reviewed_intelligence_batch(
+        self,
+        *,
+        repo: str,
+        source_job_id: str,
+        source_run_id: str,
+        outcome_id: int,
+        outcome_decision: str,
+        workspace_id: Optional[str] = None,
+        repository_id: Optional[str] = None,
+        items: Sequence[Dict[str, object]],
+    ) -> List[MemoryItem]:
+        records = [
+            MemoryRecord(
+                repo=repo,
+                content=str(item["content"]).strip(),
+                kind=str(item["kind"]),
+                metadata=dict(item.get("metadata") or {}),
+                approved=True,
+                workspace_id=workspace_id,
+                repository_id=repository_id,
+                source_job_id=source_job_id,
+            )
+            for item in items
+            if str(item.get("content", "")).strip()
+        ]
+        if not records:
+            return []
+        writer = getattr(self._provider, "write_many_with_provenance", None)
+        if writer is None:
+            return [self._to_item(r, "recorded") for r in records if self._provider.write(r)]
+        written = writer(
+            records,
+            [
+                {
+                    "source_run_id": source_run_id,
+                    "source_job_id": source_job_id,
+                    "outcome_id": outcome_id,
+                    "outcome_decision": outcome_decision,
+                    "workspace_id": workspace_id,
+                    "repository_id": repository_id,
+                    "item_key": str(item["item_key"]),
+                }
+                for item in items
+                if str(item.get("content", "")).strip()
+            ],
+        )
+        return [self._to_item(r, "recorded") for r in written]
 
     # -- internals --------------------------------------------------------
     def _write(

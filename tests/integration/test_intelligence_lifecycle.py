@@ -76,7 +76,7 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         from gnsis.orchestration.models import Approval
         from gnsis.service.codememory import CodeMemory, MemoryKind
         from gnsis.service.executor.models import ExecutionStatus
-        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle, ReviewedIntelligenceItem
         from gnsis.service.repository import PostgresJobStore
         from gnsis.service import orm
         from gnsis.service.db import session_scope
@@ -151,6 +151,157 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         self.assertEqual(prov.source_run_id, run.id)
         self.assertEqual(prov.outcome_id, first.id)
         self.assertNotEqual(prov.outcome_id, second.id)
+
+    def test_one_outcome_creates_multiple_same_kind_records_with_retry_safety(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.codememory import MemoryKind
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle, ReviewedIntelligenceItem
+        from gnsis.service.repository import PostgresJobStore
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job(instruction="fix auth headers")
+        make_run(job)
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="rejected", actor="reviewer"))
+
+        items = [
+            ReviewedIntelligenceItem("auth headers must be normalized in middleware", MemoryKind.REJECTION_LESSON, "middleware"),
+            ReviewedIntelligenceItem("auth headers tests must cover mixed case", MemoryKind.REJECTION_LESSON, "tests"),
+        ]
+        first = lifecycle.process_reviewed_outcome_items(outcome_id=approval.id, intelligence_items=items)
+        retry = lifecycle.process_reviewed_outcome_items(outcome_id=approval.id, intelligence_items=list(reversed(items)))
+
+        self.assertEqual(len(first), 2)
+        self.assertEqual({item.kind for item in first}, {MemoryKind.REJECTION_LESSON})
+        self.assertEqual({item.memory_id for item in retry}, {item.memory_id for item in first})
+        with session_scope() as s:
+            self.assertEqual(s.query(orm.MemoryProvenance).filter(orm.MemoryProvenance.outcome_id == approval.id).count(), 2)
+            self.assertEqual(s.query(orm.AgentMemory).count(), 2)
+
+    def test_mixed_kinds_and_later_add_only_new_item(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.codememory import MemoryKind
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle, ReviewedIntelligenceItem
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        lifecycle = IntelligenceLifecycle()
+        job = make_job()
+        make_run(job)
+        approval = lifecycle.jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        first = lifecycle.process_reviewed_outcome_items(
+            outcome_id=approval.id,
+            intelligence_items=[
+                ReviewedIntelligenceItem("accepted auth change", MemoryKind.ACCEPTED_CHANGE, "accepted"),
+                ReviewedIntelligenceItem("do not skip auth regression tests", MemoryKind.REJECTION_LESSON, "lesson"),
+            ],
+        )
+        second = lifecycle.process_reviewed_outcome_items(
+            outcome_id=approval.id,
+            intelligence_items=[
+                ReviewedIntelligenceItem("accepted auth change", MemoryKind.ACCEPTED_CHANGE, "accepted"),
+                ReviewedIntelligenceItem("document auth middleware ownership", MemoryKind.ACCEPTED_CHANGE, "docs"),
+            ],
+        )
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len(second), 2)
+        self.assertEqual(second[0].memory_id, first[0].memory_id)
+        with session_scope() as s:
+            self.assertEqual(s.query(orm.AgentMemory).count(), 3)
+
+    def test_conflicting_identity_and_failed_batch_do_not_partially_commit(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.codememory import MemoryKind
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle, ReviewedIntelligenceItem
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        lifecycle = IntelligenceLifecycle()
+        job = make_job()
+        make_run(job)
+        approval = lifecycle.jobs.save_approval(Approval(job_id=job.id, decision="rejected", actor="reviewer"))
+        lifecycle.process_reviewed_outcome_items(
+            outcome_id=approval.id,
+            intelligence_items=[ReviewedIntelligenceItem("stable lesson", MemoryKind.REJECTION_LESSON, "stable")],
+        )
+        with self.assertRaises(ValueError):
+            lifecycle.process_reviewed_outcome_items(
+                outcome_id=approval.id,
+                intelligence_items=[
+                    ReviewedIntelligenceItem("stable lesson changed", MemoryKind.REJECTION_LESSON, "stable"),
+                    ReviewedIntelligenceItem("new lesson should rollback", MemoryKind.REJECTION_LESSON, "new"),
+                ],
+            )
+        with session_scope() as s:
+            self.assertEqual(s.query(orm.AgentMemory).count(), 1)
+            self.assertEqual(s.query(orm.MemoryProvenance).count(), 1)
+
+    def test_existing_null_item_key_provenance_remains_queryable(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.codememory import MemoryKind
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle, ReviewedIntelligenceItem
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        lifecycle = IntelligenceLifecycle()
+        job = make_job()
+        _, run = make_run(job)
+        approval = lifecycle.jobs.save_approval(Approval(job_id=job.id, decision="rejected", actor="reviewer"))
+        with session_scope() as s:
+            mem = orm.AgentMemory(repo=job.repo, kind=MemoryKind.REJECTION_LESSON, content="legacy lesson", meta={}, approved=True, workspace_id=job.workspace_id, repository_id=job.repository_id, memory_id="mem_legacy", source_job_id=job.id)
+            s.add(mem)
+            s.add(orm.MemoryProvenance(memory_id="mem_legacy", kind=MemoryKind.REJECTION_LESSON, source_run_id=run.id, source_job_id=job.id, outcome_id=approval.id, outcome_decision="rejected", workspace_id=job.workspace_id, repository_id=job.repository_id))
+        prov = lifecycle.provenance_for_memory("mem_legacy")
+        self.assertEqual(prov.memory_id, "mem_legacy")
+        self.assertIsNone(prov.item_key)
+        item = lifecycle.process_reviewed_outcome(outcome_id=approval.id, reusable_intelligence="legacy lesson")
+        self.assertEqual(item.memory_id, "mem_legacy")
+        multi = lifecycle.process_reviewed_outcome_items(
+            outcome_id=approval.id,
+            intelligence_items=[
+                ReviewedIntelligenceItem(
+                    "legacy lesson",
+                    MemoryKind.REJECTION_LESSON,
+                    MemoryKind.REJECTION_LESSON,
+                )
+            ],
+        )
+        self.assertEqual([i.memory_id for i in multi], ["mem_legacy"])
+
+        with self.assertRaises(ValueError):
+            lifecycle.process_reviewed_outcome(
+                outcome_id=approval.id,
+                reusable_intelligence="legacy lesson changed",
+            )
+        with self.assertRaises(ValueError):
+            lifecycle.process_reviewed_outcome_items(
+                outcome_id=approval.id,
+                intelligence_items=[
+                    ReviewedIntelligenceItem(
+                        "legacy lesson changed",
+                        MemoryKind.REJECTION_LESSON,
+                        MemoryKind.REJECTION_LESSON,
+                    )
+                ],
+            )
+
+        added = lifecycle.process_reviewed_outcome_items(
+            outcome_id=approval.id,
+            intelligence_items=[
+                ReviewedIntelligenceItem(
+                    "legacy same-kind new item",
+                    MemoryKind.REJECTION_LESSON,
+                    "legacy-new",
+                )
+            ],
+        )
+        self.assertEqual(len(added), 1)
+        self.assertNotEqual(added[0].memory_id, "mem_legacy")
+        with session_scope() as s:
+            self.assertEqual(s.query(orm.AgentMemory).count(), 2)
+            self.assertEqual(s.query(orm.MemoryProvenance).count(), 2)
 
     def test_production_reject_job_wires_reviewed_outcome_to_codememory(self):
         from gnsis.orchestration.pipeline import reject_job

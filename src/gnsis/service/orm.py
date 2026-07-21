@@ -722,13 +722,14 @@ class MemoryProvenance(Base):
     __tablename__ = "memory_provenance"
     __table_args__ = (
         UniqueConstraint(
-            "outcome_id", "kind", name="uq_memory_provenance_outcome_kind"
+            "outcome_id", "item_key", name="uq_memory_provenance_outcome_item_key"
         ),
         UniqueConstraint("memory_id", name="uq_memory_provenance_memory_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     memory_id: Mapped[str] = mapped_column(String(64), index=True)
+    item_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(64), index=True)
     source_run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
     source_job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
