@@ -90,6 +90,24 @@ def _to_record(row: orm.ExecutionRun) -> ExecutionRunRecord:
     )
 
 
+def _normalize_memory_ids(memory_ids: Optional[List[str]]) -> List[str]:
+    """Return stable, auditable memory ids in first-seen order.
+
+    Legacy CodeMemory rows can surface as ``""`` when they predate stable
+    memory handles. Those rows may still be useful as selected content, but
+    there is no durable id to audit; do not persist blank consumption rows.
+    """
+    normalized: List[str] = []
+    seen = set()
+    for raw in memory_ids or []:
+        memory_id = str(raw or "").strip()
+        if not memory_id or memory_id in seen:
+            continue
+        seen.add(memory_id)
+        normalized.append(memory_id)
+    return normalized
+
+
 class ExecutionStore:
     """Durable access to ``execution_runs`` and its child tables."""
 
@@ -116,6 +134,7 @@ class ExecutionStore:
         memory_ids: Optional[List[str]] = None,
     ) -> ExecutionRunRecord:
         run_id = new_id("exec")
+        normalized_memory_ids = _normalize_memory_ids(memory_ids)
         with session_scope() as s:
             row = orm.ExecutionRun(
                 id=run_id,
@@ -141,10 +160,10 @@ class ExecutionStore:
                 policy_name=policy_name,
                 policy_version=policy_version,
                 policy_hash=policy_hash,
-                memory_ids=list(memory_ids) if memory_ids else None,
+                memory_ids=normalized_memory_ids or None,
             )
             s.add(row)
-            for memory_id in list(memory_ids or []):
+            for memory_id in normalized_memory_ids:
                 s.add(
                     orm.MemoryConsumption(
                         run_id=run_id,

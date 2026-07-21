@@ -74,6 +74,7 @@ _ADDITIVE_COLUMNS = [
     ("agent_memory", "repository_id", "VARCHAR(64)"),
     ("agent_memory", "memory_id", "VARCHAR(64)"),
     ("agent_memory", "source_job_id", "VARCHAR(64)"),
+    ("memory_provenance", "item_key", "VARCHAR(128)"),
     # Pinned intelligence context on each historical run (policy version + memory).
     ("execution_runs", "policy_name", "VARCHAR(128)"),
     ("execution_runs", "policy_version", "INTEGER"),
@@ -105,6 +106,22 @@ def _apply_additive_columns(engine) -> None:
                         f"ADD COLUMN IF NOT EXISTS {column} {coltype}"
                     )
                 )
+
+        if dialect != "sqlite":
+            conn.execute(
+                text(
+                    "ALTER TABLE memory_provenance "
+                    "DROP CONSTRAINT IF EXISTS uq_memory_provenance_outcome_kind"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_memory_provenance_outcome_item_key "
+                    "ON memory_provenance (outcome_id, item_key) "
+                    "WHERE item_key IS NOT NULL"
+                )
+            )
 
 
 def init_db() -> None:
