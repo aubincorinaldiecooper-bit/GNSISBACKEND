@@ -144,6 +144,16 @@ class ExecutionStore:
                 memory_ids=list(memory_ids) if memory_ids else None,
             )
             s.add(row)
+            for memory_id in list(memory_ids or []):
+                s.add(
+                    orm.MemoryConsumption(
+                        run_id=run_id,
+                        job_id=job_id,
+                        memory_id=memory_id,
+                        workspace_id=workspace_id,
+                        repository_id=repository_id,
+                    )
+                )
             s.flush()
             return _to_record(row)
 
@@ -533,6 +543,21 @@ class ExecutionStore:
                 }
                 for r in rows
             ]
+
+    # -- intelligence audit queries --------------------------------------
+    def runs_that_consumed_memory(self, memory_id: str) -> List[ExecutionRunRecord]:
+        with session_scope() as s:
+            rows = (
+                s.query(orm.ExecutionRun)
+                .join(
+                    orm.MemoryConsumption,
+                    orm.MemoryConsumption.run_id == orm.ExecutionRun.id,
+                )
+                .filter(orm.MemoryConsumption.memory_id == memory_id)
+                .order_by(orm.MemoryConsumption.id)
+                .all()
+            )
+            return [_to_record(r) for r in rows]
 
     # -- reconciliation queries ------------------------------------------
     def active_runs(self) -> List[ExecutionRunRecord]:
