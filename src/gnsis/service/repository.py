@@ -453,7 +453,14 @@ class PostgresMemoryProvider(MemoryProvider):
                     s.query(orm.MemoryProvenance)
                     .filter(
                         orm.MemoryProvenance.outcome_id == provenance["outcome_id"],
-                        orm.MemoryProvenance.kind == record.kind,
+                        or_(
+                            orm.MemoryProvenance.item_key
+                            == provenance.get("item_key", record.kind),
+                            (
+                                orm.MemoryProvenance.item_key.is_(None)
+                                & (orm.MemoryProvenance.kind == record.kind)
+                            ),
+                        ),
                     )
                     .one_or_none()
                 )
@@ -463,7 +470,14 @@ class PostgresMemoryProvider(MemoryProvider):
                         .filter(orm.AgentMemory.memory_id == existing.memory_id)
                         .one_or_none()
                     )
-                    return _mem_to_record(row) if row else None
+                    if row is None:
+                        return None
+                    if row.kind != record.kind or row.content != record.content:
+                        raise ValueError(
+                            f"conflicting reviewed intelligence identity: "
+                            f"{provenance.get('item_key', record.kind)}"
+                        )
+                    return _mem_to_record(row)
                 s.add(
                     orm.AgentMemory(
                         repo=record.repo,
@@ -480,6 +494,7 @@ class PostgresMemoryProvider(MemoryProvider):
                 s.add(
                     orm.MemoryProvenance(
                         memory_id=memory_id,
+                        item_key=provenance.get("item_key", record.kind),
                         kind=record.kind,
                         source_run_id=provenance["source_run_id"],
                         source_job_id=provenance["source_job_id"],
@@ -500,7 +515,14 @@ class PostgresMemoryProvider(MemoryProvider):
                     s.query(orm.MemoryProvenance)
                     .filter(
                         orm.MemoryProvenance.outcome_id == provenance["outcome_id"],
-                        orm.MemoryProvenance.kind == record.kind,
+                        or_(
+                            orm.MemoryProvenance.item_key
+                            == provenance.get("item_key", record.kind),
+                            (
+                                orm.MemoryProvenance.item_key.is_(None)
+                                & (orm.MemoryProvenance.kind == record.kind)
+                            ),
+                        ),
                     )
                     .one_or_none()
                 )
@@ -512,6 +534,79 @@ class PostgresMemoryProvider(MemoryProvider):
                     .one_or_none()
                 )
                 return _mem_to_record(row) if row else None
+
+    def write_many_with_provenance(self, records: List[MemoryRecord], provenances: List[dict]):
+        if len(records) != len(provenances):
+            raise ValueError("records and provenances must have the same length")
+        if any(not record.approved for record in records):
+            return []
+        keys = [p.get("item_key", r.kind) for r, p in zip(records, provenances)]
+        if len(set(keys)) != len(keys):
+            raise ValueError("duplicate provenance item_key in batch")
+        with session_scope() as s:
+            existing_rows = (
+                s.query(orm.MemoryProvenance)
+                .filter(
+                    orm.MemoryProvenance.outcome_id == provenances[0]["outcome_id"],
+                    or_(
+                        orm.MemoryProvenance.item_key.in_(keys),
+                        (
+                            orm.MemoryProvenance.item_key.is_(None)
+                            & orm.MemoryProvenance.kind.in_(
+                                [r.kind for r, key in zip(records, keys) if key == r.kind]
+                            )
+                        ),
+                    ),
+                )
+                .all()
+            )
+            by_key = {row.item_key or row.kind: row for row in existing_rows}
+            output = []
+            for record, provenance, item_key in zip(records, provenances, keys):
+                existing = by_key.get(item_key)
+                if existing is not None:
+                    row = (
+                        s.query(orm.AgentMemory)
+                        .filter(orm.AgentMemory.memory_id == existing.memory_id)
+                        .one_or_none()
+                    )
+                    if row is None:
+                        raise ValueError(f"provenance points to missing memory: {existing.memory_id}")
+                    if row.kind != record.kind or row.content != record.content:
+                        raise ValueError(f"conflicting reviewed intelligence identity: {item_key}")
+                    output.append(_mem_to_record(row))
+                    continue
+                memory_id = record.memory_id or new_id("mem")
+                s.add(
+                    orm.AgentMemory(
+                        repo=record.repo,
+                        kind=record.kind,
+                        content=record.content,
+                        meta=dict(record.metadata),
+                        approved=True,
+                        workspace_id=record.workspace_id,
+                        repository_id=record.repository_id,
+                        memory_id=memory_id,
+                        source_job_id=record.source_job_id,
+                    )
+                )
+                s.add(
+                    orm.MemoryProvenance(
+                        memory_id=memory_id,
+                        item_key=item_key,
+                        kind=record.kind,
+                        source_run_id=provenance["source_run_id"],
+                        source_job_id=provenance["source_job_id"],
+                        outcome_id=provenance["outcome_id"],
+                        outcome_decision=provenance["outcome_decision"],
+                        workspace_id=provenance.get("workspace_id"),
+                        repository_id=provenance.get("repository_id"),
+                    )
+                )
+                record.memory_id = memory_id
+                output.append(record)
+            s.flush()
+            return output
 
     def search(self, repo: str, query: str, limit: int = 5):
         # Lightweight relevance: rank repo-scoped rows by query-term overlap.
