@@ -193,15 +193,25 @@ def publish(
     # so it is the one thing worth remembering for next time. Scoped to the repo.
     if memory is not None:
         summary = _summary_for(store, job_id) or job.instruction
-        memory.write(
-            MemoryRecord(
-                repo=job.repo,
-                content=summary,
-                kind="accepted_change",
-                metadata={"job_id": job_id, "pr": pr.number, "files": diff.files_changed},
-                approved=True,
+        if approval.id is not None:
+            from ..service.codememory import MemoryKind
+            from ..service.intelligence_lifecycle import IntelligenceLifecycle
+
+            IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
+                outcome_id=approval.id,
+                reusable_intelligence=summary,
+                kind=MemoryKind.ACCEPTED_CHANGE,
             )
-        )
+        else:
+            memory.write(
+                MemoryRecord(
+                    repo=job.repo,
+                    content=summary,
+                    kind="accepted_change",
+                    metadata={"job_id": job_id, "pr": pr.number, "files": diff.files_changed},
+                    approved=True,
+                )
+            )
     return pr
 
 
@@ -224,7 +234,7 @@ def reject_job(
     if job is None:
         raise JobNotFound(job_id)
 
-    store.save_approval(
+    approval = store.save_approval(
         Approval(job_id=job_id, decision="rejected", actor=actor, note=note)
     )
     store.set_status(job_id, JobStatus.REJECTED)
@@ -232,15 +242,26 @@ def reject_job(
     if memory is not None:
         diff = store.get_diff(job_id)
         files = diff.files_changed if diff else []
-        memory.write(
-            MemoryRecord(
-                repo=job.repo,
-                content=_lesson_text(job.instruction, note, files),
-                kind="lesson",
-                metadata={"job_id": job_id, "files": files},
-                approved=True,
+        lesson = _lesson_text(job.instruction, note, files)
+        if approval.id is not None:
+            from ..service.codememory import MemoryKind
+            from ..service.intelligence_lifecycle import IntelligenceLifecycle
+
+            IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
+                outcome_id=approval.id,
+                reusable_intelligence=lesson,
+                kind=MemoryKind.REJECTION_LESSON,
             )
-        )
+        else:
+            memory.write(
+                MemoryRecord(
+                    repo=job.repo,
+                    content=lesson,
+                    kind="lesson",
+                    metadata={"job_id": job_id, "files": files},
+                    approved=True,
+                )
+            )
 
 
 def _lesson_text(instruction: str, note: str, files) -> str:

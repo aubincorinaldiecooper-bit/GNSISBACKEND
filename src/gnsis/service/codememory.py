@@ -279,6 +279,55 @@ class CodeMemory:
             metadata=metadata,
         )
 
+
+    def record_reviewed_intelligence(
+        self,
+        *,
+        repo: str,
+        source_job_id: str,
+        source_run_id: str,
+        outcome_id: int,
+        outcome_decision: str,
+        content: str,
+        kind: str,
+        workspace_id: Optional[str] = None,
+        repository_id: Optional[str] = None,
+        metadata: Optional[Dict[str, object]] = None,
+    ) -> Optional[MemoryItem]:
+        """Atomically persist reviewed intelligence and its provenance."""
+        text = (content or "").strip()
+        if not text:
+            return None
+        memory_kind = kind if kind in MemoryKind.ALL else MemoryKind.ACCEPTED_CHANGE
+        record = MemoryRecord(
+            repo=repo,
+            content=text,
+            kind=memory_kind,
+            metadata=dict(metadata or {}),
+            approved=True,
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            source_job_id=source_job_id,
+        )
+        writer = getattr(self._provider, "write_with_provenance", None)
+        if writer is None:
+            written = self._provider.write(record)
+        else:
+            written = writer(
+                record,
+                {
+                    "source_run_id": source_run_id,
+                    "source_job_id": source_job_id,
+                    "outcome_id": outcome_id,
+                    "outcome_decision": outcome_decision,
+                    "workspace_id": workspace_id,
+                    "repository_id": repository_id,
+                },
+            )
+        if written is None:
+            return None
+        return self._to_item(written, "recorded")
+
     # -- internals --------------------------------------------------------
     def _write(
         self,

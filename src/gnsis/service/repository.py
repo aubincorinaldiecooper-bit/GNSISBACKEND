@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from ..memory.base import MemoryProvider, MemoryRecord
 from ..orchestration.models import (
@@ -213,13 +214,17 @@ class PostgresJobStore:
     # -- approvals --------------------------------------------------------
     def save_approval(self, approval: Approval) -> Approval:
         with session_scope() as s:
-            s.add(
-                orm.JobApproval(
-                    job_id=approval.job_id,
-                    decision=approval.decision,
-                    actor=approval.actor,
-                    note=approval.note,
-                )
+            row = orm.JobApproval(
+                job_id=approval.job_id,
+                decision=approval.decision,
+                actor=approval.actor,
+                note=approval.note,
+            )
+            s.add(row)
+            s.flush()
+            approval.id = row.id
+            approval.created_at = (
+                row.created_at.isoformat() if row.created_at else approval.created_at
             )
         return approval
 
@@ -239,6 +244,7 @@ class PostgresJobStore:
                 actor=row.actor,
                 note=row.note,
                 created_at=row.created_at.isoformat() if row.created_at else "",
+                id=row.id,
             )
 
     # -- PR metadata ------------------------------------------------------
@@ -430,6 +436,83 @@ class PostgresMemoryProvider(MemoryProvider):
         record.memory_id = memory_id
         return record
 
+
+    def write_with_provenance(self, record: MemoryRecord, provenance: dict):
+        """Persist approved memory and its reviewed-outcome provenance atomically.
+
+        This is the CodeMemory lifecycle write path: either both the memory row
+        and provenance row commit, or neither does. If a concurrent retry already
+        created the same outcome/kind provenance, return that existing memory.
+        """
+        if not record.approved:
+            return None
+        memory_id = record.memory_id or new_id("mem")
+        try:
+            with session_scope() as s:
+                existing = (
+                    s.query(orm.MemoryProvenance)
+                    .filter(
+                        orm.MemoryProvenance.outcome_id == provenance["outcome_id"],
+                        orm.MemoryProvenance.kind == record.kind,
+                    )
+                    .one_or_none()
+                )
+                if existing is not None:
+                    row = (
+                        s.query(orm.AgentMemory)
+                        .filter(orm.AgentMemory.memory_id == existing.memory_id)
+                        .one_or_none()
+                    )
+                    return _mem_to_record(row) if row else None
+                s.add(
+                    orm.AgentMemory(
+                        repo=record.repo,
+                        kind=record.kind,
+                        content=record.content,
+                        meta=dict(record.metadata),
+                        approved=True,
+                        workspace_id=record.workspace_id,
+                        repository_id=record.repository_id,
+                        memory_id=memory_id,
+                        source_job_id=record.source_job_id,
+                    )
+                )
+                s.add(
+                    orm.MemoryProvenance(
+                        memory_id=memory_id,
+                        kind=record.kind,
+                        source_run_id=provenance["source_run_id"],
+                        source_job_id=provenance["source_job_id"],
+                        outcome_id=provenance["outcome_id"],
+                        outcome_decision=provenance["outcome_decision"],
+                        workspace_id=provenance.get("workspace_id"),
+                        repository_id=provenance.get("repository_id"),
+                    )
+                )
+                record.memory_id = memory_id
+                s.flush()
+                return record
+        except IntegrityError:
+            # Concurrent duplicate: the unique outcome/kind or memory_id won in
+            # another transaction. Resolve the already-created provenance.
+            with session_scope() as s:
+                existing = (
+                    s.query(orm.MemoryProvenance)
+                    .filter(
+                        orm.MemoryProvenance.outcome_id == provenance["outcome_id"],
+                        orm.MemoryProvenance.kind == record.kind,
+                    )
+                    .one_or_none()
+                )
+                if existing is None:
+                    raise
+                row = (
+                    s.query(orm.AgentMemory)
+                    .filter(orm.AgentMemory.memory_id == existing.memory_id)
+                    .one_or_none()
+                )
+                return _mem_to_record(row) if row else None
+
     def search(self, repo: str, query: str, limit: int = 5):
         # Lightweight relevance: rank repo-scoped rows by query-term overlap.
         # (Swap in pgvector/full-text later without changing the interface.)
@@ -482,6 +565,13 @@ class PostgresMemoryProvider(MemoryProvider):
                         orm.AgentMemory.workspace_id.is_(None),
                     )
                 )
+            if repository_id:
+                q = q.filter(
+                    or_(
+                        orm.AgentMemory.repository_id == repository_id,
+                        orm.AgentMemory.repository_id.is_(None),
+                    )
+                )
             rows = q.order_by(orm.AgentMemory.id.desc()).limit(limit).all()
             return [_mem_to_record(r) for r in rows]
 
@@ -513,6 +603,13 @@ class PostgresMemoryProvider(MemoryProvider):
                     or_(
                         orm.AgentMemory.workspace_id == workspace_id,
                         orm.AgentMemory.workspace_id.is_(None),
+                    )
+                )
+            if repository_id:
+                q = q.filter(
+                    or_(
+                        orm.AgentMemory.repository_id == repository_id,
+                        orm.AgentMemory.repository_id.is_(None),
                     )
                 )
             rows = q.all()
