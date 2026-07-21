@@ -177,6 +177,59 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         )
         self.assertIn(produced[0].memory_id, selected.memory_ids)
 
+    def test_approved_publish_with_execution_run_creates_one_accepted_change_with_provenance(self):
+        from gnsis.orchestration.models import Approval, Diff, PRMetadata
+        from gnsis.orchestration.pipeline import publish
+        from gnsis.service.codememory import MemoryKind
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
+        from gnsis.service.repository import PostgresJobStore, PostgresMemoryProvider
+
+        class FakePublisher:
+            def publish(self, job, diff):
+                return PRMetadata(job_id=job.id, number=22, url="https://pr/22", branch="b")
+
+        jobs = PostgresJobStore()
+        memory = PostgresMemoryProvider()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job(instruction="add authentication widget")
+        jobs.save_diff(Diff(job_id=job.id, patch="diff --git a/a b/a", files_changed=["a"]))
+        _, run = make_run(job)
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        jobs.set_status(job.id, "approved")
+
+        publish(jobs, FakePublisher(), job.id, memory=memory)
+        publish(jobs, FakePublisher(), job.id, memory=memory)
+
+        produced = lifecycle.intelligence_from_run(run.id)
+        self.assertEqual(len(produced), 1)
+        self.assertEqual(produced[0].kind, MemoryKind.ACCEPTED_CHANGE)
+        self.assertEqual(produced[0].outcome_id, approval.id)
+        self.assertEqual(len(memory.recent("o/r")), 1)
+
+    def test_compatibility_pipeline_publish_without_execution_run_writes_legacy_memory_without_provenance(self):
+        from gnsis.orchestration.models import Approval, Diff, PRMetadata
+        from gnsis.orchestration.pipeline import publish
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
+        from gnsis.service.repository import PostgresJobStore, PostgresMemoryProvider
+
+        class FakePublisher:
+            def publish(self, job, diff):
+                return PRMetadata(job_id=job.id, number=23, url="https://pr/23", branch="b")
+
+        jobs = PostgresJobStore()
+        memory = PostgresMemoryProvider()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job(instruction="add compatibility widget")
+        jobs.save_diff(Diff(job_id=job.id, patch="diff --git a/a b/a", files_changed=["a"]))
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        jobs.set_status(job.id, "approved")
+
+        publish(jobs, FakePublisher(), job.id, memory=memory)
+
+        self.assertTrue(memory.recent("o/r"))
+        self.assertIsNone(lifecycle.process_reviewed_outcome(outcome_id=approval.id, reusable_intelligence="compatibility widget"))
+        self.assertEqual(lifecycle.intelligence_from_run("exec_missing"), [])
+
     def test_legacy_repository_null_scoping_and_pinned_reconstruction(self):
         from gnsis.service.codememory import CodeMemory
         from gnsis.service.repository import PostgresMemoryProvider

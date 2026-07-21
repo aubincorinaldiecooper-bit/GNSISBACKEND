@@ -1,6 +1,9 @@
 """The GNSIS job pipeline — the long-running work a worker performs.
 
-This is what the Celery worker invokes (never the HTTP request). It drives the
+This is the compatibility/local pipeline for engines that run in-process. The
+current production Celery worker dispatches user jobs through the remote executor
+(see :mod:`gnsis.service.tasks`), but this path remains supported by tests and
+legacy/internal callers. It drives the
 chosen :class:`~gnsis.orchestration.engine.PatchEngine` through the generation
 phases, **checkpointing every phase to the store** so a Railway restart or a
 sandbox teardown never loses progress, saves the resulting diff, and then **parks
@@ -156,7 +159,7 @@ def publish(
     job_id: str,
     memory: Optional[MemoryProvider] = None,
 ) -> PRMetadata:
-    """Open the PR for an *approved* job. Called by the ``publish_pr`` worker task.
+    """Open the PR for an approved compatibility-pipeline job.
 
     All GitHub writes happen here, behind the approval gate. The ``publisher``
     is the side-effecting GitHub client (real on Railway, faked in tests); this
@@ -193,16 +196,20 @@ def publish(
     # so it is the one thing worth remembering for next time. Scoped to the repo.
     if memory is not None:
         summary = _summary_for(store, job_id) or job.instruction
+        item = None
         if approval.id is not None:
             from ..service.codememory import MemoryKind
             from ..service.intelligence_lifecycle import IntelligenceLifecycle
 
-            IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
+            item = IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
                 outcome_id=approval.id,
                 reusable_intelligence=summary,
                 kind=MemoryKind.ACCEPTED_CHANGE,
             )
-        else:
+        if item is None:
+            # Compatibility pipeline jobs do not necessarily have an
+            # execution_runs row. Do not fabricate run provenance after the fact;
+            # preserve the pre-existing approval-gated repo memory behaviour.
             memory.write(
                 MemoryRecord(
                     repo=job.repo,
@@ -243,16 +250,19 @@ def reject_job(
         diff = store.get_diff(job_id)
         files = diff.files_changed if diff else []
         lesson = _lesson_text(job.instruction, note, files)
+        item = None
         if approval.id is not None:
             from ..service.codememory import MemoryKind
             from ..service.intelligence_lifecycle import IntelligenceLifecycle
 
-            IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
+            item = IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
                 outcome_id=approval.id,
                 reusable_intelligence=lesson,
                 kind=MemoryKind.REJECTION_LESSON,
             )
-        else:
+        if item is None:
+            # Compatibility pipeline jobs may have no execution_runs row. Keep the
+            # legacy approved-memory behaviour without inventing provenance.
             memory.write(
                 MemoryRecord(
                     repo=job.repo,
