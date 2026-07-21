@@ -29,6 +29,8 @@ selection reasons, and the provenance plumbing.
 
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
@@ -136,6 +138,21 @@ def _terms(text: str) -> List[str]:
     return uniq
 
 
+def reviewed_item_key(*, kind: str, content: str, item_key: Optional[str] = None) -> str:
+    """Stable idempotency key for one explicit reviewed intelligence item."""
+    explicit = (item_key or "").strip()
+    if explicit:
+        return explicit[:128]
+    digest = hashlib.sha256(
+        f"{kind}\0{(content or '').strip()}".encode("utf-8")
+    ).hexdigest()
+    return digest[:64]
+
+
+def reviewed_content_hash(content: str) -> str:
+    return hashlib.sha256((content or "").strip().encode("utf-8")).hexdigest()
+
+
 class CodeMemory:
     """Application service over :class:`PostgresMemoryProvider`.
 
@@ -241,6 +258,7 @@ class CodeMemory:
         repository_id: Optional[str] = None,
         kind: str = MemoryKind.ACCEPTED_CHANGE,
         metadata: Optional[Dict[str, object]] = None,
+        item_key: Optional[str] = None,
     ) -> Optional[MemoryItem]:
         """Persist the lesson of a change a human approved.
 
@@ -278,6 +296,130 @@ class CodeMemory:
             source_job_id=source_job_id,
             metadata=metadata,
         )
+
+
+    def record_reviewed_intelligence(
+        self,
+        *,
+        repo: str,
+        source_job_id: str,
+        source_run_id: str,
+        outcome_id: int,
+        outcome_decision: str,
+        content: str,
+        kind: str,
+        workspace_id: Optional[str] = None,
+        repository_id: Optional[str] = None,
+        metadata: Optional[Dict[str, object]] = None,
+        item_key: Optional[str] = None,
+    ) -> Optional[MemoryItem]:
+        """Atomically persist reviewed intelligence and its provenance."""
+        text = (content or "").strip()
+        if not text:
+            return None
+        memory_kind = kind if kind in MemoryKind.ALL else MemoryKind.ACCEPTED_CHANGE
+        key = reviewed_item_key(kind=memory_kind, content=text, item_key=item_key)
+        content_hash = reviewed_content_hash(text)
+        record = MemoryRecord(
+            repo=repo,
+            content=text,
+            kind=memory_kind,
+            metadata=dict(metadata or {}),
+            approved=True,
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            source_job_id=source_job_id,
+        )
+        writer = getattr(self._provider, "write_with_provenance", None)
+        if writer is None:
+            written = self._provider.write(record)
+        else:
+            written = writer(
+                record,
+                {
+                    "source_run_id": source_run_id,
+                    "source_job_id": source_job_id,
+                    "outcome_id": outcome_id,
+                    "outcome_decision": outcome_decision,
+                    "item_key": key,
+                    "content_hash": content_hash,
+                    "workspace_id": workspace_id,
+                    "repository_id": repository_id,
+                },
+            )
+        if written is None:
+            return None
+        return self._to_item(written, "recorded")
+
+    def record_reviewed_intelligence_batch(
+        self,
+        *,
+        repo: str,
+        source_job_id: str,
+        source_run_id: str,
+        outcome_id: int,
+        outcome_decision: str,
+        items: Sequence[Dict[str, object]],
+        workspace_id: Optional[str] = None,
+        repository_id: Optional[str] = None,
+        metadata: Optional[Dict[str, object]] = None,
+    ) -> List[MemoryItem]:
+        """Atomically persist multiple reviewed intelligence items."""
+        records = []
+        provenances = []
+        base_meta = dict(metadata or {})
+        seen_keys = set()
+        for raw in items:
+            content = str(raw.get("content", "")).strip()
+            if not content:
+                continue
+            kind = str(raw.get("kind") or MemoryKind.ACCEPTED_CHANGE)
+            memory_kind = kind if kind in MemoryKind.ALL else MemoryKind.ACCEPTED_CHANGE
+            key = reviewed_item_key(
+                kind=memory_kind,
+                content=content,
+                item_key=str(raw.get("item_key") or raw.get("id") or ""),
+            )
+            identity = (memory_kind, key)
+            if identity in seen_keys:
+                continue
+            seen_keys.add(identity)
+            item_meta = {**base_meta, **dict(raw.get("metadata") or {})}
+            records.append(
+                MemoryRecord(
+                    repo=repo,
+                    content=content,
+                    kind=memory_kind,
+                    metadata=item_meta,
+                    approved=True,
+                    workspace_id=workspace_id,
+                    repository_id=repository_id,
+                    source_job_id=source_job_id,
+                )
+            )
+            provenances.append(
+                {
+                    "source_run_id": source_run_id,
+                    "source_job_id": source_job_id,
+                    "outcome_id": outcome_id,
+                    "outcome_decision": outcome_decision,
+                    "item_key": key,
+                    "content_hash": reviewed_content_hash(content),
+                    "workspace_id": workspace_id,
+                    "repository_id": repository_id,
+                }
+            )
+        if not records:
+            return []
+        writer = getattr(self._provider, "write_many_with_provenance", None)
+        if writer is None:
+            return [
+                self._to_item(w, "recorded")
+                for w in (self._provider.write(r) for r in records)
+                if w is not None
+            ]
+        written = writer(records, provenances)
+        return [self._to_item(w, "recorded") for w in written if w is not None]
 
     # -- internals --------------------------------------------------------
     def _write(

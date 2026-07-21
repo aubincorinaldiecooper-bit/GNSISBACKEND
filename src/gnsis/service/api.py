@@ -782,10 +782,10 @@ def approve(
         ttl_seconds=get_settings().executor_token_ttl_seconds * 4,
         patch_sha256=run.patch_sha256,
     )
-    db.save_approval(
+    approval = db.save_approval(
         Approval(job_id=job_id, decision="approved", actor=user.subject, note=req.note)
     )
-    db.merge_context(job_id, {"approval_binding": binding})
+    db.merge_context(job_id, {"approval_binding": binding, "approval_id": approval.id})
     job = db.set_status(job_id, JobStatus.APPROVED)
 
     from .tasks import publish_pr

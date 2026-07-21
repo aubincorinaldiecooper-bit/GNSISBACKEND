@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from ..memory.base import MemoryProvider, MemoryRecord
 from ..orchestration.models import (
@@ -213,13 +214,17 @@ class PostgresJobStore:
     # -- approvals --------------------------------------------------------
     def save_approval(self, approval: Approval) -> Approval:
         with session_scope() as s:
-            s.add(
-                orm.JobApproval(
-                    job_id=approval.job_id,
-                    decision=approval.decision,
-                    actor=approval.actor,
-                    note=approval.note,
-                )
+            row = orm.JobApproval(
+                job_id=approval.job_id,
+                decision=approval.decision,
+                actor=approval.actor,
+                note=approval.note,
+            )
+            s.add(row)
+            s.flush()
+            approval.id = row.id
+            approval.created_at = (
+                row.created_at.isoformat() if row.created_at else approval.created_at
             )
         return approval
 
@@ -239,6 +244,7 @@ class PostgresJobStore:
                 actor=row.actor,
                 note=row.note,
                 created_at=row.created_at.isoformat() if row.created_at else "",
+                id=row.id,
             )
 
     # -- PR metadata ------------------------------------------------------
@@ -430,6 +436,116 @@ class PostgresMemoryProvider(MemoryProvider):
         record.memory_id = memory_id
         return record
 
+    def write_many_with_provenance(
+        self, records: List[MemoryRecord], provenances: List[dict]
+    ):
+        """Persist approved memory records and provenance atomically.
+
+        Idempotency is keyed by (outcome_id, kind, item_key). Existing matching
+        items are returned; using the same identity with different content raises
+        ValueError and rolls back the entire batch.
+        """
+        if len(records) != len(provenances):
+            raise ValueError("records/provenances length mismatch")
+        pairs = [(r, p) for r, p in zip(records, provenances) if r.approved]
+        if not pairs:
+            return []
+        # Prevent ambiguous conflicting identities inside the same request before
+        # touching the database.
+        seen = {}
+        for record, provenance in pairs:
+            ident = (
+                provenance["outcome_id"],
+                record.kind,
+                provenance.get("item_key", ""),
+            )
+            content_hash = provenance.get("content_hash")
+            if ident in seen and seen[ident] != content_hash:
+                raise ValueError("conflicting reviewed intelligence identity in batch")
+            seen[ident] = content_hash
+
+        try:
+            with session_scope() as s:
+                written_by_identity = {}
+                for record, provenance in pairs:
+                    item_key = provenance.get("item_key", "")
+                    content_hash = provenance.get("content_hash")
+                    existing = (
+                        s.query(orm.MemoryProvenance)
+                        .filter(
+                            orm.MemoryProvenance.outcome_id == provenance["outcome_id"],
+                            orm.MemoryProvenance.kind == record.kind,
+                            orm.MemoryProvenance.item_key == item_key,
+                        )
+                        .one_or_none()
+                    )
+                    if existing is not None:
+                        row = (
+                            s.query(orm.AgentMemory)
+                            .filter(orm.AgentMemory.memory_id == existing.memory_id)
+                            .one_or_none()
+                        )
+                        if row is None:
+                            continue
+                        existing_hash = existing.content_hash
+                        if not existing_hash:
+                            from hashlib import sha256
+
+                            existing_hash = sha256(
+                                row.content.strip().encode("utf-8")
+                            ).hexdigest()
+                        if existing_hash != content_hash:
+                            raise ValueError(
+                                "reviewed intelligence identity reused with different content"
+                            )
+                        written_by_identity[(record.kind, item_key)] = _mem_to_record(row)
+                        continue
+
+                    memory_id = record.memory_id or new_id("mem")
+                    s.add(
+                        orm.AgentMemory(
+                            repo=record.repo,
+                            kind=record.kind,
+                            content=record.content,
+                            meta=dict(record.metadata),
+                            approved=True,
+                            workspace_id=record.workspace_id,
+                            repository_id=record.repository_id,
+                            memory_id=memory_id,
+                            source_job_id=record.source_job_id,
+                        )
+                    )
+                    s.add(
+                        orm.MemoryProvenance(
+                            memory_id=memory_id,
+                            kind=record.kind,
+                            item_key=item_key,
+                            content_hash=content_hash,
+                            source_run_id=provenance["source_run_id"],
+                            source_job_id=provenance["source_job_id"],
+                            outcome_id=provenance["outcome_id"],
+                            outcome_decision=provenance["outcome_decision"],
+                            workspace_id=provenance.get("workspace_id"),
+                            repository_id=provenance.get("repository_id"),
+                        )
+                    )
+                    record.memory_id = memory_id
+                    written_by_identity[(record.kind, item_key)] = record
+                s.flush()
+                return [
+                    written_by_identity[(r.kind, p.get("item_key", ""))]
+                    for r, p in pairs
+                ]
+        except IntegrityError:
+            # A concurrent writer may have inserted one of the same identities.
+            # Retrying the whole batch is safe and will validate conflicts against
+            # the now-committed rows.
+            return self.write_many_with_provenance(records, provenances)
+
+    def write_with_provenance(self, record: MemoryRecord, provenance: dict):
+        written = self.write_many_with_provenance([record], [provenance])
+        return written[0] if written else None
+
     def search(self, repo: str, query: str, limit: int = 5):
         # Lightweight relevance: rank repo-scoped rows by query-term overlap.
         # (Swap in pgvector/full-text later without changing the interface.)
@@ -482,6 +598,13 @@ class PostgresMemoryProvider(MemoryProvider):
                         orm.AgentMemory.workspace_id.is_(None),
                     )
                 )
+            if repository_id:
+                q = q.filter(
+                    or_(
+                        orm.AgentMemory.repository_id == repository_id,
+                        orm.AgentMemory.repository_id.is_(None),
+                    )
+                )
             rows = q.order_by(orm.AgentMemory.id.desc()).limit(limit).all()
             return [_mem_to_record(r) for r in rows]
 
@@ -513,6 +636,13 @@ class PostgresMemoryProvider(MemoryProvider):
                     or_(
                         orm.AgentMemory.workspace_id == workspace_id,
                         orm.AgentMemory.workspace_id.is_(None),
+                    )
+                )
+            if repository_id:
+                q = q.filter(
+                    or_(
+                        orm.AgentMemory.repository_id == repository_id,
+                        orm.AgentMemory.repository_id.is_(None),
                     )
                 )
             rows = q.all()

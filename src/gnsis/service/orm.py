@@ -333,7 +333,7 @@ class ExecutionModelCall(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
-    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     model: Mapped[str] = mapped_column(String(128), default="")
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -431,7 +431,7 @@ class ExecutionEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
-    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     workflow_run_attempt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sequence: Mapped[int] = mapped_column(Integer, default=0)
     idempotency_key: Mapped[str] = mapped_column(String(128), default="")
@@ -713,6 +713,51 @@ class AgentMemory(Base):
     repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     memory_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     source_job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class MemoryProvenance(Base):
+    """Auditable link from durable intelligence back to its reviewed source."""
+
+    __tablename__ = "memory_provenance"
+    __table_args__ = (
+        UniqueConstraint(
+            "outcome_id",
+            "kind",
+            "item_key",
+            name="uq_memory_provenance_outcome_kind_item",
+        ),
+        UniqueConstraint("memory_id", name="uq_memory_provenance_memory_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    memory_id: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(64), index=True)
+    item_key: Mapped[str] = mapped_column(String(128), default="", index=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    source_run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
+    source_job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    outcome_id: Mapped[int] = mapped_column(ForeignKey("job_approvals.id"), index=True)
+    outcome_decision: Mapped[str] = mapped_column(String(16), index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class MemoryConsumption(Base):
+    """Auditable link from a later execution run to intelligence supplied to it."""
+
+    __tablename__ = "memory_consumptions"
+    __table_args__ = (
+        UniqueConstraint("run_id", "memory_id", name="uq_memory_consumption_run_memory"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    memory_id: Mapped[str] = mapped_column(String(64), index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

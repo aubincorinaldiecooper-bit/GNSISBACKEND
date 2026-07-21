@@ -73,6 +73,24 @@ def publish_approved(
         raise KeyError(job_id)
 
     approval = job_store.get_latest_approval(job_id)
+    approval_id = (job.context or {}).get("approval_id")
+    if approval_id is not None:
+        from .. import orm
+        from ..db import session_scope
+
+        with session_scope() as s:
+            row = s.get(orm.JobApproval, approval_id)
+            if row is not None:
+                from ...orchestration.models import Approval
+
+                approval = Approval(
+                    job_id=row.job_id,
+                    decision=row.decision,
+                    actor=row.actor,
+                    note=row.note,
+                    created_at=row.created_at.isoformat() if row.created_at else "",
+                    id=row.id,
+                )
     if approval is None or approval.decision != "approved":
         raise PermissionError(f"job {job_id} is not approved for publishing")
 
@@ -179,21 +197,32 @@ def publish_approved(
     job_store.set_status(job_id, JobStatus.COMPLETED)
 
     if memory is not None:
-        # Only a human-approved, successfully-published change reaches memory, and
-        # it is written tenant-scoped + provenance-tagged so CodeMemory can safely
-        # retrieve it for future runs on this repository (and never another's).
-        memory.write(
-            MemoryRecord(
-                repo=job.repo,
-                content=(job.instruction.strip().splitlines() or [job.instruction])[0],
-                kind="accepted_change",
-                metadata={"job_id": job_id, "pr": pr["number"], "files": diff.files_changed},
-                approved=True,
-                workspace_id=job.workspace_id,
-                repository_id=job.repository_id,
-                source_job_id=job_id,
+        # Only a human-approved, successfully-published change reaches memory.
+        # Persist through the reviewed-outcome lifecycle when the approval has a
+        # stable DB id so memory and provenance are committed atomically.
+        content = (job.instruction.strip().splitlines() or [job.instruction])[0]
+        if approval.id is not None:
+            from ..codememory import MemoryKind
+            from ..intelligence_lifecycle import IntelligenceLifecycle
+
+            IntelligenceLifecycle(jobs=job_store).process_reviewed_outcome(
+                outcome_id=approval.id,
+                reusable_intelligence=content,
+                kind=MemoryKind.ACCEPTED_CHANGE,
             )
-        )
+        else:
+            memory.write(
+                MemoryRecord(
+                    repo=job.repo,
+                    content=content,
+                    kind="accepted_change",
+                    metadata={"job_id": job_id, "pr": pr["number"], "files": diff.files_changed},
+                    approved=True,
+                    workspace_id=job.workspace_id,
+                    repository_id=job.repository_id,
+                    source_job_id=job_id,
+                )
+            )
     return meta
 
 

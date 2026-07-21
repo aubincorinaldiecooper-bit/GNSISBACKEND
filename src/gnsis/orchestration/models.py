@@ -96,6 +96,7 @@ class Approval:
     actor: str
     note: str = ""
     created_at: str = field(default_factory=_now)
+    id: Optional[int] = None
 
 
 @dataclass

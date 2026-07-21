@@ -79,6 +79,10 @@ _ADDITIVE_COLUMNS = [
     ("execution_runs", "policy_version", "INTEGER"),
     ("execution_runs", "policy_hash", "VARCHAR(64)"),
     ("execution_runs", "memory_ids", "JSON"),
+    # Multi-item reviewed intelligence provenance. Existing rows receive the
+    # legacy empty item key so they remain queryable and unique.
+    ("memory_provenance", "item_key", "VARCHAR(128) DEFAULT ''"),
+    ("memory_provenance", "content_hash", "VARCHAR(64)"),
 ]
 
 
@@ -107,6 +111,36 @@ def _apply_additive_columns(engine) -> None:
                 )
 
 
+def _apply_memory_provenance_identity_migration(engine) -> None:
+    """Upgrade provenance from one-row-per-kind to one-row-per-item.
+
+    The repository's migration convention is idempotent startup DDL. This keeps
+    existing provenance rows valid while allowing multiple same-kind items for a
+    reviewed outcome on deployed Postgres databases.
+    """
+    dialect = engine.dialect.name
+    with engine.begin() as conn:
+        if dialect == "postgresql":
+            conn.exec_driver_sql(
+                "ALTER TABLE memory_provenance "
+                "DROP CONSTRAINT IF EXISTS uq_memory_provenance_outcome_kind"
+            )
+            conn.exec_driver_sql(
+                "UPDATE memory_provenance SET item_key = '' WHERE item_key IS NULL"
+            )
+            conn.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_memory_provenance_outcome_kind_item "
+                "ON memory_provenance (outcome_id, kind, item_key)"
+            )
+        elif dialect == "sqlite":
+            # Fresh SQLite test DBs get the new UniqueConstraint via create_all.
+            # Existing SQLite DBs are not a deployed migration target here.
+            conn.exec_driver_sql(
+                "UPDATE memory_provenance SET item_key = '' WHERE item_key IS NULL"
+            )
+
+
 def init_db() -> None:
     """Create/upgrade the schema (idempotent). Safe to run on every deploy.
 
@@ -121,6 +155,7 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     _apply_additive_columns(engine)
+    _apply_memory_provenance_identity_migration(engine)
 
 
 @contextmanager
