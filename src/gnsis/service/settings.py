@@ -161,6 +161,10 @@ class Settings:
     # from overspending before the actual cost is known.
     balance_reserve_estimate_usd: str = "0.05"
 
+    # Hard ceiling on a single operator beta-credit grant (defence against a fat
+    # finger). A grant above this is rejected. Not a per-workspace lifetime cap.
+    beta_credit_max_usd: str = "50.00"
+
     # Optional server-side pepper mixed into the Genesis virtual-key hash. Keys are
     # high-entropy so plain SHA-256 is sufficient; a pepper adds defence-in-depth
     # if the key_hash column ever leaks. Rotating it invalidates existing keys.
@@ -418,6 +422,7 @@ class Settings:
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
             stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
             balance_reserve_estimate_usd=os.environ.get("GNSIS_BALANCE_RESERVE_ESTIMATE_USD", "0.05"),
+            beta_credit_max_usd=os.environ.get("GNSIS_BETA_CREDIT_MAX_USD", "50.00"),
             virtual_key_pepper=os.environ.get("GNSIS_VIRTUAL_KEY_PEPPER", ""),
         )
 

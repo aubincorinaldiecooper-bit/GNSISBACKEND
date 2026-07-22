@@ -535,6 +535,37 @@ class WorkspaceBilling(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class BetaCreditGrant(Base):
+    """An operator-issued beta credit grant — the audit record for manual credits.
+
+    The money itself lives in ``balance_transactions`` (the source of truth); this
+    row records *who* granted *what*, *why*, and *when*, plus its reversal. A grant
+    and its ledger transaction are written together in one transaction. A unique
+    ``idempotency_key`` makes a re-sent grant a safe no-op; a reversal is a
+    compensating negative transaction, never an edit of the original.
+    """
+
+    __tablename__ = "beta_credit_grants"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_beta_grant_idempotency_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True)
+    amount: Mapped[str] = mapped_column(String(40), default="0")  # decimal string, > 0
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    operator: Mapped[str] = mapped_column(String(255), default="")  # attested operator id
+    idempotency_key: Mapped[str] = mapped_column(String(191))
+    status: Mapped[str] = mapped_column(String(16), default="granted", index=True)  # granted/reversed
+    transaction_id: Mapped[str] = mapped_column(String(64))
+    reversal_transaction_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reversed_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reversed_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    reversed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class LimitPolicy(Base):
     """A configurable spending-limit policy over one scope.
 
