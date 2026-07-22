@@ -367,6 +367,7 @@ class ExecutionStore:
         patch_sha256: str,
         artifact_hashes: dict,
         security_validation: str,
+        tests_summary: Optional[dict] = None,
     ) -> None:
         with session_scope() as s:
             row = s.get(orm.ExecutionRun, run_id)
@@ -375,6 +376,8 @@ class ExecutionStore:
             row.patch_sha256 = patch_sha256
             row.artifact_hashes = dict(artifact_hashes)
             row.security_validation = security_validation
+            if tests_summary is not None:
+                row.tests_summary = dict(tests_summary)
             s.flush()
 
 

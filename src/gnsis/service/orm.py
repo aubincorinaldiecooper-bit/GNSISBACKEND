@@ -320,6 +320,12 @@ class ExecutionRun(Base):
     policy_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     memory_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
+    # Compact, immutable snapshot of the run's test outcome, captured from the
+    # (already validated) tests.json at completion so the run receipt can report
+    # it without re-running anything. Nullable: legacy runs and runs that emitted
+    # no tests.json carry none. Keys: runner, status, passed, failed, skipped.
+    tests_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

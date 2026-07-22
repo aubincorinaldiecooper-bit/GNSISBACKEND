@@ -80,6 +80,8 @@ _ADDITIVE_COLUMNS = [
     ("execution_runs", "policy_version", "INTEGER"),
     ("execution_runs", "policy_hash", "VARCHAR(64)"),
     ("execution_runs", "memory_ids", "JSON"),
+    # Immutable test-outcome snapshot for the run receipt (G6).
+    ("execution_runs", "tests_summary", "JSON"),
 ]
 
 

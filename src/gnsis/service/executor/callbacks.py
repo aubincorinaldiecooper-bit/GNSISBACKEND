@@ -47,6 +47,34 @@ def _check_attempt_binding(run, body: dict) -> None:
             raise CallbackError("stale run attempt", status=409)
 
 
+def _compact_tests_summary(tests_raw: str) -> Optional[dict]:
+    """Distil the (already validated) tests.json into an immutable receipt snapshot.
+
+    Keeps only the small, non-sensitive outcome fields — never the raw output
+    blob. Returns ``None`` if the payload can't be read as an object.
+    """
+    import json
+
+    try:
+        data = json.loads(tests_raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    def _int(key: str) -> int:
+        value = data.get(key)
+        return value if isinstance(value, bool) is False and isinstance(value, int) else 0
+
+    return {
+        "runner": str(data.get("runner") or "")[:64],
+        "status": str(data.get("status") or "")[:32],
+        "passed": _int("passed"),
+        "failed": _int("failed"),
+        "skipped": _int("skipped"),
+    }
+
+
 def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> dict:
     """Persist a run event. Idempotent, sequence-checked, redacted."""
     if is_terminal(run.status) or run.status in ExecutionStatus.TERMINAL:
@@ -127,10 +155,12 @@ def handle_complete(
 
     # 3) JSON outputs must be structurally valid.
     tests_raw = outputs.get("tests.json")
+    tests_summary: Optional[dict] = None
     if isinstance(tests_raw, str):
         tv = validate_tests_json(tests_raw)
         if not tv.ok:
             raise CallbackError(tv.reason, status=422)
+        tests_summary = _compact_tests_summary(tests_raw)
     receipt_raw = outputs.get("receipt.json")
     if isinstance(receipt_raw, str):
         rv = validate_receipt_json(receipt_raw)
@@ -176,7 +206,11 @@ def handle_complete(
     if isinstance(events_meta, dict) and events_meta.get("sha256"):
         artifact_hashes["events.jsonl"] = str(events_meta["sha256"])
     exec_store.set_patch_result(
-        run.id, patch_sha256=patch_sha256, artifact_hashes=artifact_hashes, security_validation="passed"
+        run.id,
+        patch_sha256=patch_sha256,
+        artifact_hashes=artifact_hashes,
+        security_validation="passed",
+        tests_summary=tests_summary,
     )
     exec_store.set_status(run.id, ExecutionStatus.COMPLETED)
     exec_store.revoke_token(run.id)
