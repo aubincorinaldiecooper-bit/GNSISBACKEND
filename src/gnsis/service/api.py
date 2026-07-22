@@ -747,6 +747,27 @@ def get_diff(
     return {"patch": diff.patch, "files_changed": diff.files_changed}
 
 
+@app.get("/jobs/{job_id}/receipt")
+def get_receipt(
+    job_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> dict:
+    """The persisted, tenant-scoped run receipt for a job's latest execution run.
+
+    Assembled from immutable records, so it is historically accurate and stable
+    across refresh. Ownership is enforced twice (route + assembler); a job that
+    isn't owned by this workspace is a 404 so ownership is never leaked.
+    """
+    _require_owned_job(db, workspace, job_id)
+    from .receipts import build_receipt
+
+    receipt = build_receipt(workspace.id, job_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return receipt
+
+
 @app.post("/jobs/{job_id}/approve", response_model=JobResponse)
 def approve(
     job_id: str,
