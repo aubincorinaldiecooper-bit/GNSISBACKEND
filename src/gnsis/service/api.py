@@ -474,6 +474,65 @@ def add_pricing(req: AddPricingRequest) -> dict:
     return asdict(view)
 
 
+# -- operator beta credits (internal key) --------------------------------------
+
+
+class GrantCreditRequest(BaseModel):
+    workspace_id: str
+    amount: str
+    reason: str
+    operator: str
+    idempotency_key: str
+    currency: str = "USD"
+
+
+class ReverseCreditRequest(BaseModel):
+    operator: str
+    reason: str = ""
+
+
+@app.post("/v1/admin/credits", dependencies=[Depends(require_internal_key)])
+def admin_grant_credit(req: GrantCreditRequest) -> dict:
+    """Grant a fixed beta credit to a workspace (operator, internal key).
+
+    Idempotent on ``idempotency_key``; capped by ``GNSIS_BETA_CREDIT_MAX_USD``.
+    The credit is a normal prepaid-balance transaction, so existing spending
+    limits + reservations gate its use.
+    """
+    from .beta_credits import BetaCreditError, grant_credit, workspace_summary
+
+    try:
+        grant = grant_credit(
+            workspace_id=req.workspace_id, amount=req.amount, reason=req.reason,
+            operator=req.operator, idempotency_key=req.idempotency_key,
+            max_amount=get_settings().beta_credit_max_usd, currency=req.currency,
+        )
+    except BetaCreditError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"grant": grant, "workspace": workspace_summary(req.workspace_id)}
+
+
+@app.post("/v1/admin/credits/{grant_id}/reverse", dependencies=[Depends(require_internal_key)])
+def admin_reverse_credit(grant_id: str, req: ReverseCreditRequest) -> dict:
+    """Reverse a mistaken grant with a compensating transaction. Idempotent."""
+    from .beta_credits import BetaCreditError, reverse_grant, workspace_summary
+
+    try:
+        grant = reverse_grant(grant_id=grant_id, operator=req.operator, reason=req.reason)
+    except BetaCreditError as exc:
+        status = 404 if "not found" in str(exc) else 422
+        raise HTTPException(status_code=status, detail=str(exc))
+    return {"grant": grant, "workspace": workspace_summary(grant["workspace_id"])}
+
+
+@app.get("/v1/admin/credits", dependencies=[Depends(require_internal_key)])
+def admin_list_credits(workspace_id: str) -> dict:
+    """Balance + grant history for one workspace (operator inspection)."""
+    from .beta_credits import workspace_summary
+
+    return workspace_summary(workspace_id)
+
+
 # -- spending limits + balances ------------------------------------------------
 
 
