@@ -40,6 +40,34 @@ def _is_expired(dt: Optional[datetime]) -> bool:
     return aware is not None and aware < _utcnow()
 
 
+def normalize_memory_ids(memory_ids: Optional[List[str]]) -> List[str]:
+    """Clean a list of pinned memory ids before it is persisted.
+
+    Drops ``None``, empty, and whitespace-only entries; trims surrounding
+    whitespace from the rest; de-duplicates while preserving first-seen order.
+    **Never fabricates a replacement id** — an all-invalid input yields ``[]``.
+
+    This runs once at the execution-run boundary so the *same* cleaned list feeds
+    both ``ExecutionRun.memory_ids`` and the per-id ``MemoryConsumption`` rows. A
+    blank id would produce a meaningless consumption row, and a duplicate id would
+    violate ``uq_memory_consumption_run_memory`` and roll the whole run creation
+    back — so normalization here is what keeps a run with dirty ids persistable.
+    """
+    if not memory_ids:
+        return []
+    seen: set[str] = set()
+    cleaned: List[str] = []
+    for raw in memory_ids:
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        cleaned.append(value)
+    return cleaned
+
+
 def _to_record(row: orm.ExecutionRun) -> ExecutionRunRecord:
     return ExecutionRunRecord(
         id=row.id,
@@ -116,6 +144,10 @@ class ExecutionStore:
         memory_ids: Optional[List[str]] = None,
     ) -> ExecutionRunRecord:
         run_id = new_id("exec")
+        # Normalize once, then use the SAME list for the run row and every
+        # consumption row (blank/duplicate ids would otherwise create junk rows
+        # or trip uq_memory_consumption_run_memory and roll back the run).
+        clean_memory_ids = normalize_memory_ids(memory_ids)
         with session_scope() as s:
             row = orm.ExecutionRun(
                 id=run_id,
@@ -141,10 +173,10 @@ class ExecutionStore:
                 policy_name=policy_name,
                 policy_version=policy_version,
                 policy_hash=policy_hash,
-                memory_ids=list(memory_ids) if memory_ids else None,
+                memory_ids=clean_memory_ids or None,
             )
             s.add(row)
-            for memory_id in list(memory_ids or []):
+            for memory_id in clean_memory_ids:
                 s.add(
                     orm.MemoryConsumption(
                         run_id=run_id,
