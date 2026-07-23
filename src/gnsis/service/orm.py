@@ -143,6 +143,11 @@ class Job(Base):
     # server allowlist at creation. Nullable: legacy jobs and jobs created before
     # model selection fall back to the configured default at dispatch.
     model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # The user-selected Advisor model, also validated against the server
+    # allowlist. Powers the ``openrouter:advisor`` server tool the gateway
+    # appends; a distinct value from ``model`` so a lightweight primary can
+    # consult a stronger reviewer. Nullable so historical rows remain readable.
+    advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -330,6 +335,13 @@ class ExecutionRun(Base):
     # no tests.json carry none. Keys: runner, status, passed, failed, skipped.
     tests_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
+    # Pinned Advisor model — the gateway reads this authoritatively (never from
+    # the executor's request body) when it injects the openrouter:advisor server
+    # tool, so a compromised primary agent cannot pick a different Advisor. Both
+    # nullable: legacy runs dispatched before Advisor selection carry none.
+    primary_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -351,6 +363,7 @@ class ExecutionModelCall(Base):
     # Deterministic correlation key attached to the LiteLLM request metadata, so
     # the LiteLLM usage callback can be tied back to this exact model call.
     event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    server_tool_usage: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
