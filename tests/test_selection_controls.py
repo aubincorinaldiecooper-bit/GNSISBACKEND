@@ -350,7 +350,8 @@ class SelectionApiTests(unittest.TestCase):
         for repo_id in ("repo-1", "repo-2"):
             r = self.client.post("/jobs", json={
                 "repository_id": repo_id, "instruction": "do it",
-                "model": "openai/gpt-5.4"})
+                "model": "openai/gpt-5.4",
+                "advisor_model": "anthropic/claude-opus-4.8"})
             self.assertEqual(r.status_code, 200, f"{repo_id}: {r.text}")
 
     def test_create_job_rejects_repo_that_lost_github_access(self):
@@ -359,7 +360,8 @@ class SelectionApiTests(unittest.TestCase):
         # user's point of view it isn't in their accessible list at all.
         r = self.client.post("/jobs", json={
             "repository_id": "repo-gone", "instruction": "do it",
-            "model": "openai/gpt-5.4"})
+            "model": "openai/gpt-5.4",
+            "advisor_model": "anthropic/claude-opus-4.8"})
         self.assertEqual(r.status_code, 404)
 
     def test_create_job_persists_selected_model(self):
@@ -367,9 +369,74 @@ class SelectionApiTests(unittest.TestCase):
 
         tasks.run_job.delay = lambda *a, **k: None
         r = self.client.post("/jobs", json={
-            "repository_id": "repo-1", "instruction": "add hello", "model": "openai/gpt-5.4"})
+            "repository_id": "repo-1", "instruction": "add hello", "model": "openai/gpt-5.4",
+            "advisor_model": "anthropic/claude-opus-4.8"})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["model"], "openai/gpt-5.4")
+
+    def test_create_job_rejects_unsupported_advisor_model(self):
+        # The Advisor is validated against the SAME allowlist as the primary,
+        # so an off-list Advisor is rejected at the API boundary — the gateway
+        # cannot be tricked into using an arbitrary model as a subsidised
+        # second seat.
+        r = self.client.post("/jobs", json={
+            "repository_id": "repo-1", "instruction": "do it",
+            "model": "openai/gpt-5.4", "advisor_model": "attacker/model"})
+        self.assertEqual(r.status_code, 422, r.text)
+        self.assertIn("advisor_model", r.text)
+
+    def test_create_job_persists_both_selected_and_advisor_model(self):
+        import gnsis.service.tasks as tasks
+
+        tasks.run_job.delay = lambda *a, **k: None
+        r = self.client.post("/jobs", json={
+            "repository_id": "repo-1", "instruction": "add hello",
+            "model": "anthropic/claude-opus-4.8",
+            "advisor_model": "openai/gpt-5.4"})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        # Both fields survive round-trip on JobResponse.
+        self.assertEqual(body["model"], "anthropic/claude-opus-4.8")
+        self.assertEqual(body["advisor_model"], "openai/gpt-5.4")
+
+    def test_create_job_without_advisor_persists_null(self):
+        import gnsis.service.tasks as tasks
+
+        tasks.run_job.delay = lambda *a, **k: None
+        r = self.client.post("/jobs", json={
+            "repository_id": "repo-1", "instruction": "add hello",
+            "model": "openai/gpt-5.4"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["model"], "openai/gpt-5.4")
+        self.assertIsNone(r.json()["advisor_model"])
+
+    def test_create_job_accepts_equal_primary_and_advisor_model_ids(self):
+        import gnsis.service.tasks as tasks
+
+        tasks.run_job.delay = lambda *a, **k: None
+        r = self.client.post("/jobs", json={
+            "repository_id": "repo-1", "instruction": "add hello",
+            "model": "openai/gpt-5.4",
+            "advisor_model": "openai/gpt-5.4"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["model"], "openai/gpt-5.4")
+        self.assertEqual(r.json()["advisor_model"], "openai/gpt-5.4")
+
+    def test_single_model_allowlist_can_create_job_with_same_role_model(self):
+        import gnsis.service.settings as settings_mod
+        import gnsis.service.tasks as tasks
+
+        tasks.run_job.delay = lambda *a, **k: None
+        settings_mod._settings = None
+        import os
+        os.environ["GNSIS_RUN_ALLOWED_MODELS"] = "anthropic/claude-opus-4.8"
+        r = self.client.post("/jobs", json={
+            "repository_id": "repo-1", "instruction": "add hello",
+            "model": "anthropic/claude-opus-4.8",
+            "advisor_model": "anthropic/claude-opus-4.8"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["model"], "anthropic/claude-opus-4.8")
+        self.assertEqual(r.json()["advisor_model"], "anthropic/claude-opus-4.8")
 
 
 if __name__ == "__main__":

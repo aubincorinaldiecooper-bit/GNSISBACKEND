@@ -105,6 +105,11 @@ class ExecutionRunRecord:
     policy_version: Optional[int] = None
     policy_hash: Optional[str] = None
     memory_ids: list = field(default_factory=list)
+    # Pinned primary + advisor model. The Advisor is used *authoritatively* by
+    # the executor gateway to fix the openrouter:advisor server-tool definition
+    # for this run (a compromised primary cannot swap it out per-request).
+    primary_model: Optional[str] = None
+    advisor_model: Optional[str] = None
 
     @property
     def is_terminal(self) -> bool:
@@ -127,6 +132,12 @@ class RunSpec:
     base_sha: str
     base_branch: str
     model: str
+    # Advisor model — powers the openrouter:advisor server tool the gateway
+    # appends to primary-agent calls. Optional so historical runs (created
+    # before Advisor selection) can still be replayed. Validated against
+    # ``allowed_models`` by the caller (build_run_spec); the executor treats
+    # it as opaque.
+    advisor_model: Optional[str]
     allowed_models: list
     budgets: Budgets
     model_gateway_url: str
@@ -155,6 +166,7 @@ class RunSpec:
             "base_sha": self.base_sha,
             "base_branch": self.base_branch,
             "model": self.model,
+            "advisor_model": self.advisor_model,
             "allowed_models": list(self.allowed_models),
             "budgets": {
                 "max_model_calls": self.budgets.max_model_calls,

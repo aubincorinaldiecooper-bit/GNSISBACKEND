@@ -81,6 +81,7 @@ class ApiAuthTestBase(unittest.TestCase):
         os.environ["GNSIS_EXECUTOR_REPO"] = "Gnsis-studio-"
         os.environ["GNSIS_EXECUTOR_OIDC_AUDIENCE"] = "https://api.gnsis.studio"
         os.environ["GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA"] = "0" * 40
+        os.environ["GNSIS_RUN_ALLOWED_MODELS"] = "anthropic/claude-opus-4.8,openai/gpt-5.4"
         from gnsis.service import settings as settings_mod
 
         settings_mod._settings = None
@@ -202,7 +203,7 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         repo_id = repos[0]["id"]
         r = self.client.post(
             "/jobs",
-            json={"repository_id": repo_id, "instruction": "do a thing"},
+            json={"repository_id": repo_id, "instruction": "do a thing", "model": "openai/gpt-5.4", "advisor_model": "anthropic/claude-opus-4.8"},
             headers=self.auth("user-1"),
         )
         self.assertEqual(r.status_code, 200, r.text)
@@ -223,7 +224,7 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         repo_id = repos[0]["id"]
         r = self.client.post(
             "/jobs",
-            json={"repository_id": repo_id, "instruction": "x"},
+            json={"repository_id": repo_id, "instruction": "x", "model": "openai/gpt-5.4", "advisor_model": "anthropic/claude-opus-4.8"},
             headers=self.auth("user-2"),
         )
         self.assertEqual(r.status_code, 404)
@@ -254,7 +255,7 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         repo_id = repos[0]["id"]
         job = self.client.post(
             "/jobs",
-            json={"repository_id": repo_id, "instruction": "x"},
+            json={"repository_id": repo_id, "instruction": "x", "model": "openai/gpt-5.4", "advisor_model": "anthropic/claude-opus-4.8"},
             headers=self.auth("user-1"),
         ).json()
         # user-2 cannot read user-1's job by id.
@@ -265,7 +266,7 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         repos = self._claim_and_get_repo("user-1")
         self.client.post(
             "/jobs",
-            json={"repository_id": repos[0]["id"], "instruction": "x"},
+            json={"repository_id": repos[0]["id"], "instruction": "x", "model": "openai/gpt-5.4", "advisor_model": "anthropic/claude-opus-4.8"},
             headers=self.auth("user-1"),
         )
         mine = self.client.get("/jobs", headers=self.auth("user-1")).json()
@@ -277,7 +278,7 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         repos = self._claim_and_get_repo("user-1")
         job = self.client.post(
             "/jobs",
-            json={"repository_id": repos[0]["id"], "instruction": "x"},
+            json={"repository_id": repos[0]["id"], "instruction": "x", "model": "openai/gpt-5.4", "advisor_model": "anthropic/claude-opus-4.8"},
             headers=self.auth("user-1"),
         ).json()
         # Force awaiting_approval with a validated execution run + matching diff,

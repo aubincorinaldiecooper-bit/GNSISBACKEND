@@ -46,6 +46,7 @@ def _job_to_record(row: orm.Job) -> JobRecord:
         workspace_id=row.workspace_id,
         repository_id=row.repository_id,
         model=row.model,
+        advisor_model=getattr(row, "advisor_model", None),
     )
 
 
@@ -69,6 +70,7 @@ class PostgresJobStore:
                 workspace_id=spec.workspace_id,
                 repository_id=spec.repository_id,
                 model=spec.model,
+                advisor_model=spec.advisor_model,
             )
             s.add(row)
             s.flush()

@@ -172,8 +172,18 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
 
         receipt.update(
             {
-                "model": models_used[0] if models_used else None,
+                "model": run.primary_model or (models_used[0] if models_used else None),
+                "advisor_model": run.advisor_model,
                 "models_used": models_used,
+                "server_tool_usage": [
+                    {
+                        "event_id": c.event_id,
+                        "model": c.model,
+                        "usage": dict(c.server_tool_usage or {}),
+                    }
+                    for c in model_calls
+                    if c.server_tool_usage
+                ],
                 "base_sha": run.base_sha or None,
                 "patch_hash": run.patch_sha256,
                 "policy": (

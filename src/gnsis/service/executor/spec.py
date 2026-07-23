@@ -83,6 +83,10 @@ def build_run_spec(settings, job, run: ExecutionRunRecord) -> RunSpec:
         or default_model(settings)
         or "anthropic/claude-opus-4.8"
     )
+    # The Advisor is independently validated against the SAME server allowlist
+    # as the primary. Historical rows with no Advisor stay None; the gateway
+    # must not invent an Advisor identity from the primary/default model.
+    selected_advisor = resolve_allowed_model(settings, getattr(job, "advisor_model", None))
     return RunSpec(
         job_id=job.id,
         instruction=job.instruction,
@@ -91,6 +95,7 @@ def build_run_spec(settings, job, run: ExecutionRunRecord) -> RunSpec:
         base_sha=run.base_sha,
         base_branch=run.base_branch,
         model=selected_model,
+        advisor_model=selected_advisor,
         allowed_models=list(settings.run_allowed_models),
         budgets=budgets_from_settings(settings),
         model_gateway_url=model_gateway_url(settings),
