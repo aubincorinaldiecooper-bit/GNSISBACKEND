@@ -214,7 +214,7 @@ def dispatch_execution(
             settings, getattr(job, "model", None), fallback_to_default=True
         ),
         advisor_model=_pinned_model(
-            settings, getattr(job, "advisor_model", None), fallback_to_default=True
+            settings, getattr(job, "advisor_model", None), fallback_to_default=False
         ),
     )
 

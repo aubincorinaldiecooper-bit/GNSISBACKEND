@@ -164,13 +164,24 @@ class ServerToolInjectionUnitTests(unittest.TestCase):
         self.assertEqual(params["max_completion_tokens"], 4096)
         self.assertIn("senior software architect", params["instructions"].lower())
         self.assertIn("code review", params["instructions"].lower())
-        # Advisor has its OWN nested Web Search with the same nested config.
         self.assertEqual(len(params["tools"]), 1)
         nested = params["tools"][0]
         self.assertEqual(nested["type"], "openrouter:web_search")
         self.assertEqual(nested["parameters"]["engine"], "auto")
         self.assertEqual(nested["parameters"]["max_results"], 5)
         self.assertEqual(nested["parameters"]["max_total_results"], 10)
+
+    def test_equal_primary_and_advisor_ids_are_pinned_to_advisor_role(self):
+        from gnsis.service.executor.gateway import _inject_server_tools
+        from gnsis.service.settings import get_settings
+
+        run = self._run(primary=ALLOWED, advisor=ALLOWED)
+        payload: Dict[str, Any] = {"tools": []}
+        _inject_server_tools(payload, run, get_settings())
+        advisor = next(t for t in payload["tools"] if t["type"] == "openrouter:advisor")
+        self.assertEqual(advisor["parameters"]["model"], ALLOWED)
+        self.assertEqual(run.primary_model, ALLOWED)
+        self.assertEqual(run.advisor_model, ALLOWED)
 
     def test_primary_call_preserves_client_function_tools_untouched(self):
         from gnsis.service.executor.gateway import _inject_server_tools
@@ -197,15 +208,13 @@ class ServerToolInjectionUnitTests(unittest.TestCase):
         # A "different-advisor" hint in the body has no effect — the function
         # only reads from the pinned run record.
 
-    def test_advisor_not_in_allowlist_is_ignored(self):
-        """A stale/removed pinned Advisor falls back rather than escaping the allowlist."""
+    def test_historical_null_advisor_does_not_fallback_to_primary(self):
+        """Historical rows with no Advisor omit Advisor instead of inventing one."""
         from gnsis.service.executor.gateway import _pick_advisor_model
         from gnsis.service.settings import get_settings
 
-        run = self._run(advisor="removed/model", primary=ALLOWED)
-        picked = _pick_advisor_model(run, get_settings())
-        # Falls back to the primary (which IS in the allowlist).
-        self.assertEqual(picked, ALLOWED)
+        run = self._run(advisor=None, primary=ALLOWED)
+        self.assertIsNone(_pick_advisor_model(run, get_settings()))
 
     def test_advisor_omitted_when_run_has_no_advisor_or_primary(self):
         """Historical rows with no models cause the Advisor tool to be skipped."""
@@ -325,9 +334,6 @@ class GatewayEndToEndTests(unittest.TestCase):
                 upstream=fake,
             )
         self.assertEqual(cm.exception.status, 400)
-        self.assertEqual(_seen, [])
-        self.assertEqual(self.exec_store.get_run(self.run.id).usage.model_calls, 0)
-        self.assertEqual(self.exec_store.model_calls_for(self.run.id), [])
 
     def test_provider_server_tool_usage_is_persisted_from_usage_payload(self):
         from gnsis.service.executor.gateway import handle_chat_completion
@@ -340,8 +346,8 @@ class GatewayEndToEndTests(unittest.TestCase):
                     "completion_tokens": 3,
                     "cost": 0.01,
                     "server_tool_use": {
-                        "openrouter:web_search": {"requests": 1},
-                        "openrouter:advisor": {"consultations": 1},
+                        "web_search_requests": 1,
+                        "advisor_consultations": 1,
                     },
                 },
             }
@@ -354,10 +360,47 @@ class GatewayEndToEndTests(unittest.TestCase):
         calls = self.exec_store.model_calls_for(self.run.id)
         self.assertEqual(calls[0]["server_tool_usage"], {
             "server_tool_use": {
-                "openrouter:web_search": {"requests": 1},
-                "openrouter:advisor": {"consultations": 1},
+                "web_search_requests": 1,
+                "advisor_consultations": 1,
             }
         })
+
+    def test_billing_enabled_smuggled_tool_creates_no_hold_or_slot(self):
+        from gnsis.service.billing import BillingStore
+        from gnsis.service.executor.gateway import GatewayError, handle_chat_completion
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+        from gnsis.service.settings import get_settings
+
+        # Give the run a workspace and enough credits; rejection must happen before reserve.
+        with session_scope() as db:
+            row = db.get(orm.ExecutionRun, self.run.id)
+            row.workspace_id = "ws-billing"
+        run = self.exec_store.get_run(self.run.id)
+        BillingStore().top_up("ws-billing", "1.00", idempotency_key="test-top-up")
+        settings = get_settings()
+        settings.stripe_webhook_secret = "whsec_test"
+        settings.litellm_url = "https://litellm.test"
+        settings.litellm_api_key = "litellm-key"
+        _seen, fake = self._fake_upstream_captures()
+
+        with self.assertRaises(GatewayError) as cm:
+            handle_chat_completion(
+                settings, self.exec_store, run,
+                body={
+                    "model": ALLOWED,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": [{"type": "openrouter:web_search"}],
+                },
+                upstream=fake,
+            )
+        self.assertEqual(cm.exception.status, 400)
+        self.assertEqual(_seen, [])
+        self.assertEqual(self.exec_store.get_run(self.run.id).usage.model_calls, 0)
+        self.assertEqual(self.exec_store.model_calls_for(self.run.id), [])
+        with session_scope() as db:
+            self.assertEqual(db.query(orm.BalanceTransaction).count(), 1)
+            self.assertEqual(db.query(orm.BalanceReservation).count(), 0)
 
     def test_run_without_advisor_still_works_and_omits_advisor_tool(self):
         """A historical run with no advisor recorded runs without the Advisor tool."""

@@ -83,15 +83,10 @@ def build_run_spec(settings, job, run: ExecutionRunRecord) -> RunSpec:
         or default_model(settings)
         or "anthropic/claude-opus-4.8"
     )
-    # The Advisor is validated against the SAME server allowlist as the primary
-    # so the openrouter:advisor server tool can invoke it exactly the way the
-    # primary is invoked. A historical row with no Advisor recorded falls back
-    # to the configured default — never widens the allowlist.
-    selected_advisor = (
-        resolve_allowed_model(settings, getattr(job, "advisor_model", None))
-        or default_model(settings)
-        or selected_model
-    )
+    # The Advisor is independently validated against the SAME server allowlist
+    # as the primary. Historical rows with no Advisor stay None; the gateway
+    # must not invent an Advisor identity from the primary/default model.
+    selected_advisor = resolve_allowed_model(settings, getattr(job, "advisor_model", None))
     return RunSpec(
         job_id=job.id,
         instruction=job.instruction,

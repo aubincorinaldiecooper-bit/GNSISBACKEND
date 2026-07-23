@@ -226,17 +226,12 @@ def _reject_client_openrouter_tools(tools: Any) -> None:
 def _pick_advisor_model(run: ExecutionRunRecord, settings) -> Optional[str]:
     """The Advisor model, pinned on the run (never read from the request body).
 
-    Falls back to the primary_model (which was itself validated) if a legacy
-    run has no Advisor recorded, so historical runs remain replayable.
-    Returns None only if the run has neither pinned — in which case the
-    Advisor tool is silently omitted for that call.
+    Historical runs may not have an Advisor pinned. In that case the gateway
+    omits the Advisor tool rather than inventing one from the primary model.
     """
     advisor = getattr(run, "advisor_model", None)
     if advisor and advisor in (settings.run_allowed_models or []):
         return advisor
-    primary = getattr(run, "primary_model", None)
-    if primary and primary in (settings.run_allowed_models or []):
-        return primary
     return None
 
 
@@ -265,7 +260,7 @@ def _inject_server_tools(payload: Dict[str, Any], run: ExecutionRunRecord, setti
     the appended entries are visibly server-owned.
     """
     tools = list(payload.get("tools") or [])
-    tools.append(dict(_WEB_SEARCH_TOOL))
+    tools.append(json.loads(json.dumps(_WEB_SEARCH_TOOL)))
     advisor = _pick_advisor_model(run, settings)
     if advisor:
         tools.append(_advisor_tool(advisor))

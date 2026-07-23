@@ -360,7 +360,8 @@ class SelectionApiTests(unittest.TestCase):
         # user's point of view it isn't in their accessible list at all.
         r = self.client.post("/jobs", json={
             "repository_id": "repo-gone", "instruction": "do it",
-            "model": "openai/gpt-5.4"})
+            "model": "openai/gpt-5.4",
+            "advisor_model": "anthropic/claude-opus-4.8"})
         self.assertEqual(r.status_code, 404)
 
     def test_create_job_persists_selected_model(self):
@@ -408,7 +409,7 @@ class SelectionApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 422, r.text)
         self.assertIn("advisor_model", r.text)
 
-    def test_create_job_rejects_same_primary_and_advisor_model(self):
+    def test_create_job_accepts_equal_primary_and_advisor_model_ids(self):
         import gnsis.service.tasks as tasks
 
         tasks.run_job.delay = lambda *a, **k: None
@@ -416,8 +417,25 @@ class SelectionApiTests(unittest.TestCase):
             "repository_id": "repo-1", "instruction": "add hello",
             "model": "openai/gpt-5.4",
             "advisor_model": "openai/gpt-5.4"})
-        self.assertEqual(r.status_code, 422, r.text)
-        self.assertIn("distinct", r.text)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["model"], "openai/gpt-5.4")
+        self.assertEqual(r.json()["advisor_model"], "openai/gpt-5.4")
+
+    def test_single_model_allowlist_can_create_job_with_same_role_model(self):
+        import gnsis.service.settings as settings_mod
+        import gnsis.service.tasks as tasks
+
+        tasks.run_job.delay = lambda *a, **k: None
+        settings_mod._settings = None
+        import os
+        os.environ["GNSIS_RUN_ALLOWED_MODELS"] = "anthropic/claude-opus-4.8"
+        r = self.client.post("/jobs", json={
+            "repository_id": "repo-1", "instruction": "add hello",
+            "model": "anthropic/claude-opus-4.8",
+            "advisor_model": "anthropic/claude-opus-4.8"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["model"], "anthropic/claude-opus-4.8")
+        self.assertEqual(r.json()["advisor_model"], "anthropic/claude-opus-4.8")
 
 
 if __name__ == "__main__":

@@ -40,8 +40,8 @@ class JobSpec:
     model: Optional[str] = None
     # User-selected Advisor model (also validated against the server allowlist).
     # Powers the ``openrouter:advisor`` server tool the gateway appends; it is
-    # a distinct model from ``model`` so a lightweight primary can consult a
-    # stronger reviewer. None on legacy rows and on internal/test runs.
+    # a separate role from ``model``; the same model id is valid in one-model
+    # deployments. None on legacy rows and on internal/test runs.
     advisor_model: Optional[str] = None
 
 

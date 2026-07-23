@@ -195,13 +195,13 @@ class CreateJobRequest(BaseModel):
     repository_id: str
     instruction: str
     base_branch: Optional[str] = None
-    # The user-selected OpenRouter model. Validated against the server allowlist;
-    # an unsupported model is rejected. Omitted → the configured default.
+    # The user-selected OpenRouter model. Required for new user runs and
+    # validated against the server allowlist.
     model: Optional[str] = None
     # The user-selected Advisor model. Also validated against the server
     # allowlist. Powers the ``openrouter:advisor`` server tool the gateway
-    # appends; a distinct field from ``model`` so a lightweight primary can
-    # consult a stronger reviewer. Omitted → the configured default.
+    # appends; a separate role field from ``model``. It may contain the same
+    # model id, but is independently required and allowlist-validated.
     advisor_model: Optional[str] = None
     # Deprecated: internal framework choice, no longer surfaced to users. Ignored
     # for model selection; kept so old clients don't 422.
@@ -821,8 +821,8 @@ def create_job(
     if inst.status == "suspended":
         raise HTTPException(status_code=409, detail="repository installation is suspended")
 
-    # New user-created runs fail closed: both primary and Advisor models are
-    # required, distinct, and validated against the same server allowlist.
+    # New user-created runs fail closed: both primary and Advisor model roles
+    # are required and independently validated against the server allowlist.
     # The two models are validated with the same allowlist because the
     # openrouter:advisor server tool has to be able to invoke the Advisor
     # exactly the same way the primary is invoked.
@@ -842,8 +842,6 @@ def create_job(
             status_code=422,
             detail=f"advisor_model '{req.advisor_model}' is not available",
         )
-    if selected_model == selected_advisor:
-        raise HTTPException(status_code=422, detail="model and advisor_model must be distinct")
 
     spec = JobSpec(
         repo=repo.full_name,

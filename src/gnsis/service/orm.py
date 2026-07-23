@@ -146,7 +146,8 @@ class Job(Base):
     # The user-selected Advisor model, also validated against the server
     # allowlist. Powers the ``openrouter:advisor`` server tool the gateway
     # appends; a distinct value from ``model`` so a lightweight primary can
-    # consult a stronger reviewer. Nullable so historical rows remain readable.
+    # consult a reviewer. The same model id as ``model`` is valid. Nullable so
+    # historical rows remain readable.
     advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
