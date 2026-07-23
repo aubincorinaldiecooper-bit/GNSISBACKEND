@@ -16,13 +16,16 @@ URL is never, on its own, treated as proof of ownership.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List
 
-from . import workspaces
+from . import welcome_credits, workspaces
 from .auth_client import AuthServiceClient
 from .github_app import GitHubApp, list_installation_repositories
 from .workspaces import InstallationRecord, RepositoryRecord
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,16 @@ def claim_installation(
 
     installation = workspaces.upsert_installation(workspace.id, verified)
     repos = _sync(workspace.id, installation, github_app)
+
+    # The welcome credit is a follow-on to a successful claim, not a
+    # precondition. Idempotency inside the credit service handles retries,
+    # reconnections, and additional installations. A grant failure must never
+    # abort the connection — connection succeeded above.
+    try:
+        welcome_credits.try_grant(workspace.id)
+    except Exception:  # pragma: no cover - defensive log-only
+        _log.exception("welcome_credit grant errored for workspace %s", workspace.id)
+
     return ClaimResult(installation=installation, repositories=repos)
 
 

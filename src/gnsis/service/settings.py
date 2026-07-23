@@ -165,6 +165,30 @@ class Settings:
     # finger). A grant above this is rejected. Not a per-workspace lifetime cap.
     beta_credit_max_usd: str = "50.00"
 
+    # -- automatic welcome credit --------------------------------------------
+    # A one-time credit granted to a workspace after its first verified GitHub
+    # App claim. Idempotent per (workspace, campaign) — retries, reconnections,
+    # and second installations never double-grant. Distinct from operator beta
+    # grants: those are manual & per-request, this is user-triggered but fully
+    # server-controlled.
+    welcome_credit_enabled: bool = False
+    # Total dollars granted per eligible workspace. Never exceeds
+    # ``beta_credit_max_usd`` (the shared ceiling).
+    welcome_credit_usd: str = "5.00"
+    # Advertised per-run cap for welcome-credit-funded runs. The effective per-run
+    # cost cap is still ``run_max_cost_usd`` — this value documents the SLA and
+    # must not exceed it, so an operator can't promise more than the platform
+    # will actually allow.
+    welcome_credit_per_run_usd: str = "0.50"
+    # Campaign identifier included in the grant reason + idempotency key. A new
+    # campaign lets past-eligible workspaces receive a fresh credit; changing it
+    # is deliberate operator action, not a side effect of a bug.
+    welcome_credit_campaign: str = "beta-2026-07"
+    # Platform-wide daily provider-spend ceiling. Sum of welcome grants over the
+    # last 24 hours; further grants are silently skipped when reaching it (never
+    # errored — the GitHub claim itself must always succeed). Empty = no ceiling.
+    platform_daily_provider_limit_usd: str = ""
+
     # Optional server-side pepper mixed into the Genesis virtual-key hash. Keys are
     # high-entropy so plain SHA-256 is sufficient; a pepper adds defence-in-depth
     # if the key_hash column ever leaks. Rotating it invalidates existing keys.
@@ -358,6 +382,12 @@ class Settings:
             raw = os.environ.get(name)
             return float(raw) if raw not in (None, "") else default
 
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (os.environ.get(name) or "").strip().lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
         return cls(
             database_url=_normalize_db_url(database_url),
             redis_url=redis_url,
@@ -423,6 +453,17 @@ class Settings:
             stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
             balance_reserve_estimate_usd=os.environ.get("GNSIS_BALANCE_RESERVE_ESTIMATE_USD", "0.05"),
             beta_credit_max_usd=os.environ.get("GNSIS_BETA_CREDIT_MAX_USD", "50.00"),
+            welcome_credit_enabled=_bool("GNSIS_WELCOME_CREDIT_ENABLED", False),
+            welcome_credit_usd=os.environ.get("GNSIS_WELCOME_CREDIT_USD", "5.00"),
+            welcome_credit_per_run_usd=os.environ.get(
+                "GNSIS_WELCOME_CREDIT_PER_RUN_USD", "0.50"
+            ),
+            welcome_credit_campaign=os.environ.get(
+                "GNSIS_WELCOME_CREDIT_CAMPAIGN", "beta-2026-07"
+            ),
+            platform_daily_provider_limit_usd=os.environ.get(
+                "GNSIS_PLATFORM_DAILY_PROVIDER_LIMIT_USD", ""
+            ),
             virtual_key_pepper=os.environ.get("GNSIS_VIRTUAL_KEY_PEPPER", ""),
         )
 
