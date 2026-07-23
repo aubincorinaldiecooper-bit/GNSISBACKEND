@@ -9,6 +9,28 @@ count / token totals / dollar spend are enforced atomically in the store. Usage
 is recorded on every call and attached to the run receipt; a call that pushes the
 run over budget revokes the token so no further calls succeed. It is deliberately
 not a general HTTP proxy — no client-chosen upstream, no path but chat-completions.
+
+Server-controlled tools
+=======================
+
+For a **primary** agent call, the gateway *appends* two server-controlled tools
+before forwarding to OpenRouter:
+
+* ``openrouter:web_search`` — the primary can search the web on demand.
+* ``openrouter:advisor`` — the primary can consult an Advisor model (pinned to
+  the run's ``advisor_model``, fixed by the server so the primary cannot swap
+  it). The Advisor definition includes its OWN nested ``openrouter:web_search``.
+
+Both tools are OpenRouter-native — the search API key stays with OpenRouter and
+the executor sandbox never sees any external search endpoint. **Client-supplied
+``openrouter:*`` tools are rejected** with a structured error so a compromised
+prompt / repository / sandbox cannot smuggle in an alternate Advisor model or
+weaken the search configuration.
+
+For a **condenser** call (context compaction, tagged by the client), the gateway
+appends *nothing*: condensation is a plain model call, so its usage is trackable
+separately from primary-agent work. The tool-rejection is still enforced, so the
+condenser call can't smuggle in an Advisor either.
 """
 
 from __future__ import annotations
@@ -128,6 +150,136 @@ def _litellm_upstream(settings, payload: Dict[str, Any], metadata: Dict[str, Any
         raise GatewayError(f"upstream unreachable: {exc.reason}", status=502) from exc
 
 
+# --- Server-controlled tool injection --------------------------------------
+#
+# The primary agent's coding tools are ordinary function tools ("function":
+# {...}). The server appends TWO more, marked with an OpenRouter-native ``type``
+# prefix (``openrouter:``) that OpenRouter interprets natively. The prefix is
+# also the security marker: **any client-supplied tool whose type starts with
+# ``openrouter:`` is refused**, so a compromised prompt/repo/sandbox can never
+# smuggle in an alternate Advisor model or weaker Web Search configuration.
+
+#: Advertised call purposes. Primary agent calls receive Web Search + Advisor.
+#: Condenser calls (context compaction) do NOT — they are plain model calls so
+#: their usage is trackable separately.
+CALL_PURPOSE_PRIMARY = "primary"
+CALL_PURPOSE_CONDENSER = "condenser"
+_VALID_CALL_PURPOSES = frozenset({CALL_PURPOSE_PRIMARY, CALL_PURPOSE_CONDENSER})
+
+#: The exact web-search config both the primary and the Advisor use. Values
+#: match the sprint's approved product decision — ``search_context_size`` is
+#: deliberately NOT set so OpenRouter's adaptive default applies.
+_WEB_SEARCH_TOOL: Dict[str, Any] = {
+    "type": "openrouter:web_search",
+    "engine": "auto",
+    "max_results": 5,
+    "max_total_results": 10,
+}
+
+#: The Advisor's system prompt (concise; the Advisor is a code-review peer, not
+#: the primary's replacement).
+_ADVISOR_INSTRUCTIONS = (
+    "You are a concise senior software architect and code reviewer. When the "
+    "primary agent consults you, provide a focused, actionable opinion: name "
+    "the specific risk or design consideration, and give one clear "
+    "recommendation. Do not restate the primary's plan back to it. If you are "
+    "uncertain, say so plainly."
+)
+
+
+def _resolve_call_purpose(body: Dict[str, Any]) -> str:
+    """Read the client-declared call purpose; default to primary.
+
+    The purpose is set by the executor sandbox (never inferred from prompt
+    content) and travels in the request's ``metadata`` so a compromised primary
+    cannot claim to be a condenser after the fact to skip the tools — the
+    gateway metering treats condenser calls separately regardless.
+    """
+    md = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    raw = str(md.get("call_purpose") or CALL_PURPOSE_PRIMARY).strip().lower()
+    return raw if raw in _VALID_CALL_PURPOSES else CALL_PURPOSE_PRIMARY
+
+
+def _reject_client_openrouter_tools(tools: Any) -> None:
+    """Refuse any client-supplied tool whose type begins with ``openrouter:``.
+
+    Only the server may declare openrouter-native tools; the prefix is
+    reserved so the repository / user prompt / sandbox cannot smuggle in an
+    alternate Advisor model, a weakened Web Search config, or a masqueraded
+    server tool.
+    """
+    if not isinstance(tools, list):
+        return
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        ttype = str(tool.get("type") or "").strip().lower()
+        if ttype.startswith("openrouter:"):
+            raise GatewayError(
+                f"client cannot declare server-controlled tool type: {ttype}",
+                status=400,
+            )
+
+
+def _pick_advisor_model(run: ExecutionRunRecord, settings) -> Optional[str]:
+    """The Advisor model, pinned on the run (never read from the request body).
+
+    Falls back to the primary_model (which was itself validated) if a legacy
+    run has no Advisor recorded, so historical runs remain replayable.
+    Returns None only if the run has neither pinned — in which case the
+    Advisor tool is silently omitted for that call.
+    """
+    advisor = getattr(run, "advisor_model", None)
+    if advisor and advisor in (settings.run_allowed_models or []):
+        return advisor
+    primary = getattr(run, "primary_model", None)
+    if primary and primary in (settings.run_allowed_models or []):
+        return primary
+    return None
+
+
+def _advisor_tool(advisor_model: str) -> Dict[str, Any]:
+    """The openrouter:advisor tool definition — model is FIXED by the server."""
+    return {
+        "type": "openrouter:advisor",
+        "name": "advisor",
+        "description": (
+            "Consult a senior software architect for a focused second opinion. "
+            "Provide only the relevant context in the prompt — the Advisor does "
+            "not see the primary transcript."
+        ),
+        # The Advisor's model is baked into the tool definition here; the
+        # primary cannot replace it in a tool call because OpenRouter binds the
+        # tool config server-side to what the gateway sent, not to what the
+        # primary later references.
+        "model": advisor_model,
+        "forward_transcript": False,
+        "max_tool_calls": 4,
+        "max_completion_tokens": 4096,
+        "instructions": _ADVISOR_INSTRUCTIONS,
+        # The Advisor has its own nested Web Search so it can research current
+        # APIs and dependencies independently — its search activity is metered
+        # separately (recorded from OpenRouter usage details).
+        "tools": [dict(_WEB_SEARCH_TOOL)],
+    }
+
+
+def _inject_server_tools(payload: Dict[str, Any], run: ExecutionRunRecord, settings) -> None:
+    """Append the server-controlled tools to a primary-agent call.
+
+    The client's OpenHands function tools are preserved verbatim (they carry
+    the coding actions: terminal, file editor, task tracker). We only *append*
+    — never mutate a client tool — so the client's tool set stays intact and
+    the appended entries are visibly server-owned.
+    """
+    tools = list(payload.get("tools") or [])
+    tools.append(dict(_WEB_SEARCH_TOOL))
+    advisor = _pick_advisor_model(run, settings)
+    if advisor:
+        tools.append(_advisor_tool(advisor))
+    payload["tools"] = tools
+
+
 def handle_chat_completion(
     settings,
     store: ExecutionStore,
@@ -186,9 +338,22 @@ def handle_chat_completion(
             BillingStore().release(event_id)
         raise GatewayError(f"model budget: {reason}", status=402)
 
+    # Reject any client-supplied openrouter:* tool BEFORE building the payload,
+    # so a smuggled server-tool masquerade never reaches OpenRouter — even
+    # for a condenser call where we would otherwise pass the tools through.
+    _reject_client_openrouter_tools(body.get("tools"))
+
     # Build a sanitised upstream payload — only known fields, forced model.
     payload = {k: body[k] for k in _FORWARD_FIELDS if k in body}
     payload["model"] = model
+
+    # Append the server-controlled tools (Web Search + Advisor) for primary
+    # agent calls only. Condenser calls stay plain so their usage is trackable
+    # separately from primary-agent work — a condenser must not consult the
+    # Advisor or hit the web.
+    call_purpose = _resolve_call_purpose(body)
+    if call_purpose == CALL_PURPOSE_PRIMARY:
+        _inject_server_tools(payload, run, settings)
 
     try:
         if upstream is not None:

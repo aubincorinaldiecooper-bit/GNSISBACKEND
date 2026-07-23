@@ -198,6 +198,11 @@ class CreateJobRequest(BaseModel):
     # The user-selected OpenRouter model. Validated against the server allowlist;
     # an unsupported model is rejected. Omitted → the configured default.
     model: Optional[str] = None
+    # The user-selected Advisor model. Also validated against the server
+    # allowlist. Powers the ``openrouter:advisor`` server tool the gateway
+    # appends; a distinct field from ``model`` so a lightweight primary can
+    # consult a stronger reviewer. Omitted → the configured default.
+    advisor_model: Optional[str] = None
     # Deprecated: internal framework choice, no longer surfaced to users. Ignored
     # for model selection; kept so old clients don't 422.
     engine: Optional[str] = None
@@ -217,6 +222,7 @@ class JobResponse(BaseModel):
     base_branch: str
     engine: str
     model: Optional[str] = None
+    advisor_model: Optional[str] = None
     status: str
     branch: Optional[str]
     error: Optional[str]
@@ -756,13 +762,23 @@ def create_job(
     if inst.status == "suspended":
         raise HTTPException(status_code=409, detail="repository installation is suspended")
 
-    # Validate the selected model against the server allowlist. An explicit
+    # Validate both selected models against the server allowlist. An explicit
     # unsupported model is rejected (422); an omitted model uses the default.
+    # The two models are validated with the same allowlist because the
+    # openrouter:advisor server tool has to be able to invoke the Advisor
+    # exactly the same way the primary is invoked.
     from .model_catalog import resolve_allowed_model
 
     selected_model = resolve_allowed_model(settings, req.model)
     if req.model and selected_model is None:
         raise HTTPException(status_code=422, detail=f"model '{req.model}' is not available")
+
+    selected_advisor = resolve_allowed_model(settings, req.advisor_model)
+    if req.advisor_model and selected_advisor is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"advisor_model '{req.advisor_model}' is not available",
+        )
 
     spec = JobSpec(
         repo=repo.full_name,
@@ -770,6 +786,7 @@ def create_job(
         base_branch=req.base_branch or repo.default_branch or settings.default_base_branch,
         engine=req.engine or settings.default_engine,
         model=selected_model,
+        advisor_model=selected_advisor,
         workspace_id=workspace.id,
         repository_id=repo.id,
     )
@@ -1005,6 +1022,7 @@ def _to_response(job) -> JobResponse:
         base_branch=job.base_branch,
         engine=job.engine,
         model=getattr(job, "model", None),
+        advisor_model=getattr(job, "advisor_model", None),
         status=job.status,
         branch=job.branch,
         error=job.error,

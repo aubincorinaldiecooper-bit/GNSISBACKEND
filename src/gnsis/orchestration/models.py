@@ -38,6 +38,11 @@ class JobSpec:
     # User-selected OpenRouter model (validated against the server allowlist);
     # None falls back to the configured default at dispatch.
     model: Optional[str] = None
+    # User-selected Advisor model (also validated against the server allowlist).
+    # Powers the ``openrouter:advisor`` server tool the gateway appends; it is
+    # a distinct model from ``model`` so a lightweight primary can consult a
+    # stronger reviewer. None on legacy rows and on internal/test runs.
+    advisor_model: Optional[str] = None
 
 
 @dataclass
@@ -59,6 +64,7 @@ class JobRecord:
     workspace_id: Optional[str] = None
     repository_id: Optional[str] = None
     model: Optional[str] = None
+    advisor_model: Optional[str] = None
 
 
 @dataclass

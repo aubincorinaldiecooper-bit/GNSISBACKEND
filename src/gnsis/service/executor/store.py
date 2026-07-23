@@ -87,6 +87,8 @@ def _to_record(row: orm.ExecutionRun) -> ExecutionRunRecord:
         policy_version=row.policy_version,
         policy_hash=row.policy_hash,
         memory_ids=list(row.memory_ids or []),
+        primary_model=getattr(row, "primary_model", None),
+        advisor_model=getattr(row, "advisor_model", None),
     )
 
 
@@ -114,6 +116,8 @@ class ExecutionStore:
         policy_version: Optional[int] = None,
         policy_hash: Optional[str] = None,
         memory_ids: Optional[List[str]] = None,
+        primary_model: Optional[str] = None,
+        advisor_model: Optional[str] = None,
     ) -> ExecutionRunRecord:
         run_id = new_id("exec")
         with session_scope() as s:
@@ -142,6 +146,8 @@ class ExecutionStore:
                 policy_version=policy_version,
                 policy_hash=policy_hash,
                 memory_ids=list(memory_ids) if memory_ids else None,
+                primary_model=primary_model,
+                advisor_model=advisor_model,
             )
             s.add(row)
             for memory_id in list(memory_ids or []):

@@ -143,6 +143,11 @@ class Job(Base):
     # server allowlist at creation. Nullable: legacy jobs and jobs created before
     # model selection fall back to the configured default at dispatch.
     model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # The user-selected Advisor model, also validated against the server
+    # allowlist. Powers the ``openrouter:advisor`` server tool the gateway
+    # appends; a distinct value from ``model`` so a lightweight primary can
+    # consult a stronger reviewer. Nullable so historical rows remain readable.
+    advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -323,6 +328,13 @@ class ExecutionRun(Base):
     policy_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     policy_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     memory_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    # Pinned Advisor model — the gateway reads this authoritatively (never from
+    # the executor's request body) when it injects the openrouter:advisor server
+    # tool, so a compromised primary agent cannot pick a different Advisor. Both
+    # nullable: legacy runs dispatched before Advisor selection carry none.
+    primary_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(

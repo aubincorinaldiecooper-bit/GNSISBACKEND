@@ -80,6 +80,24 @@ def run_name_for(job_id: str) -> str:
     return f"gnsis-run {job_id}"
 
 
+def _pinned_model(settings, requested: Optional[str], *, fallback_to_default: bool) -> Optional[str]:
+    """Resolve a user-requested model against the server allowlist for pinning.
+
+    Both the primary and Advisor use the SAME allowlist. A disallowed request
+    falls back to the configured default rather than widening the allowlist; a
+    missing request also falls back so historical rows / test paths still work.
+    Returns None only if there is no default and no valid request.
+    """
+    from ..model_catalog import default_model, resolve_allowed_model
+
+    resolved = resolve_allowed_model(settings, requested) if requested else None
+    if resolved is not None:
+        return resolved
+    if not fallback_to_default:
+        return None
+    return default_model(settings)
+
+
 def budgets_from_settings(settings) -> Budgets:
     return Budgets(
         max_model_calls=settings.run_max_model_calls,
@@ -188,6 +206,16 @@ def dispatch_execution(
         policy_version=policy.version if policy else None,
         policy_hash=policy.content_hash if policy else None,
         memory_ids=memory_selection.memory_ids if memory_selection else None,
+        # Pin the primary + advisor model on the run (the gateway reads
+        # advisor_model authoritatively when it injects openrouter:advisor —
+        # never from the executor's request body). Both re-validate against
+        # the server allowlist.
+        primary_model=_pinned_model(
+            settings, getattr(job, "model", None), fallback_to_default=True
+        ),
+        advisor_model=_pinned_model(
+            settings, getattr(job, "advisor_model", None), fallback_to_default=True
+        ),
     )
 
     # 4b) Record the pinned policy + memory selection on the native event ledger.

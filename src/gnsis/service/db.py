@@ -55,6 +55,9 @@ _ADDITIVE_COLUMNS = [
     ("jobs", "repository_id", "VARCHAR(64)"),
     # User-selected OpenRouter model (validated against the server allowlist).
     ("jobs", "model", "VARCHAR(128)"),
+    # User-selected Advisor model — powers the openrouter:advisor server tool.
+    # Nullable so historical rows created before Advisor selection stay readable.
+    ("jobs", "advisor_model", "VARCHAR(128)"),
     # LiteLLM correlation key on the existing model-call table.
     ("execution_model_calls", "event_id", "VARCHAR(64)"),
     # Ledger-integrity fields on the append-only usage ledger (PR-G1): explicit
@@ -82,6 +85,10 @@ _ADDITIVE_COLUMNS = [
     ("execution_runs", "policy_version", "INTEGER"),
     ("execution_runs", "policy_hash", "VARCHAR(64)"),
     ("execution_runs", "memory_ids", "JSON"),
+    # Pinned primary + advisor model per run. The gateway reads advisor_model
+    # authoritatively to fix the openrouter:advisor server tool definition.
+    ("execution_runs", "primary_model", "VARCHAR(128)"),
+    ("execution_runs", "advisor_model", "VARCHAR(128)"),
 ]
 
 
