@@ -118,21 +118,30 @@ class RepositorySyncTests(unittest.TestCase):
             self.inst.id,
             [self._gh(10, "o/a"), self._gh(11, "o/b", private=True)],
         )
-        repos = list_repositories(self.ws.id)
+        # Newly discovered repos default to DISABLED (the user enables them
+        # deliberately), so they appear only when disabled rows are included.
+        self.assertEqual(list_repositories(self.ws.id), [])
+        repos = list_repositories(self.ws.id, include_disabled=True)
         self.assertEqual({r.full_name for r in repos}, {"o/a", "o/b"})
+        self.assertTrue(all(not r.enabled for r in repos))
         b = next(r for r in repos if r.full_name == "o/b")
         self.assertTrue(b.private)
 
     def test_removed_repo_is_disabled_not_deleted(self):
         from gnsis.service.workspaces import (
             list_repositories,
+            set_repository_enabled,
             sync_repositories,
         )
 
-        sync_repositories(
+        repos = sync_repositories(
             self.ws.id, self.inst.id, [self._gh(10, "o/a"), self._gh(11, "o/b")]
         )
-        # Second sync drops o/b.
+        # The user enables both (sync defaults them disabled).
+        for r in repos:
+            set_repository_enabled(self.ws.id, r.id, True)
+        # Second sync drops o/b — it must be disabled (removed from access) while
+        # o/a keeps the user's enabled choice.
         sync_repositories(self.ws.id, self.inst.id, [self._gh(10, "o/a")])
         enabled = list_repositories(self.ws.id)
         self.assertEqual({r.full_name for r in enabled}, {"o/a"})

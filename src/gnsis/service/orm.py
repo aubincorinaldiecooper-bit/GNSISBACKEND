@@ -139,6 +139,10 @@ class Job(Base):
     instruction: Mapped[str] = mapped_column(Text)
     base_branch: Mapped[str] = mapped_column(String(255), default="main")
     engine: Mapped[str] = mapped_column(String(64), default="claude")
+    # The user-selected OpenRouter model for this job, validated against the
+    # server allowlist at creation. Nullable: legacy jobs and jobs created before
+    # model selection fall back to the configured default at dispatch.
+    model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     branch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

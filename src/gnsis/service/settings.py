@@ -7,6 +7,7 @@ heavy dependency, so it can be inspected (and unit-tested) on its own.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -19,6 +20,18 @@ EXECUTION_PROVIDER_GITHUB_ACTIONS = "github_actions"
 
 #: Models a run may call through the gateway when none is configured explicitly.
 DEFAULT_ALLOWED_MODELS: List[str] = ["anthropic/claude-opus-4.8"]
+
+
+def _parse_json_env(name: str) -> dict:
+    """Parse an optional JSON-object env var; return {} when unset/invalid."""
+    raw = os.environ.get(name)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _normalize_db_url(url: str) -> str:
@@ -130,6 +143,11 @@ class Settings:
     run_allowed_models: List[str] = field(
         default_factory=lambda: list(DEFAULT_ALLOWED_MODELS)
     )
+    # Optional operator-supplied display metadata for the user-facing model
+    # catalog, keyed by model id: {label, description, provider, speed_tier,
+    # cost_tier, context_window}. A model without an entry falls back to its id.
+    # The catalog NEVER lists a model that is not in run_allowed_models.
+    model_metadata: dict = field(default_factory=dict)
 
     # Which Railway service this process is: "api", "worker" or "beat". Drives which
     # settings are required at startup. Defaults to "api". Production must run
@@ -409,6 +427,7 @@ class Settings:
             run_max_output_tokens=_int("GNSIS_RUN_MAX_OUTPUT_TOKENS", 100_000),
             run_max_cost_usd=_float("GNSIS_RUN_MAX_COST_USD", 3.00),
             run_allowed_models=allowed_models,
+            model_metadata=_parse_json_env("GNSIS_MODEL_METADATA"),
             service_role=os.environ.get("GNSIS_SERVICE_ROLE", "api"),
             litellm_url=os.environ.get("GNSIS_LITELLM_URL"),
             litellm_api_key=os.environ.get("GNSIS_LITELLM_API_KEY"),

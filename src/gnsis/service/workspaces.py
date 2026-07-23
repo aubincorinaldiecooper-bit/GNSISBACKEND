@@ -273,6 +273,11 @@ def sync_repositories(
                     workspace_id=workspace_id,
                     github_installation_record_id=installation_record_id,
                     github_repository_id=gh_id,
+                    # Newly discovered repos start DISABLED. GitHub App access only
+                    # means GNSIS *can see* the repo; the user must explicitly
+                    # enable the ones they want (during onboarding / in Settings)
+                    # before runs are allowed.
+                    enabled=False,
                 )
                 s.add(row)
             row.github_installation_record_id = installation_record_id
@@ -282,7 +287,9 @@ def sync_repositories(
             row.default_branch = gh.get("default_branch") or "main"
             row.private = bool(gh.get("private", False))
             row.archived = bool(gh.get("archived", False))
-            row.enabled = True
+            # Deliberately DO NOT touch ``enabled`` on an existing row — a later
+            # sync must never silently re-enable a repo the user disabled, nor
+            # disable one they enabled. Only the explicit toggle changes it.
 
         # Disable repos previously synced for this installation but now absent.
         stored = (
@@ -323,6 +330,56 @@ def get_repository(workspace_id: str, repository_id: str) -> Optional[Repository
         if row is None or row.workspace_id != workspace_id:
             return None
         return _repo_record(row)
+
+
+def set_repository_enabled(
+    workspace_id: str, repository_id: str, enabled: bool
+) -> Optional[RepositoryRecord]:
+    """Enable/disable a repo for new runs. Returns None if unknown/cross-workspace.
+
+    Updates ONLY the ``enabled`` flag — repository identity and all historical
+    jobs/receipts are untouched, so disabling never erases history.
+    """
+    with session_scope() as s:
+        row = s.get(orm.Repository, repository_id)
+        if row is None or row.workspace_id != workspace_id:
+            return None
+        row.enabled = bool(enabled)
+        s.flush()
+        return _repo_record(row)
+
+
+def list_repositories_page(
+    workspace_id: str,
+    *,
+    enabled_only: bool = False,
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[RepositoryRecord]:
+    """Tenant-scoped, searchable, paginated repository listing.
+
+    ``enabled_only`` restricts to repos the user enabled (the New Run source).
+    ``search`` matches a substring of ``full_name`` (case-insensitive).
+    """
+    from sqlalchemy import func
+
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    with session_scope() as s:
+        q = s.query(orm.Repository).filter(orm.Repository.workspace_id == workspace_id)
+        if enabled_only:
+            q = q.filter(orm.Repository.enabled.is_(True))
+        term = (search or "").strip().lower()
+        if term:
+            q = q.filter(func.lower(orm.Repository.full_name).like(f"%{term}%"))
+        rows = (
+            q.order_by(orm.Repository.full_name)
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return [_repo_record(r) for r in rows]
 
 
 def remove_repositories_by_github_id(

@@ -195,6 +195,11 @@ class CreateJobRequest(BaseModel):
     repository_id: str
     instruction: str
     base_branch: Optional[str] = None
+    # The user-selected OpenRouter model. Validated against the server allowlist;
+    # an unsupported model is rejected. Omitted → the configured default.
+    model: Optional[str] = None
+    # Deprecated: internal framework choice, no longer surfaced to users. Ignored
+    # for model selection; kept so old clients don't 422.
     engine: Optional[str] = None
 
 
@@ -211,6 +216,7 @@ class JobResponse(BaseModel):
     instruction: str
     base_branch: str
     engine: str
+    model: Optional[str] = None
     status: str
     branch: Optional[str]
     error: Optional[str]
@@ -280,7 +286,10 @@ def me(
 ) -> dict:
     installs = ws.list_installations(workspace.id)
     active = [i for i in installs if i.status == "active"]
-    repos = ws.list_repositories(workspace.id)
+    # repository_count = repos GNSIS can *see* (GitHub App access), independent
+    # of enablement; enabled_repository_count = repos the user opted into for runs.
+    repos = ws.list_repositories(workspace.id, include_disabled=True)
+    enabled_repos = [r for r in repos if r.enabled]
     return {
         "user": {
             "id": user.subject,
@@ -293,6 +302,7 @@ def me(
             "connected": len(active) > 0,
             "installation_count": len(active),
             "repository_count": len(repos),
+            "enabled_repository_count": len(enabled_repos),
         },
     }
 
@@ -354,7 +364,10 @@ def list_virtual_keys(
 ) -> dict:
     from .virtual_keys import VirtualKeyStore
 
-    keys = VirtualKeyStore().list_for_workspace(workspace.id)
+    # User-facing list shows ACTIVE keys only. Rotated/disabled rows remain
+    # stored for usage attribution, audit, and reconciliation, but are never
+    # shown in the normal Settings key list.
+    keys = VirtualKeyStore().list_for_workspace(workspace.id, active_only=True)
     return {"items": [asdict(k) for k in keys]}
 
 
@@ -654,11 +667,75 @@ def sync_installation_route(
     }
 
 
+class SetRepositoryEnabledRequest(BaseModel):
+    enabled: bool
+
+
 @app.get("/v1/repositories")
 def list_repositories_route(
+    enabled_only: bool = False,
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
     workspace: WorkspaceRecord = Depends(current_workspace),
 ) -> list:
-    return [_repository_dict(r) for r in ws.list_repositories(workspace.id)]
+    """Searchable, paginated repositories for the caller's workspace.
+
+    Default returns all repos (enabled + disabled) so Settings can toggle them;
+    the New Run workflow passes ``enabled_only=true`` to source only enabled repos.
+    """
+    repos = ws.list_repositories_page(
+        workspace.id, enabled_only=enabled_only, search=q, limit=limit, offset=offset
+    )
+    return [_repository_dict(r) for r in repos]
+
+
+@app.patch("/v1/repositories/{repository_id}")
+def set_repository_enabled_route(
+    repository_id: str,
+    req: SetRepositoryEnabledRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Enable/disable a repository for new runs. 404 for unknown/cross-workspace."""
+    updated = ws.set_repository_enabled(workspace.id, repository_id, req.enabled)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="repository not found")
+    return _repository_dict(updated)
+
+
+@app.get("/v1/repositories/{repository_id}/branches")
+def list_repository_branches_route(
+    repository_id: str,
+    q: Optional[str] = None,
+    limit: int = 100,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    app_gh=Depends(get_github_app),
+) -> dict:
+    """Branches for a selected repository (server-side; token never exposed)."""
+    from .branches import BranchListError, list_repository_branches
+
+    try:
+        result = list_repository_branches(
+            get_settings(), app_gh,
+            workspace_id=workspace.id, repository_id=repository_id,
+            search=q, limit=limit,
+        )
+    except BranchListError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    if result is None:
+        raise HTTPException(status_code=404, detail="repository not found")
+    return result
+
+
+# -- models (user-facing catalog from the server allowlist) -------------------
+
+
+@app.get("/v1/models")
+def list_models_route(user: AuthedUser = Depends(current_user)) -> dict:
+    """The offerable OpenRouter models, derived from the server allowlist."""
+    from .model_catalog import model_catalog
+
+    return {"items": model_catalog(get_settings())}
 
 
 # -- jobs (user-facing, workspace-scoped) -------------------------------------
@@ -686,11 +763,20 @@ def create_job(
     if inst.status == "suspended":
         raise HTTPException(status_code=409, detail="repository installation is suspended")
 
+    # Validate the selected model against the server allowlist. An explicit
+    # unsupported model is rejected (422); an omitted model uses the default.
+    from .model_catalog import resolve_allowed_model
+
+    selected_model = resolve_allowed_model(settings, req.model)
+    if req.model and selected_model is None:
+        raise HTTPException(status_code=422, detail=f"model '{req.model}' is not available")
+
     spec = JobSpec(
         repo=repo.full_name,
         instruction=req.instruction,
         base_branch=req.base_branch or repo.default_branch or settings.default_base_branch,
         engine=req.engine or settings.default_engine,
+        model=selected_model,
         workspace_id=workspace.id,
         repository_id=repo.id,
     )
@@ -925,6 +1011,7 @@ def _to_response(job) -> JobResponse:
         instruction=job.instruction,
         base_branch=job.base_branch,
         engine=job.engine,
+        model=getattr(job, "model", None),
         status=job.status,
         branch=job.branch,
         error=job.error,

@@ -35,6 +35,9 @@ class JobSpec:
     # Tenancy — set for user runs; None for legacy/internal runs.
     workspace_id: Optional[str] = None
     repository_id: Optional[str] = None
+    # User-selected OpenRouter model (validated against the server allowlist);
+    # None falls back to the configured default at dispatch.
+    model: Optional[str] = None
 
 
 @dataclass
@@ -55,6 +58,7 @@ class JobRecord:
     # Tenancy — set for user runs; None for legacy/internal runs.
     workspace_id: Optional[str] = None
     repository_id: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass

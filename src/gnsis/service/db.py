@@ -53,6 +53,8 @@ def get_sessionmaker():
 _ADDITIVE_COLUMNS = [
     ("jobs", "workspace_id", "VARCHAR(64)"),
     ("jobs", "repository_id", "VARCHAR(64)"),
+    # User-selected OpenRouter model (validated against the server allowlist).
+    ("jobs", "model", "VARCHAR(128)"),
     # LiteLLM correlation key on the existing model-call table.
     ("execution_model_calls", "event_id", "VARCHAR(64)"),
     # Ledger-integrity fields on the append-only usage ledger (PR-G1): explicit

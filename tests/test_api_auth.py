@@ -183,7 +183,15 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
             headers=self.auth(sub),
         )
         repos = self.client.get("/v1/repositories", headers=self.auth(sub)).json()
-        return repos
+        # Repos now sync as DISABLED by default; enable them so the runnable-repo
+        # tests below can create jobs (the toggle route is exercised here too).
+        for r in repos:
+            self.client.patch(
+                f"/v1/repositories/{r['id']}",
+                json={"enabled": True},
+                headers=self.auth(sub),
+            )
+        return self.client.get("/v1/repositories", headers=self.auth(sub)).json()
 
     def test_repositories_listed_after_claim(self):
         repos = self._claim_and_get_repo()

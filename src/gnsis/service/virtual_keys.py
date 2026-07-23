@@ -234,15 +234,17 @@ class VirtualKeyStore:
             s.flush()
             return _view(row)
 
-    def list_for_workspace(self, workspace_id: str, *, limit: int = 100) -> List[VirtualKeyView]:
+    def list_for_workspace(
+        self, workspace_id: str, *, limit: int = 100, active_only: bool = False
+    ) -> List[VirtualKeyView]:
+        """List a workspace's keys. ``active_only`` (the user-facing default at the
+        route) hides rotated/disabled rows, which remain stored for attribution,
+        audit, and reconciliation but are never shown in the normal key list."""
         with session_scope() as s:
-            rows = (
-                s.query(orm.VirtualKey)
-                .filter(orm.VirtualKey.workspace_id == workspace_id)
-                .order_by(orm.VirtualKey.created_at.desc())
-                .limit(limit)
-                .all()
-            )
+            q = s.query(orm.VirtualKey).filter(orm.VirtualKey.workspace_id == workspace_id)
+            if active_only:
+                q = q.filter(orm.VirtualKey.status == "active")
+            rows = q.order_by(orm.VirtualKey.created_at.desc()).limit(limit).all()
             return [_view(r) for r in rows]
 
     def get(self, workspace_id: str, key_id: str) -> Optional[VirtualKeyView]:
