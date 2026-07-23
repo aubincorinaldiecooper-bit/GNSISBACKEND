@@ -109,6 +109,24 @@ class ExecutorGitHub:
         )
         return _json(status, body)
 
+    def list_branches(
+        self, owner: str, repo: str, token: str, *, per_page: int = 100, page: int = 1
+    ) -> List[Dict[str, Any]]:
+        """List branches for ``owner/repo`` (installation-token scoped).
+
+        Returns GitHub's raw branch objects (``name`` + ``commit`` + ``protected``).
+        The caller shapes the user-facing view and never leaks the token.
+        """
+        per_page = max(1, min(int(per_page), 100))
+        page = max(1, int(page))
+        status, _, body = _request(
+            "GET",
+            f"{_API}/repos/{owner}/{repo}/branches?per_page={per_page}&page={page}",
+            token=token,
+        )
+        data = _json(status, body)
+        return data if isinstance(data, list) else []
+
     def ref_sha(self, owner: str, repo: str, branch: str, token: str) -> str:
         """The exact commit SHA at the head of ``branch`` (immutable target)."""
         status, _, body = _request(

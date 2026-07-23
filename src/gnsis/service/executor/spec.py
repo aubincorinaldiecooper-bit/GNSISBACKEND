@@ -72,11 +72,16 @@ def _reconstruct_memory(job, run: ExecutionRunRecord) -> list:
 
 
 def build_run_spec(settings, job, run: ExecutionRunRecord) -> RunSpec:
-    model = job.engine if job.engine in ("gnsis",) else "gnsis"
+    # The user-selected model, re-validated against the server allowlist at
+    # dispatch (a stale/removed model falls back to the configured default —
+    # the allowlist is never widened here). ``allowed_models`` handed to the
+    # executor stays the full server-controlled set.
+    from ..model_catalog import default_model, resolve_allowed_model
+
     selected_model = (
-        settings.run_allowed_models[0]
-        if settings.run_allowed_models
-        else "anthropic/claude-opus-4.8"
+        resolve_allowed_model(settings, getattr(job, "model", None))
+        or default_model(settings)
+        or "anthropic/claude-opus-4.8"
     )
     return RunSpec(
         job_id=job.id,

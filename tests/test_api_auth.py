@@ -183,7 +183,15 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
             headers=self.auth(sub),
         )
         repos = self.client.get("/v1/repositories", headers=self.auth(sub)).json()
-        return repos
+        # Repos now sync as DISABLED by default; enable them so the runnable-repo
+        # tests below can create jobs (the toggle route is exercised here too).
+        for r in repos:
+            self.client.patch(
+                f"/v1/repositories/{r['id']}",
+                json={"enabled": True},
+                headers=self.auth(sub),
+            )
+        return self.client.get("/v1/repositories", headers=self.auth(sub)).json()
 
     def test_repositories_listed_after_claim(self):
         repos = self._claim_and_get_repo()
@@ -220,9 +228,14 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         )
         self.assertEqual(r.status_code, 404)
 
-    def test_disabled_repository_rejected(self):
+    def test_repository_removed_from_github_access_returns_404(self):
+        # A repository whose GitHub access was removed (``enabled=False`` after
+        # a resync that no longer included it) is a historical row: it must
+        # survive for past-job resolution but never accept new runs. From the
+        # user's point of view the repo isn't in their catalog, so 404 is the
+        # honest response — there is no user-controlled "disabled" toggle to
+        # explain.
         repos = self._claim_and_get_repo("user-1")
-        # Disable one repo directly, then try to run against it.
         from gnsis.service import orm
         from gnsis.service.db import session_scope
 
@@ -234,7 +247,7 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
             json={"repository_id": target, "instruction": "x"},
             headers=self.auth("user-1"),
         )
-        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.status_code, 404)
 
     def test_cross_workspace_job_access_is_404(self):
         repos = self._claim_and_get_repo("user-1")

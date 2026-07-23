@@ -45,6 +45,7 @@ def _job_to_record(row: orm.Job) -> JobRecord:
         context=dict(row.context or {}),
         workspace_id=row.workspace_id,
         repository_id=row.repository_id,
+        model=row.model,
     )
 
 
@@ -67,6 +68,7 @@ class PostgresJobStore:
                 context=dict(spec.context),
                 workspace_id=spec.workspace_id,
                 repository_id=spec.repository_id,
+                model=spec.model,
             )
             s.add(row)
             s.flush()

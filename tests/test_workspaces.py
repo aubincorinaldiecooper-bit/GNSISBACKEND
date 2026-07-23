@@ -118,24 +118,25 @@ class RepositorySyncTests(unittest.TestCase):
             self.inst.id,
             [self._gh(10, "o/a"), self._gh(11, "o/b", private=True)],
         )
+        # GitHub App access is the permission — a synced repo is immediately
+        # in the user-facing catalog, with no separate enable step.
         repos = list_repositories(self.ws.id)
         self.assertEqual({r.full_name for r in repos}, {"o/a", "o/b"})
         b = next(r for r in repos if r.full_name == "o/b")
         self.assertTrue(b.private)
 
-    def test_removed_repo_is_disabled_not_deleted(self):
-        from gnsis.service.workspaces import (
-            list_repositories,
-            sync_repositories,
-        )
+    def test_removed_repo_is_marked_unavailable_not_deleted(self):
+        from gnsis.service.workspaces import list_repositories, sync_repositories
 
+        # First sync: both accessible.
         sync_repositories(
             self.ws.id, self.inst.id, [self._gh(10, "o/a"), self._gh(11, "o/b")]
         )
-        # Second sync drops o/b.
+        # Second sync drops o/b — it must disappear from the catalog while
+        # the row itself survives so historical jobs still resolve.
         sync_repositories(self.ws.id, self.inst.id, [self._gh(10, "o/a")])
-        enabled = list_repositories(self.ws.id)
-        self.assertEqual({r.full_name for r in enabled}, {"o/a"})
+        catalog = list_repositories(self.ws.id)
+        self.assertEqual({r.full_name for r in catalog}, {"o/a"})
         all_repos = list_repositories(self.ws.id, include_disabled=True)
         self.assertEqual({r.full_name for r in all_repos}, {"o/a", "o/b"})
         b = next(r for r in all_repos if r.full_name == "o/b")
