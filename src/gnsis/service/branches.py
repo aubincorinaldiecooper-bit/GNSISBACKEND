@@ -3,9 +3,14 @@
 The browser never talks to GitHub with privileged credentials. This runs
 server-side: it verifies the repo belongs to the caller's workspace and its
 installation is still active, mints a **least-privilege, short-lived**
-installation token (``metadata:read`` on that one repo), lists branches, and
-returns only branch names — never the token. Failures for suspended, deleted,
-inaccessible, or rate-limited installations surface as safe user-facing messages.
+installation token scoped to that one repo, lists branches, and returns only
+branch names — never the token. Failures for suspended, deleted, inaccessible,
+or rate-limited installations surface as safe user-facing messages.
+
+The token requests ``contents:read`` (the same read permission the source /
+archive path uses): GitHub's List-branches endpoint returns 403 for a token
+narrowed to only ``metadata:read`` on **private** repositories, so branch
+selection for the private repos this workflow supports needs ``contents:read``.
 """
 
 from __future__ import annotations
@@ -61,7 +66,10 @@ def list_repository_branches(
         token_data = gh.scoped_installation_token(
             inst.github_installation_id,
             repositories=[repo.name],
-            permissions={"metadata": "read"},
+            # ``contents:read`` (not just ``metadata:read``) — List branches 403s
+            # for a metadata-only token on private repos. Same read scope as the
+            # source/archive path; still narrowed to this one repo, read-only.
+            permissions={"contents": "read"},
         )
         token = token_data["token"]
         raw = gh.list_branches(repo.owner, repo.name, token)

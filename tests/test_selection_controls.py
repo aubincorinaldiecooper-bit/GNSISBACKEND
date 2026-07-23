@@ -199,7 +199,9 @@ class BranchListingServiceTests(unittest.TestCase):
         self.assertTrue(result["branches"][0]["is_default"])
         # Correct installation + least-privilege scope used.
         self.assertEqual(captured["installation_id"], 555)
-        self.assertEqual(captured["permissions"], {"metadata": "read"})
+        # contents:read (not metadata-only) — List branches 403s for a
+        # metadata-only token on private repos.
+        self.assertEqual(captured["permissions"], {"contents": "read"})
         self.assertEqual(captured["owner_repo"], ("octo", "alpha"))
         # The token is never part of the returned data.
         self.assertNotIn("super-secret-token", str(result))
