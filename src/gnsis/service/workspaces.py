@@ -247,9 +247,14 @@ def sync_repositories(
 ) -> List[RepositoryRecord]:
     """Reconcile stored repositories with the installation's current set.
 
-    Repos present in ``github_repos`` are upserted and (re)enabled; stored repos
-    for this installation that are absent are marked disabled (never deleted, so
-    historical runs survive).
+    GitHub App access IS the permission. A repository accessible through the
+    installation is immediately available for runs; a repository no longer
+    accessible is marked unavailable (never deleted, so historical jobs,
+    receipts and intelligence remain intact and queryable).
+
+    The stored ``enabled`` column mirrors current GitHub access exactly. It is
+    NOT a second user permission surface — the sync writes it, the user does
+    not toggle it.
     """
     seen_github_ids = set()
     with session_scope() as s:
@@ -273,11 +278,7 @@ def sync_repositories(
                     workspace_id=workspace_id,
                     github_installation_record_id=installation_record_id,
                     github_repository_id=gh_id,
-                    # Newly discovered repos start DISABLED. GitHub App access only
-                    # means GNSIS *can see* the repo; the user must explicitly
-                    # enable the ones they want (during onboarding / in Settings)
-                    # before runs are allowed.
-                    enabled=False,
+                    enabled=True,
                 )
                 s.add(row)
             row.github_installation_record_id = installation_record_id
@@ -287,11 +288,15 @@ def sync_repositories(
             row.default_branch = gh.get("default_branch") or "main"
             row.private = bool(gh.get("private", False))
             row.archived = bool(gh.get("archived", False))
-            # Deliberately DO NOT touch ``enabled`` on an existing row — a later
-            # sync must never silently re-enable a repo the user disabled, nor
-            # disable one they enabled. Only the explicit toggle changes it.
+            # Currently accessible through GitHub → available for runs. A repo
+            # the user had previously lost access to and re-added must reappear
+            # immediately without an extra approval step.
+            row.enabled = True
 
-        # Disable repos previously synced for this installation but now absent.
+        # Repos previously synced for this installation but now absent are
+        # marked unavailable — historical rows (jobs, receipts, intelligence)
+        # keep pointing at them, but new runs against them are blocked
+        # because they resolve to no accessible installation.
         stored = (
             s.query(orm.Repository)
             .filter(
@@ -314,6 +319,13 @@ def sync_repositories(
 def list_repositories(
     workspace_id: str, include_disabled: bool = False
 ) -> List[RepositoryRecord]:
+    """List repositories for a workspace.
+
+    Default returns only rows currently accessible through GitHub (``enabled``
+    now mirrors the sync result, not a user toggle). ``include_disabled=True``
+    surfaces historical rows that lost access — useful for audit / operator
+    inspection, never for the user-facing catalog.
+    """
     with session_scope() as s:
         q = s.query(orm.Repository).filter(
             orm.Repository.workspace_id == workspace_id
@@ -352,24 +364,27 @@ def set_repository_enabled(
 def list_repositories_page(
     workspace_id: str,
     *,
-    enabled_only: bool = False,
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> List[RepositoryRecord]:
     """Tenant-scoped, searchable, paginated repository listing.
 
-    ``enabled_only`` restricts to repos the user enabled (the New Run source).
-    ``search`` matches a substring of ``full_name`` (case-insensitive).
+    Returns only repositories currently accessible through GitHub — i.e.
+    ``enabled=True`` after the last sync. Historical rows for repositories
+    that lost access remain in the table so past jobs still resolve, but they
+    do not appear in the user-facing catalog. ``search`` matches a substring
+    of ``full_name`` (case-insensitive).
     """
     from sqlalchemy import func
 
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
     with session_scope() as s:
-        q = s.query(orm.Repository).filter(orm.Repository.workspace_id == workspace_id)
-        if enabled_only:
-            q = q.filter(orm.Repository.enabled.is_(True))
+        q = s.query(orm.Repository).filter(
+            orm.Repository.workspace_id == workspace_id,
+            orm.Repository.enabled.is_(True),
+        )
         term = (search or "").strip().lower()
         if term:
             q = q.filter(func.lower(orm.Repository.full_name).like(f"%{term}%"))

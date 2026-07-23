@@ -1,5 +1,10 @@
-"""Private-preview selection controls (PR A): repository enablement, repository
-+ branch listing, model catalog, job model selection, active-only API keys.
+"""Private-preview selection controls (PR A): repository / branch listing,
+model catalog, job model selection, active-only API keys.
+
+Repository availability mirrors GitHub App access exactly — there is no
+in-GNSIS enable/disable step. A repository accessible through the App is
+usable immediately; one that is no longer accessible becomes unavailable
+for new runs while historical rows survive.
 
 Service-layer checks run directly against the test DB; API checks override the
 auth dependencies (current_workspace / current_user / get_github_app) so the
@@ -44,7 +49,9 @@ def _gh_repo(gh_id, full_name, *, default_branch="main", private=False, archived
             "private": private, "archived": archived}
 
 
-class RepositoryEnablementTests(unittest.TestCase):
+class RepositoryAvailabilityTests(unittest.TestCase):
+    """Sync mirrors GitHub App access exactly — no second enablement step."""
+
     def setUp(self):
         _prepare()
         from gnsis.service import workspaces as ws
@@ -61,49 +68,54 @@ class RepositoryEnablementTests(unittest.TestCase):
     def _sync(self, repos):
         return self.ws.sync_repositories("ws-1", "inst-1", repos)
 
-    def test_new_repos_default_disabled(self):
+    def test_newly_synced_repos_are_immediately_available(self):
+        # A repository accessible through the GitHub App must appear in the
+        # user-facing catalog with no separate approval step.
         self._sync([_gh_repo(10, "octo/alpha"), _gh_repo(11, "octo/beta")])
         repos = self.ws.list_repositories_page("ws-1")
-        self.assertEqual(len(repos), 2)
-        self.assertTrue(all(not r.enabled for r in repos))
+        self.assertEqual({r.full_name for r in repos}, {"octo/alpha", "octo/beta"})
 
-    def test_sync_preserves_user_enabled_and_disabled_state(self):
+    def test_resync_updates_metadata_and_keeps_access(self):
         self._sync([_gh_repo(10, "octo/alpha"), _gh_repo(11, "octo/beta")])
-        alpha = next(r for r in self.ws.list_repositories_page("ws-1") if r.full_name == "octo/alpha")
-        # User enables alpha.
-        self.ws.set_repository_enabled("ws-1", alpha.id, True)
-        # A later sync (same repos, maybe updated metadata) must NOT re-disable
-        # alpha nor enable beta.
-        self._sync([_gh_repo(10, "octo/alpha", default_branch="develop"), _gh_repo(11, "octo/beta")])
+        # Same repos, updated default branch on alpha — availability unchanged,
+        # metadata refreshed. No user-controlled state exists to preserve.
+        self._sync([_gh_repo(10, "octo/alpha", default_branch="develop"),
+                    _gh_repo(11, "octo/beta")])
         after = {r.full_name: r for r in self.ws.list_repositories_page("ws-1")}
-        self.assertTrue(after["octo/alpha"].enabled)   # preserved enabled
-        self.assertFalse(after["octo/beta"].enabled)   # preserved disabled
-        self.assertEqual(after["octo/alpha"].default_branch, "develop")  # metadata updated
+        self.assertEqual(after["octo/alpha"].default_branch, "develop")
+        self.assertEqual(set(after.keys()), {"octo/alpha", "octo/beta"})
 
-    def test_toggle_updates_only_enabled(self):
+    def test_repo_removed_from_github_access_disappears_from_catalog(self):
+        # First sync: both alpha and beta are accessible.
+        self._sync([_gh_repo(10, "octo/alpha"), _gh_repo(11, "octo/beta")])
+        # Later sync: beta is no longer part of the installation.
+        self._sync([_gh_repo(10, "octo/alpha")])
+        catalog = self.ws.list_repositories_page("ws-1")
+        self.assertEqual({r.full_name for r in catalog}, {"octo/alpha"})
+
+    def test_repo_removed_from_github_access_row_survives_for_history(self):
+        # Sync then remove access.
         self._sync([_gh_repo(10, "octo/alpha")])
         alpha = self.ws.list_repositories_page("ws-1")[0]
-        updated = self.ws.set_repository_enabled("ws-1", alpha.id, True)
-        self.assertTrue(updated.enabled)
-        self.assertEqual(updated.full_name, "octo/alpha")  # identity untouched
-        self.assertFalse(self.ws.set_repository_enabled("ws-1", alpha.id, False).enabled)
+        self._sync([])  # installation no longer grants access to any repo.
+        # The row still exists so historical jobs / receipts / intelligence
+        # continue to resolve. It just isn't in the user-facing catalog.
+        self.assertEqual(self.ws.list_repositories_page("ws-1"), [])
+        self.assertIsNotNone(self.ws.get_repository("ws-1", alpha.id))
 
-    def test_cross_workspace_toggle_returns_none(self):
+    def test_regranted_access_reappears_without_extra_approval(self):
+        # Access → removed → regranted. The repo becomes available again on
+        # the next sync with no in-GNSIS step in between.
         self._sync([_gh_repo(10, "octo/alpha")])
-        alpha = self.ws.list_repositories_page("ws-1")[0]
-        self.assertIsNone(self.ws.set_repository_enabled("ws-2", alpha.id, True))
-        self.assertIsNone(self.ws.set_repository_enabled("ws-2", "unknown-id", True))
+        self._sync([])
+        self.assertEqual(self.ws.list_repositories_page("ws-1"), [])
+        self._sync([_gh_repo(10, "octo/alpha")])
+        catalog = self.ws.list_repositories_page("ws-1")
+        self.assertEqual({r.full_name for r in catalog}, {"octo/alpha"})
 
-    def test_enabled_only_and_search_and_pagination(self):
+    def test_search_and_pagination(self):
         self._sync([_gh_repo(10, "octo/alpha"), _gh_repo(11, "octo/beta"),
                     _gh_repo(12, "octo/gamma")])
-        repos = self.ws.list_repositories_page("ws-1")
-        for r in repos:
-            if r.full_name in ("octo/alpha", "octo/gamma"):
-                self.ws.set_repository_enabled("ws-1", r.id, True)
-        enabled = self.ws.list_repositories_page("ws-1", enabled_only=True)
-        self.assertEqual({r.full_name for r in enabled}, {"octo/alpha", "octo/gamma"})
-        # search
         found = self.ws.list_repositories_page("ws-1", search="beta")
         self.assertEqual([r.full_name for r in found], ["octo/beta"])
         # pagination (ordered by full_name: alpha, beta, gamma)
@@ -111,13 +123,6 @@ class RepositoryEnablementTests(unittest.TestCase):
         page2 = self.ws.list_repositories_page("ws-1", limit=2, offset=2)
         self.assertEqual([r.full_name for r in page1], ["octo/alpha", "octo/beta"])
         self.assertEqual([r.full_name for r in page2], ["octo/gamma"])
-
-    def test_history_preserved_on_disable(self):
-        self._sync([_gh_repo(10, "octo/alpha")])
-        alpha = self.ws.list_repositories_page("ws-1")[0]
-        self.ws.set_repository_enabled("ws-1", alpha.id, False)
-        # The repo row still exists (never deleted); only enabled changed.
-        self.assertIsNotNone(self.ws.get_repository("ws-1", alpha.id))
 
 
 class ModelCatalogServiceTests(unittest.TestCase):
@@ -254,6 +259,8 @@ class SelectionApiTests(unittest.TestCase):
         with session_scope() as s:
             s.add(orm.GitHubInstallation(id="inst-1", workspace_id="ws-1",
                                          github_installation_id=555, status="active"))
+            # Both repos are currently accessible through GitHub — no user
+            # enablement step exists to withhold either.
             s.add(orm.Repository(id="repo-1", workspace_id="ws-1",
                                  github_installation_record_id="inst-1",
                                  github_repository_id=10, owner="octo", name="alpha",
@@ -261,7 +268,14 @@ class SelectionApiTests(unittest.TestCase):
             s.add(orm.Repository(id="repo-2", workspace_id="ws-1",
                                  github_installation_record_id="inst-1",
                                  github_repository_id=11, owner="octo", name="beta",
-                                 full_name="octo/beta", default_branch="main", enabled=False))
+                                 full_name="octo/beta", default_branch="main", enabled=True))
+            # A historical row for a repo that lost GitHub access — must
+            # survive for past-job resolution but never appear in the catalog
+            # or accept new runs.
+            s.add(orm.Repository(id="repo-gone", workspace_id="ws-1",
+                                 github_installation_record_id="inst-1",
+                                 github_repository_id=99, owner="octo", name="gone",
+                                 full_name="octo/gone", default_branch="main", enabled=False))
 
         from fastapi.testclient import TestClient
         from gnsis.service import api
@@ -281,20 +295,29 @@ class SelectionApiTests(unittest.TestCase):
         ids = [m["id"] for m in r.json()["items"]]
         self.assertEqual(ids, ["anthropic/claude-opus-4.8", "openai/gpt-5.4"])
 
-    def test_repositories_listing_and_enabled_only(self):
+    def test_repositories_listing_returns_only_currently_accessible(self):
         allr = self.client.get("/v1/repositories").json()
+        # Only the two currently-accessible repos appear; the "gone" row that
+        # lost GitHub access is filtered out of the user-facing catalog.
         self.assertEqual({r["full_name"] for r in allr}, {"octo/alpha", "octo/beta"})
-        enabled = self.client.get("/v1/repositories", params={"enabled_only": True}).json()
-        self.assertEqual({r["full_name"] for r in enabled}, {"octo/alpha"})
         found = self.client.get("/v1/repositories", params={"q": "beta"}).json()
         self.assertEqual([r["full_name"] for r in found], ["octo/beta"])
 
-    def test_toggle_route_and_cross_workspace_404(self):
-        r = self.client.patch("/v1/repositories/repo-2", json={"enabled": True})
-        self.assertEqual(r.status_code, 200)
-        self.assertTrue(r.json()["enabled"])
-        # unknown id → 404
-        self.assertEqual(self.client.patch("/v1/repositories/nope", json={"enabled": True}).status_code, 404)
+    def test_repositories_listing_ignores_legacy_enabled_only_param(self):
+        # Older frontends may still pass this — it is accepted and returns the
+        # exact same result as the default listing, never a smaller set.
+        default = self.client.get("/v1/repositories").json()
+        with_flag = self.client.get(
+            "/v1/repositories", params={"enabled_only": True}
+        ).json()
+        self.assertEqual([r["full_name"] for r in default],
+                         [r["full_name"] for r in with_flag])
+
+    def test_no_user_toggle_route_exists(self):
+        # The user-facing enable/disable route is gone from the product
+        # contract. Any PATCH to a repository is a 405 or 404.
+        r = self.client.patch("/v1/repositories/repo-1", json={"enabled": False})
+        self.assertIn(r.status_code, (404, 405))
 
     def test_branches_route_hides_token(self):
         import gnsis.service.branches as br
@@ -317,10 +340,27 @@ class SelectionApiTests(unittest.TestCase):
             "repository_id": "repo-1", "instruction": "do it", "model": "evil/model"})
         self.assertEqual(r.status_code, 422)
 
-    def test_create_job_disabled_repo_409(self):
+    def test_create_job_accepts_any_currently_accessible_repository(self):
+        # Both repo-1 and repo-2 are currently accessible through GitHub.
+        # The API must accept them for job creation without any separate
+        # enable step. Regression guard for the removed 409-disabled path.
+        import gnsis.service.tasks as tasks
+
+        tasks.run_job.delay = lambda *a, **k: None
+        for repo_id in ("repo-1", "repo-2"):
+            r = self.client.post("/jobs", json={
+                "repository_id": repo_id, "instruction": "do it",
+                "model": "openai/gpt-5.4"})
+            self.assertEqual(r.status_code, 200, f"{repo_id}: {r.text}")
+
+    def test_create_job_rejects_repo_that_lost_github_access(self):
+        # ``repo-gone`` is a historical row whose GitHub access was removed
+        # (``enabled=False``). It must not be usable for new runs — from the
+        # user's point of view it isn't in their accessible list at all.
         r = self.client.post("/jobs", json={
-            "repository_id": "repo-2", "instruction": "do it", "model": "openai/gpt-5.4"})
-        self.assertEqual(r.status_code, 409)
+            "repository_id": "repo-gone", "instruction": "do it",
+            "model": "openai/gpt-5.4"})
+        self.assertEqual(r.status_code, 404)
 
     def test_create_job_persists_selected_model(self):
         import gnsis.service.tasks as tasks

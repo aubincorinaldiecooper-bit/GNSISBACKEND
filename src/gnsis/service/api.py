@@ -286,10 +286,10 @@ def me(
 ) -> dict:
     installs = ws.list_installations(workspace.id)
     active = [i for i in installs if i.status == "active"]
-    # repository_count = repos GNSIS can *see* (GitHub App access), independent
-    # of enablement; enabled_repository_count = repos the user opted into for runs.
-    repos = ws.list_repositories(workspace.id, include_disabled=True)
-    enabled_repos = [r for r in repos if r.enabled]
+    # ``repository_count`` reflects repositories currently accessible through
+    # the installation. GitHub App access IS the permission — there is no
+    # second user-controlled enablement layer.
+    repos = ws.list_repositories(workspace.id)
     return {
         "user": {
             "id": user.subject,
@@ -302,7 +302,6 @@ def me(
             "connected": len(active) > 0,
             "installation_count": len(active),
             "repository_count": len(repos),
-            "enabled_repository_count": len(enabled_repos),
         },
     }
 
@@ -667,10 +666,6 @@ def sync_installation_route(
     }
 
 
-class SetRepositoryEnabledRequest(BaseModel):
-    enabled: bool
-
-
 @app.get("/v1/repositories")
 def list_repositories_route(
     enabled_only: bool = False,
@@ -679,28 +674,22 @@ def list_repositories_route(
     offset: int = 0,
     workspace: WorkspaceRecord = Depends(current_workspace),
 ) -> list:
-    """Searchable, paginated repositories for the caller's workspace.
+    """Searchable, paginated repositories currently accessible to the workspace.
 
-    Default returns all repos (enabled + disabled) so Settings can toggle them;
-    the New Run workflow passes ``enabled_only=true`` to source only enabled repos.
+    Returns everything the GitHub App can currently reach. There is no user-
+    controlled enablement layer — a repository the App can see is available
+    for runs immediately.
+
+    ``enabled_only`` is accepted for backward compatibility with clients still
+    passing it (the frontend used to source New Run through it during the
+    two-step onboarding). It is now a no-op: the base listing already contains
+    only currently-accessible repositories.
     """
+    del enabled_only  # accepted, no longer meaningful
     repos = ws.list_repositories_page(
-        workspace.id, enabled_only=enabled_only, search=q, limit=limit, offset=offset
+        workspace.id, search=q, limit=limit, offset=offset
     )
     return [_repository_dict(r) for r in repos]
-
-
-@app.patch("/v1/repositories/{repository_id}")
-def set_repository_enabled_route(
-    repository_id: str,
-    req: SetRepositoryEnabledRequest,
-    workspace: WorkspaceRecord = Depends(current_workspace),
-) -> dict:
-    """Enable/disable a repository for new runs. 404 for unknown/cross-workspace."""
-    updated = ws.set_repository_enabled(workspace.id, repository_id, req.enabled)
-    if updated is None:
-        raise HTTPException(status_code=404, detail="repository not found")
-    return _repository_dict(updated)
 
 
 @app.get("/v1/repositories/{repository_id}/branches")
@@ -753,10 +742,14 @@ def create_job(
     # is no local/Celery/Docker fallback to fall back to.
     _require_execution_configured(settings)
     repo = ws.get_repository(workspace.id, req.repository_id)
-    if repo is None:
+    # A row with ``enabled=False`` is a repository the workspace previously
+    # had access to but that is no longer part of the GitHub App installation
+    # (see ``sync_repositories``). The row survives so historical jobs and
+    # receipts still resolve, but new runs against it must be blocked. From
+    # the user's point of view it isn't in their accessible list at all, so
+    # a 404 is the honest response.
+    if repo is None or not repo.enabled:
         raise HTTPException(status_code=404, detail="repository not found")
-    if not repo.enabled:
-        raise HTTPException(status_code=409, detail="repository is disabled")
     inst = ws.get_installation_by_record_id(repo.github_installation_record_id)
     if inst is None or inst.status == "deleted":
         raise HTTPException(status_code=409, detail="repository installation is unavailable")
