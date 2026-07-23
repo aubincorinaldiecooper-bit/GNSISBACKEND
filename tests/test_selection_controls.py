@@ -399,15 +399,16 @@ class SelectionApiTests(unittest.TestCase):
         self.assertEqual(body["model"], "anthropic/claude-opus-4.8")
         self.assertEqual(body["advisor_model"], "openai/gpt-5.4")
 
-    def test_create_job_without_advisor_fails_closed(self):
+    def test_create_job_without_advisor_persists_null(self):
         import gnsis.service.tasks as tasks
 
         tasks.run_job.delay = lambda *a, **k: None
         r = self.client.post("/jobs", json={
             "repository_id": "repo-1", "instruction": "add hello",
             "model": "openai/gpt-5.4"})
-        self.assertEqual(r.status_code, 422, r.text)
-        self.assertIn("advisor_model", r.text)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["model"], "openai/gpt-5.4")
+        self.assertIsNone(r.json()["advisor_model"])
 
     def test_create_job_accepts_equal_primary_and_advisor_model_ids(self):
         import gnsis.service.tasks as tasks

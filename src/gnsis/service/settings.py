@@ -148,6 +148,10 @@ class Settings:
     # cost_tier, context_window}. A model without an entry falls back to its id.
     # The catalog NEVER lists a model that is not in run_allowed_models.
     model_metadata: dict = field(default_factory=dict)
+    # Optional OpenRouter-native server tools. Disabled by default for launch so
+    # the primary coding/intelligence loop does not depend on Advisor or Web Search.
+    run_web_search_enabled: bool = False
+    run_advisor_enabled: bool = False
 
     # Which Railway service this process is: "api", "worker" or "beat". Drives which
     # settings are required at startup. Defaults to "api". Production must run
@@ -462,6 +466,8 @@ class Settings:
             run_max_cost_usd=_float("GNSIS_RUN_MAX_COST_USD", 3.00),
             run_allowed_models=allowed_models,
             model_metadata=_parse_json_env("GNSIS_MODEL_METADATA"),
+            run_web_search_enabled=_bool("GNSIS_RUN_WEB_SEARCH_ENABLED", False),
+            run_advisor_enabled=_bool("GNSIS_RUN_ADVISOR_ENABLED", False),
             service_role=os.environ.get("GNSIS_SERVICE_ROLE", "api"),
             litellm_url=os.environ.get("GNSIS_LITELLM_URL"),
             litellm_api_key=os.environ.get("GNSIS_LITELLM_API_KEY"),

@@ -165,6 +165,13 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         self.assertIn(seed.memory_id, selection_a.memory_ids)
         run_store, run_a = make_run(job_a, selection_a.memory_ids)
         with session_scope() as db:
+            row = db.get(orm.ExecutionRun, run_a.id)
+            row.primary_model = "anthropic/claude-opus-4.8"
+            row.advisor_model = None
+        run_a = run_store.get_run(run_a.id)
+        self.assertEqual(run_a.primary_model, "anthropic/claude-opus-4.8")
+        self.assertIsNone(run_a.advisor_model)
+        with session_scope() as db:
             consumed = [
                 r.memory_id
                 for r in db.query(orm.MemoryConsumption)
@@ -274,8 +281,8 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
                 1,
             )
 
-        # 9-10. Run B uses a different selected primary model and receives the
-        # newly approved intelligence for cross-model reuse.
+        # 9-10. Run B uses a different selected primary model, has no Advisor,
+        # and receives the newly approved intelligence for cross-model reuse.
         job_b = make_job(instruction="auth login tests coverage", workspace_id="ws-A", repository_id="repo-1")
         selection_b = memory.retrieve_for_task(
             repo=job_b.repo,
@@ -288,10 +295,19 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         with session_scope() as db:
             row = db.get(orm.ExecutionRun, run_b.id)
             row.primary_model = "openai/gpt-5.4"
-            row.advisor_model = "anthropic/claude-opus-4.8"
+            row.advisor_model = None
         run_b = run_store.get_run(run_b.id)
         self.assertEqual(run_b.primary_model, "openai/gpt-5.4")
+        self.assertIsNone(run_b.advisor_model)
         self.assertIn(first[0].memory_id, run_b.memory_ids)
+        with session_scope() as db:
+            consumed_b = [
+                r.memory_id
+                for r in db.query(orm.MemoryConsumption)
+                .filter(orm.MemoryConsumption.run_id == run_b.id)
+                .all()
+            ]
+        self.assertIn(first[0].memory_id, consumed_b)
 
     def test_processes_explicit_outcome_id_not_newer_latest_review(self):
         from gnsis.orchestration.models import Approval

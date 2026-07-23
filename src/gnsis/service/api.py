@@ -198,10 +198,9 @@ class CreateJobRequest(BaseModel):
     # The user-selected OpenRouter model. Required for new user runs and
     # validated against the server allowlist.
     model: Optional[str] = None
-    # The user-selected Advisor model. Also validated against the server
-    # allowlist. Powers the ``openrouter:advisor`` server tool the gateway
-    # appends; a separate role field from ``model``. It may contain the same
-    # model id, but is independently required and allowlist-validated.
+    # Optional user-selected Advisor model. When supplied, it is validated
+    # against the server allowlist. It is a separate role field from ``model``
+    # and may contain the same model id. Null means no Advisor is pinned.
     advisor_model: Optional[str] = None
     # Deprecated: internal framework choice, no longer surfaced to users. Ignored
     # for model selection; kept so old clients don't 422.
@@ -821,8 +820,8 @@ def create_job(
     if inst.status == "suspended":
         raise HTTPException(status_code=409, detail="repository installation is suspended")
 
-    # New user-created runs fail closed: both primary and Advisor model roles
-    # are required and independently validated against the server allowlist.
+    # New user-created runs require the primary model. Advisor is optional; when
+    # supplied, it is independently validated against the same server allowlist.
     # The two models are validated with the same allowlist because the
     # openrouter:advisor server tool has to be able to invoke the Advisor
     # exactly the same way the primary is invoked.
@@ -830,14 +829,12 @@ def create_job(
 
     if not req.model:
         raise HTTPException(status_code=422, detail="model is required")
-    if not req.advisor_model:
-        raise HTTPException(status_code=422, detail="advisor_model is required")
     selected_model = resolve_allowed_model(settings, req.model)
     if selected_model is None:
         raise HTTPException(status_code=422, detail=f"model '{req.model}' is not available")
 
-    selected_advisor = resolve_allowed_model(settings, req.advisor_model)
-    if selected_advisor is None:
+    selected_advisor = resolve_allowed_model(settings, req.advisor_model) if req.advisor_model else None
+    if req.advisor_model and selected_advisor is None:
         raise HTTPException(
             status_code=422,
             detail=f"advisor_model '{req.advisor_model}' is not available",

@@ -125,10 +125,13 @@ class ServerToolInjectionUnitTests(unittest.TestCase):
         from gnsis.service.executor.gateway import _inject_server_tools
         from gnsis.service.settings import get_settings
 
+        settings = get_settings()
+        settings.run_web_search_enabled = True
+        settings.run_advisor_enabled = True
         payload: Dict[str, Any] = {
             "tools": [{"type": "function", "function": {"name": "bash"}}],
         }
-        _inject_server_tools(payload, self._run(), get_settings())
+        _inject_server_tools(payload, self._run(), settings)
         types = [t["type"] for t in payload["tools"]]
         self.assertEqual(
             types, ["function", "openrouter:web_search", "openrouter:advisor"]
@@ -175,13 +178,46 @@ class ServerToolInjectionUnitTests(unittest.TestCase):
         from gnsis.service.executor.gateway import _inject_server_tools
         from gnsis.service.settings import get_settings
 
+        settings = get_settings()
+        settings.run_web_search_enabled = True
+        settings.run_advisor_enabled = True
         run = self._run(primary=ALLOWED, advisor=ALLOWED)
         payload: Dict[str, Any] = {"tools": []}
-        _inject_server_tools(payload, run, get_settings())
+        _inject_server_tools(payload, run, settings)
         advisor = next(t for t in payload["tools"] if t["type"] == "openrouter:advisor")
         self.assertEqual(advisor["parameters"]["model"], ALLOWED)
         self.assertEqual(run.primary_model, ALLOWED)
         self.assertEqual(run.advisor_model, ALLOWED)
+
+    def test_server_tools_disabled_by_default_preserves_primary_function_tools_only(self):
+        from gnsis.service.executor.gateway import _inject_server_tools
+        from gnsis.service.settings import get_settings
+
+        payload = {"tools": [{"type": "function", "function": {"name": "bash"}}]}
+        _inject_server_tools(payload, self._run(), get_settings())
+        self.assertEqual(payload["tools"], [{"type": "function", "function": {"name": "bash"}}])
+
+    def test_web_search_can_be_enabled_without_advisor(self):
+        from gnsis.service.executor.gateway import _inject_server_tools
+        from gnsis.service.settings import get_settings
+
+        settings = get_settings()
+        settings.run_web_search_enabled = True
+        settings.run_advisor_enabled = False
+        payload: Dict[str, Any] = {"tools": []}
+        _inject_server_tools(payload, self._run(), settings)
+        self.assertEqual([t["type"] for t in payload["tools"]], ["openrouter:web_search"])
+
+    def test_advisor_disabled_omits_advisor_even_with_pinned_model(self):
+        from gnsis.service.executor.gateway import _inject_server_tools
+        from gnsis.service.settings import get_settings
+
+        settings = get_settings()
+        settings.run_web_search_enabled = False
+        settings.run_advisor_enabled = False
+        payload: Dict[str, Any] = {"tools": []}
+        _inject_server_tools(payload, self._run(), settings)
+        self.assertNotIn("tools", payload)
 
     def test_primary_call_preserves_client_function_tools_untouched(self):
         from gnsis.service.executor.gateway import _inject_server_tools
@@ -281,9 +317,12 @@ class GatewayEndToEndTests(unittest.TestCase):
     def test_primary_call_ships_web_search_and_advisor_to_upstream(self):
         from gnsis.service.executor.gateway import handle_chat_completion
 
+        settings = self._settings()
+        settings.run_web_search_enabled = True
+        settings.run_advisor_enabled = True
         seen, fake = self._fake_upstream_captures()
         status, _data = handle_chat_completion(
-            self._settings(), self.exec_store, self.run,
+            settings, self.exec_store, self.run,
             body={
                 "model": ALLOWED,
                 "messages": [{"role": "user", "content": "make it work"}],
@@ -433,9 +472,12 @@ class GatewayEndToEndTests(unittest.TestCase):
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
         )
         legacy = self.exec_store.get_run(legacy.id)
+        settings = self._settings()
+        settings.run_web_search_enabled = True
+        settings.run_advisor_enabled = True
         seen, fake = self._fake_upstream_captures()
         status, _ = handle_chat_completion(
-            self._settings(), self.exec_store, legacy,
+            settings, self.exec_store, legacy,
             body={"model": ALLOWED, "messages": [{"role": "user", "content": "hi"}]},
             upstream=fake,
         )

@@ -260,11 +260,15 @@ def _inject_server_tools(payload: Dict[str, Any], run: ExecutionRunRecord, setti
     the appended entries are visibly server-owned.
     """
     tools = list(payload.get("tools") or [])
-    tools.append(json.loads(json.dumps(_WEB_SEARCH_TOOL)))
+    if getattr(settings, "run_web_search_enabled", False):
+        tools.append(json.loads(json.dumps(_WEB_SEARCH_TOOL)))
     advisor = _pick_advisor_model(run, settings)
-    if advisor:
+    if getattr(settings, "run_advisor_enabled", False) and advisor:
         tools.append(_advisor_tool(advisor))
-    payload["tools"] = tools
+    if tools:
+        payload["tools"] = tools
+    else:
+        payload.pop("tools", None)
 
 
 
