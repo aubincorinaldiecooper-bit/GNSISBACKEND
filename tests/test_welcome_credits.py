@@ -172,6 +172,54 @@ class WelcomeCreditServiceTests(unittest.TestCase):
         self.assertEqual(len(s["grants"]), 1)
         self.assertEqual(s["grants"][0]["operator"], "welcome")
 
+    def test_daily_spend_sums_ledger_strings_in_python(self):
+        # Regression guard for a subtle Postgres-vs-SQLite trap: the ledger's
+        # signed_amount is a String(40), and Postgres has no sum(varchar) — a
+        # server-side SUM raises there but silently works on SQLite, which would
+        # let the daily cap quietly disable itself in production. This test
+        # exercises the summation path with mixed values (positive grants + an
+        # unrelated adjustment + a malformed row).
+        import datetime as dt
+        from gnsis.service import beta_credits, orm
+        from gnsis.service.db import session_scope
+        from gnsis.service.welcome_credits import _daily_welcome_spend
+
+        now = dt.datetime.now(dt.timezone.utc)
+        with session_scope() as s:
+            for i, amount in enumerate(["5.00", "2.50", "3.25"]):
+                s.add(orm.BalanceTransaction(
+                    id=f"txn-w-{i}",
+                    workspace_id=f"ws-{i}",
+                    transaction_type=beta_credits.BETA_GRANT,
+                    signed_amount=amount,
+                    idempotency_key=f"{beta_credits.BETA_GRANT}:welcome:ws-{i}:c",
+                    currency="USD",
+                    created_at=now,
+                ))
+            # An unrelated beta_grant that is NOT a welcome (different key
+            # prefix) — must be excluded from the welcome-daily-spend total.
+            s.add(orm.BalanceTransaction(
+                id="txn-op-1",
+                workspace_id="ws-op",
+                transaction_type=beta_credits.BETA_GRANT,
+                signed_amount="99.00",
+                idempotency_key=f"{beta_credits.BETA_GRANT}:operator:ws-op:x",
+                currency="USD",
+                created_at=now,
+            ))
+            # A row older than 24h — outside the window.
+            s.add(orm.BalanceTransaction(
+                id="txn-w-old",
+                workspace_id="ws-old",
+                transaction_type=beta_credits.BETA_GRANT,
+                signed_amount="7.00",
+                idempotency_key=f"{beta_credits.BETA_GRANT}:welcome:ws-old:c",
+                currency="USD",
+                created_at=now - dt.timedelta(hours=48),
+            ))
+
+        self.assertEqual(_daily_welcome_spend(now=now), Decimal("10.75"))
+
     def test_idempotency_key_shape_survives_workspace_and_campaign(self):
         # This is the invariant the whole "one grant per (workspace, campaign)"
         # guarantee depends on — encode it as a test so a rename in the service

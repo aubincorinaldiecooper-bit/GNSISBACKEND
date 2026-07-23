@@ -30,13 +30,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from sqlalchemy import func
-
 from . import beta_credits, orm
 from .db import session_scope
 from .settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
+
+_ZERO = Decimal("0")
 
 
 #: The attested operator id recorded on every welcome grant. Distinct from any
@@ -64,23 +64,33 @@ def _daily_welcome_spend(now: Optional[datetime] = None) -> Decimal:
     counts as spent-for-purposes-of-the-daily-limit (reversing money already sent
     to the provider does not un-send it — the daily cap is about provider
     exposure, not net balance).
+
+    Sums in Python rather than SQL because ``signed_amount`` is a ``String(40)``
+    (money as a decimal string, to avoid float drift); PostgreSQL has no
+    ``sum(varchar)`` aggregate, so a server-side ``SUM`` would raise here in
+    production and silently disable the daily cap on the swallow path above.
     """
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(hours=24)
     with session_scope() as s:
         # Only positive welcome grants are counted; the compensating reversal
         # transactions carry type BETA_GRANT_REVERSAL, so they are excluded.
-        total = (
-            s.query(func.coalesce(func.sum(orm.BalanceTransaction.signed_amount), "0"))
+        rows = (
+            s.query(orm.BalanceTransaction.signed_amount)
             .filter(orm.BalanceTransaction.transaction_type == beta_credits.BETA_GRANT)
             .filter(orm.BalanceTransaction.idempotency_key.like(f"{beta_credits.BETA_GRANT}:welcome:%"))
             .filter(orm.BalanceTransaction.created_at >= since)
-            .scalar()
+            .all()
         )
-    try:
-        return Decimal(str(total or "0"))
-    except (InvalidOperation, ValueError, TypeError):
-        return Decimal("0")
+    total = _ZERO
+    for (raw,) in rows:
+        try:
+            total += Decimal(raw or "0")
+        except (InvalidOperation, ValueError, TypeError):
+            # A malformed row shouldn't blow up the whole ceiling check — skip
+            # it and continue; the audit trail preserves the raw value.
+            continue
+    return total
 
 
 def try_grant(workspace_id: str, *, settings: Optional[Settings] = None) -> Optional[dict]:
