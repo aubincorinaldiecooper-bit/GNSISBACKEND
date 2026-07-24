@@ -241,6 +241,60 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(ap.status_code, 200, ap.text)
         self.assertEqual(ap.json()["status"], "approved")
 
+    def test_follow_up_and_thread_against_postgres(self):
+        # A conversation: a root run, a follow-up with a new instruction, and a
+        # Retry that reuses the parent instruction — all one thread in real SQL.
+        with mock.patch("gnsis.service.tasks.run_job.delay"):
+            root = self.client.post(
+                "/jobs",
+                json={"repository_id": self.repo_id, "instruction": "first", "model": "anthropic/claude-opus-4.8"},
+                headers=self._hdr(),
+            ).json()
+            self.assertEqual(root["thread_id"], root["id"])
+            self.assertIsNone(root["parent_job_id"])
+
+            follow = self.client.post(
+                f"/jobs/{root['id']}/follow-up",
+                json={"instruction": "second"},
+                headers=self._hdr(),
+            )
+            self.assertEqual(follow.status_code, 200, follow.text)
+            fu = follow.json()
+            self.assertEqual(fu["thread_id"], root["thread_id"])
+            self.assertEqual(fu["parent_job_id"], root["id"])
+            self.assertEqual(fu["instruction"], "second")
+            self.assertEqual(fu["repo"], root["repo"])
+            self.assertEqual(fu["model"], root["model"])
+
+            retry = self.client.post(
+                f"/jobs/{fu['id']}/follow-up", json={}, headers=self._hdr()
+            ).json()
+            self.assertEqual(retry["instruction"], "second")  # reuses parent's
+            self.assertEqual(retry["parent_job_id"], fu["id"])
+            self.assertEqual(retry["thread_id"], root["thread_id"])
+
+        # Opening any run resolves the whole conversation, oldest first.
+        expected = [root["id"], fu["id"], retry["id"]]
+        for opened in expected:
+            thread = self.client.get(
+                f"/jobs/{opened}/thread", headers=self._hdr()
+            ).json()
+            self.assertEqual([j["id"] for j in thread], expected)
+
+        # A different workspace cannot resolve or extend this thread.
+        self.assertEqual(
+            self.client.get(f"/jobs/{root['id']}/thread", headers=self._hdr("intruder")).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/jobs/{root['id']}/follow-up",
+                json={"instruction": "x"},
+                headers=self._hdr("intruder"),
+            ).status_code,
+            404,
+        )
+
     def test_health(self):
         self.assertEqual(self.client.get("/health").json()["status"], "ok")
 
