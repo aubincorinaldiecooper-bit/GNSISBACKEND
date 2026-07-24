@@ -298,7 +298,7 @@ class ApiTests(unittest.TestCase):
         with mock.patch("gnsis.service.tasks.run_job.delay"):
             resp = self.client.post(
                 "/jobs",
-                json={"repository_id": self.repo_id, "instruction": "do it", "engine": "usage-spy"},
+                json={"repository_id": self.repo_id, "instruction": "do it", "engine": "usage-spy", "model": "anthropic/claude-opus-4.8"},
                 headers=self._hdr(),
             )
         self.assertEqual(resp.status_code, 200, resp.text)
