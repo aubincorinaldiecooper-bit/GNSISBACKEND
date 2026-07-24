@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
 

@@ -225,7 +225,7 @@ def get_source(job_id: str, authorization: Optional[str] = Header(default=None))
         except src.SourceError as exc:
             src.fail_streaming_source(prepared, store, run, _job_store(), str(exc))
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             src.fail_streaming_source(prepared, store, run, _job_store(), "source stream failed")
             raise
     headers = {

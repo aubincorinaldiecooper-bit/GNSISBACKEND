@@ -1,177 +1,150 @@
-# GNSIS
+# GNSIS backend
 
-**A stable, dogfoodable self-evolution runtime for tool-calling LLM agents.**
+The backend for GNSIS. It is **two things in one package (`gnsis`)**:
 
-GNSIS is a clean-room MVP of the ideas in
-[Autogenesis](https://github.com/DVampire/Autogenesis) — *"a self-evolution
-protocol and runtime for LLM-based agent systems."* Autogenesis is ambitious but
-explicitly *"undergoing active refactoring"*, with only the tool-calling agent
-considered stable. GNSIS closes that gap: it reimplements the **core** of the
-idea as something small enough to actually run, today, end-to-end — so you can
-dogfood it.
+1. **The GNSIS service** — a FastAPI + Celery application (the deployed product).
+   It authenticates users, orchestrates coding runs on a **hardened, sandboxed
+   executor**, meters and bills model usage, issues API keys, and serves an
+   OpenAI-compatible model gateway. This is what runs on Railway.
+2. **The self-evolution runtime** — the original, dependency-free `gnsis` CLI
+   (RSPL/SEPL: versioned prompts, a tool-calling agent, and a
+   propose→assess→commit self-evolution loop). Still present and runnable
+   offline; it is the lineage this repo grew from, not the deployed service.
 
-It keeps the two load-bearing concepts:
+> New here? Read **[`ARCHITECTURE.md`](./ARCHITECTURE.md)** first — it maps the
+> two layers, the end-to-end run lifecycle, and the security boundaries.
 
-- **RSPL — Resource Substrate Protocol Layer.** Prompts (and other artifacts)
-  are *versioned, lifecycle-aware resources* with content hashing, explicit
-  lineage, and rollback.
-- **SEPL — Self-Evolution Protocol Layer.** A loop that **propose → assess →
-  commit**s improvements with an auditable trail, realizing the cycle
-  **Act → Observe → Optimize → Remember.**
+## What the service does
 
-It speaks to models through **OpenRouter** (OpenAI-compatible), and ships a
-deterministic **offline mock** so the whole thing — and CI — runs with **zero
-API key and zero dependencies**.
+- **Runs.** A run is created over the API, executed asynchronously by a Celery
+  worker, checkpointed to Postgres phase by phase, and **paused at
+  `awaiting_approval`**. Only after a human approves does a separate task mint a
+  scoped GitHub App token and open the pull request. Customer code never runs in
+  this process — it runs in the separate **executor** repo (`Gnsis-studio-`), a
+  network-firewalled Docker sandbox this service dispatches via GitHub Actions
+  and authenticates with GitHub OIDC.
+- **Model gateway.** A public, OpenAI-compatible `POST /v1/chat/completions`
+  fronted by LiteLLM, authorized with Genesis-native `gns_…` virtual keys, with
+  per-call metering.
+- **Billing & limits.** Usage ledger, versioned model pricing, pay-as-you-go
+  balances, configurable spending limits, Stripe integration, and operator
+  credit grants.
+- **Repository memory.** Approved, tenant/repository-scoped "intelligence" that
+  is injected into future runs as reference-only context.
 
----
+## Architecture (short version)
 
-## Quickstart
-
-```bash
-pip install -e .
-
-# 1) See it work, offline, in 5 seconds (no API key needed):
-gnsis demo
+```
+Frontend ──HTTP──▶ FastAPI (web)  ── enqueue ──▶ Redis ──▶ Celery (worker)
+                     │  reads/writes Postgres            │  run pipeline →
+                     │                                   │  dispatch executor
+                     ▼                                   ▼  (GitHub Actions +
+                   Postgres  ◀── checkpoints ────────────┘   OIDC), gateway,
+                                                             callbacks, publish
 ```
 
-```
-iter  ver  score  tool  ok  note
-  ------------------------------------------------------------
-   0    1   0.00    no   ✓  Answer is wrong because the agent did not use the…
-   1    2   1.00   yes   ✓  Correct, and computed with the calculator tool.
+Full detail, module map, and trust boundaries are in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md). Operational/topic docs live in
+[`docs/`](./docs) (deployment, billing, public gateway, spending limits,
+virtual keys, usage-ledger integrity, model pricing, LiteLLM metering,
+public-beta execution).
 
-[result] 0.00 → 1.00 (↑ improved); best is v2
-```
+## Main technologies
 
-The seed prompt guessed and scored `0.00`. The optimizer proposed stronger
-tool-use instructions; the loop committed the first version that actually called
-the calculator and reached the correct answer (`1.00`) — as a new, lineaged
-prompt version you can inspect and roll back.
+Python 3.9+ · FastAPI · Celery · SQLAlchemy · Postgres · Redis · Pydantic ·
+PyJWT + cryptography · LiteLLM (gateway) · Stripe · GitHub App + GitHub OIDC.
+The self-evolution **core** is standard-library only.
 
-### Run against a real model (Claude via OpenRouter)
-
-```bash
-cp .env.template .env          # then add your key
-export OPENROUTER_API_KEY=sk-or-...
-
-gnsis evolve --provider openrouter --fresh
-gnsis run --provider openrouter --task "What is (12 + 30) * 2?"
-```
-
-Default model is `anthropic/claude-opus-4.8`. Any OpenRouter slug works via
-`--model` or `OPENROUTER_MODEL`. Point `OPENROUTER_BASE_URL` at any
-OpenAI-compatible endpoint to use a different gateway.
-
----
-
-## CLI
-
-| Command | What it does |
-| --- | --- |
-| `gnsis demo` | Offline, end-to-end self-evolution demo (mock model). |
-| `gnsis run --task "..."` | Run the tool-calling agent once; prints the tool trace and answer. |
-| `gnsis evolve [--task EXPR] [--fresh]` | Run the self-evolution loop over a versioned prompt. |
-| `gnsis history --name <prompt>` | Show a prompt's version lineage (parent links + content hashes). |
-| `gnsis rollback --name <prompt> --to N` | Roll a prompt back to an earlier version (append-only). |
-| `gnsis version` | Print the version. |
-
-Common flags: `--provider {auto,mock,openrouter}` (auto uses OpenRouter when a
-key is present, else the mock), `--model <slug>`, `--workdir <dir>`,
-`--config <file.py|.json>`.
-
-Artifacts are written under `--workdir` (default `workdir/`):
-`resources/` (versioned prompts), `memory/` (what won, and why), `traces/`
-(per-run trajectories).
-
----
-
-## How the self-evolution works
-
-The bundled task asks the agent for an exact arithmetic answer and grades it:
-
-- correct **and** computed with the calculator tool → `1.0`
-- correct but guessed (no tool) → `0.6`
-- wrong → `0.0`, with feedback naming the gap
-
-The loop runs the current prompt (**Act**), scores it (**Observe**), asks the
-optimizer for candidate prompts and keeps the first one that scores higher
-(**Optimize**: propose → assess → commit), and records the winner with its
-lineage (**Remember**). Each accepted improvement is a new resource version
-whose parent is the prompt it improved on — so the history is auditable and any
-step is reversible.
-
-With the **mock** model the loop is fully deterministic (great for CI and for
-understanding the mechanics). With a **real** model the same loop applies, and
-the optimizer additionally asks the model to rewrite the prompt from the failure
-feedback.
-
----
-
-## Programmatic API
-
-```python
-from gnsis import Runtime, Config, SelfEvolutionLoop, PromptOptimizer, calculator_task
-
-runtime = Runtime(Config({"provider": "auto", "workdir": "workdir"}))
-loop = SelfEvolutionLoop(runtime, optimizer=PromptOptimizer(model=runtime.model))
-
-report = loop.run(calculator_task("(12 + 30) * 2"), iterations=5)
-print(report.start_score, "→", report.best_score)   # 0.0 → 1.0
-print(report.best_prompt)
-
-# Inspect and reverse the evolution:
-for v in runtime.store.history("prompt", "agent_system_prompt"):
-    print(f"v{v.version} (parent {v.parent_version}) {v.short_hash} {v.message}")
-runtime.store.rollback("prompt", "agent_system_prompt", to_version=1)
-```
-
-Run a single agent turn:
-
-```python
-agent = runtime.build_agent(
-    "You are precise. Always use the calculator tool to compute exact answers."
-)
-result = agent.run("What is (7 * 6) + 100?")
-print(result.output, result.used_tool)   # "The answer is 142." True
-```
-
----
-
-## Architecture
+## Folder structure
 
 ```
 src/gnsis/
-  resources/   RSPL — Resource, ResourceVersion, ResourceStore (commit/history/rollback)
-  models/      provider-neutral interface; MockModel (offline) + OpenRouterModel (stdlib urllib)
-  tools/       Tool protocol + safe calculator; OpenAI-compatible specs
-  agent/       ToolCallingAgent — the 'Act' phase
-  evolution/   SEPL — Task/evaluation, PromptOptimizer, SelfEvolutionLoop
-  memory/      durable cross-run event log ('Remember')
-  tracer/      per-run trajectory recording ('Observe')
-  runtime.py   the composition root that wires it together
-  cli.py       the `gnsis` command
+  service/            The FastAPI + Celery service (the deployed product)
+    api.py            HTTP app: routers + endpoint handlers
+    tasks.py          Celery app + task definitions (run pipeline, publish)
+    executor/         Dispatch a run to the sandboxed executor and validate it
+                      back: dispatch, oidc, gateway, callbacks, source,
+                      validation, publish, reconcile, github, installation, store
+    billing.py, usage.py, pricing.py, limits.py   Metering, ledger, pay-as-you-go
+    virtual_keys.py, public_gateway.py            gns_ keys + OpenAI-compatible gateway
+    codememory.py, intelligence_lifecycle.py      Repository memory
+    github_app.py, auth.py, settings.py, orm.py, repository.py, db.py
+  orchestration/, evolution/, engines/, memory/, models/, tools/, cli.py
+                      The self-evolution runtime (the original `gnsis` CLI)
+configs/, examples/   Standalone runtime demo scripts (not imported by the service)
+docs/                 Operational + topic documentation
+tests/                pytest suite
+Dockerfile            Service image (Railway).  Dockerfile.sandbox — local sandbox image.
+Procfile              Railway process types: web / worker / beat / release
 ```
 
-This maps onto Autogenesis's manager stack (version, model, prompt, memory,
-tool, agent), consolidated into one synchronous, dependency-free runtime for
-stability.
-
----
-
-## Development
+## Local setup
 
 ```bash
-python -m unittest discover -s tests -v   # 41 tests, no dependencies
+# Service (needs Postgres + Redis):
+pip install -e ".[service]"
+export DATABASE_URL=postgresql://user:pass@localhost:5432/gnsis
+export CELERY_BROKER_URL=redis://localhost:6379/0
+gnsis-migrate                                   # create tables
+uvicorn gnsis.service.api:app --reload          # http://localhost:8000
+celery -A gnsis.service.tasks.celery_app worker --loglevel=info   # separate terminal
+
+# Self-evolution runtime only (no service, no deps, no API key):
+pip install -e .
+gnsis demo
 ```
 
-CI runs the suite on Python 3.9–3.12 plus an offline CLI smoke test
-(`.github/workflows/ci.yml`). A `SessionStart` hook installs the package for
-Claude Code web sessions.
+## Environment variables
 
----
+`src/gnsis/service/settings.py` is the source of truth; `docs/deployment.md`
+lists the full deployment set. The essentials:
 
-## Credits & license
+| Group | Variables |
+|---|---|
+| **Datastores** | `DATABASE_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` |
+| **Auth** | `BETTER_AUTH_AUDIENCE`, `BETTER_AUTH_ISSUER`, `BETTER_AUTH_JWKS_URL`, `GNSIS_API_KEY` (internal), `GNSIS_AUTH_INTERNAL_SECRET`, `GNSIS_AUTH_INTERNAL_URL` |
+| **GitHub App** | `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_SLUG`, `GITHUB_WEBHOOK_SECRET` |
+| **Executor** | `GNSIS_EXECUTOR_OWNER`, `GNSIS_EXECUTOR_REPO`, `GNSIS_EXECUTOR_WORKFLOW`, `GNSIS_EXECUTOR_REF`, `GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA`, `GNSIS_EXECUTOR_OIDC_ISSUER`/`_AUDIENCE`, and the `_MAX_BYTES`/`_TIMEOUT`/`_TOKEN_TTL` limits |
+| **Models / gateway** | `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GNSIS_LITELLM_URL`, `GNSIS_LITELLM_API_KEY`, `GNSIS_LITELLM_CALLBACK_SECRET` |
+| **Web / CORS** | `GNSIS_FRONTEND_URL`, `GNSIS_CORS_ORIGINS` |
+| **Billing / limits** | Stripe keys plus `GNSIS_DEFAULT_CURRENCY`, `GNSIS_BETA_CREDIT_MAX_USD`, `GNSIS_BALANCE_RESERVE_ESTIMATE_USD`, … |
 
-GNSIS is MIT-licensed (see `LICENSE`). It is a clean-room reimplementation of a
-small subset of [Autogenesis](https://github.com/DVampire/Autogenesis) (also
-MIT) — no upstream source is vendored. See `NOTICE`.
+The service is designed so the API process holds no model-provider or GitHub
+**write** credentials in the request path — those are used only by the worker /
+executor. Never expose any secret to the browser.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `gnsis-migrate` | Create/upgrade the database schema (Railway `release` step). |
+| `uvicorn gnsis.service.api:app` | Run the HTTP API (`web`). |
+| `celery -A gnsis.service.tasks.celery_app worker` | Run the async worker. |
+| `celery -A gnsis.service.tasks.celery_app beat` | Scheduled tasks (reconcile, etc.). |
+| `gnsis demo` / `gnsis run` / `gnsis evolve` | The self-evolution runtime CLI. |
+| `pytest -q` | Run the test suite (`pip install -e ".[dev]"` first). |
+
+## Deployment
+
+Railway, from the included `Dockerfile` (see `railway.json` + `Procfile`): a
+**web** service, a **worker** service, a **beat** scheduler, a **release**
+migration step, plus **Postgres** and **Redis** plugins. Full walkthrough:
+[`docs/deployment.md`](./docs/deployment.md).
+
+## External services & integrations
+
+Postgres · Redis · OpenRouter / LiteLLM (models + metering) · Stripe (billing) ·
+GitHub App + GitHub OIDC (repo access + executor trust) · the **executor** repo
+`Gnsis-studio-` (sandboxed runs) · the **auth service** (Better Auth, in the
+frontend repo) whose JWTs this backend verifies.
+
+## Known limitations / unfinished areas
+
+- **Dual identity.** The service and the self-evolution runtime coexist in one
+  package. That is intentional today, but a new owner should decide whether the
+  runtime (`orchestration/`, `evolution/`, `engines/`, `configs/`, `examples/`)
+  stays first-class or is spun out — it is woven through ~40 modules, so any
+  change there is a deliberate project decision, not a casual cleanup.
+- **Large modules.** `service/api.py` (~1k lines), `orm.py`, and `repository.py`
+  would each read better split by concern (routers / models / queries).
+- **No formatter/linter/type-checker** is configured (tests only).

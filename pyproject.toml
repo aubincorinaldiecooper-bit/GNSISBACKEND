@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gnsis"
-description = "A stable, dogfoodable self-evolution runtime for tool-calling LLM agents."
+description = "GNSIS backend: a FastAPI + Celery service orchestrating sandboxed coding-agent runs (executor dispatch, OpenAI-compatible model gateway, metering/billing, repository memory), built on the GNSIS self-evolution runtime."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -63,3 +63,14 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 version = { attr = "gnsis.__about__.__version__" }
+
+[tool.ruff]
+# Minimal, high-signal baseline (there was no linter before). Currently clean.
+# Broaden `select` over time (e.g. add "I" for import sorting, "UP" for pyupgrade)
+# once the team is ready to absorb the churn.
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+# Pyflakes (unused imports/vars, undefined names) + syntax errors only.
+select = ["E9", "F"]

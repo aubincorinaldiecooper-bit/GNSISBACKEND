@@ -1,6 +1,5 @@
 import hashlib
 import hmac
-import json
 import os
 import sys
 import unittest

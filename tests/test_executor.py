@@ -242,7 +242,6 @@ class RunTokenAndGatewayTests(ExecutorTestBase):
         orig = gwmod._default_upstream
         gwmod._default_upstream = fake_upstream
         try:
-            model = os.environ.get("GNSIS_RUN_ALLOWED_MODELS", "anthropic/claude-opus-4.8").split(",")[0]
             body = {"model": "anthropic/claude-opus-4.8", "messages": [{"role": "user", "content": "hi"}]}
             oks = [self.client.post("/internal/model/v1/chat/completions", headers=headers, json=body).status_code for _ in range(3)]
             self.assertEqual(oks, [200, 200, 200])
