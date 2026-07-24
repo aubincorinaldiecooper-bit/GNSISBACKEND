@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from ..orchestration.engine import PhaseSink, Workspace
 from ..orchestration.models import EngineResult

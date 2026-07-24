@@ -8,7 +8,6 @@ provider-failure handling, structured errors, and Genesis-request-id propagation
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import unittest

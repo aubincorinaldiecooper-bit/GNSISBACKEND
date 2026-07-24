@@ -76,7 +76,7 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         from gnsis.orchestration.models import Approval
         from gnsis.service.codememory import CodeMemory, MemoryKind
         from gnsis.service.executor.models import ExecutionStatus
-        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle, ReviewedIntelligenceItem
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
         from gnsis.service.repository import PostgresJobStore
         from gnsis.service import orm
         from gnsis.service.db import session_scope

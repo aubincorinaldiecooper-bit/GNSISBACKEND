@@ -27,7 +27,6 @@ def _configure():
 
 
 def _cols(table: str) -> set:
-    from sqlalchemy import text
 
     from gnsis.service.db import get_engine
 
