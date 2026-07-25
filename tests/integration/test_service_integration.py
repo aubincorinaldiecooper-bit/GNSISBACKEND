@@ -352,7 +352,12 @@ class ApiTests(unittest.TestCase):
         with mock.patch("gnsis.service.tasks.run_job.delay"):
             resp = self.client.post(
                 "/jobs",
-                json={"repository_id": self.repo_id, "instruction": "do it", "engine": "usage-spy"},
+                json={
+                    "repository_id": self.repo_id,
+                    "instruction": "do it",
+                    "engine": "usage-spy",
+                    "model": "anthropic/claude-opus-4.8",
+                },
                 headers=self._hdr(),
             )
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -381,6 +386,31 @@ class ApiTests(unittest.TestCase):
             self.client.get(f"/jobs/{job_id}", headers=self._hdr()).json()["usage"],
             {"total_tokens": 42},
         )
+
+    def test_create_job_requires_an_explicit_model(self):
+        """POST /jobs without a model is rejected with 422 on the real Postgres
+        path. There are no frontend model defaults: the client must name an
+        allowed model explicitly (the check runs after the executor-config gate
+        and before ``resolve_allowed_model``'s own fallback). A rejected create
+        must persist no job — this pins the contract the create-job tests above
+        already rely on by sending an explicit model."""
+        store = PostgresJobStore()
+        before_count = len(store.list_jobs(limit=500))
+        with mock.patch("gnsis.service.tasks.run_job.delay") as delay:
+            resp = self.client.post(
+                "/jobs",
+                json={
+                    "repository_id": self.repo_id,
+                    "instruction": "do it",
+                    "engine": "mock",
+                },
+                headers=self._hdr(),
+            )
+        self.assertEqual(resp.status_code, 422, resp.text)
+        self.assertIn("model is required", resp.text)
+        delay.assert_not_called()
+        # A 422 create must not leave a job behind in Postgres.
+        self.assertEqual(len(store.list_jobs(limit=500)), before_count)
 
 
 if __name__ == "__main__":
