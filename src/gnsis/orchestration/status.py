@@ -39,6 +39,12 @@ class JobStatus:
     REJECTED = "rejected"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # A required prerequisite was absent before execution could begin (e.g. the
+    # repository has no initial commit, the branch doesn't exist, or GNSIS no
+    # longer has GitHub access). Distinct from FAILED: no infrastructure or
+    # model execution ever started, so no usage was consumed. See
+    # gnsis.service.executor.preflight for the deterministic classification.
+    BLOCKED = "blocked"
 
 
 #: status the worker sets while a given phase runs
@@ -52,7 +58,13 @@ PHASE_STATUS: Dict[str, str] = {
 
 #: states from which no further automatic transition happens
 TERMINAL: FrozenSet[str] = frozenset(
-    {JobStatus.COMPLETED, JobStatus.REJECTED, JobStatus.FAILED, JobStatus.CANCELLED}
+    {
+        JobStatus.COMPLETED,
+        JobStatus.REJECTED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+        JobStatus.BLOCKED,
+    }
 )
 
 #: the gate: a job sits here until a human approves or rejects

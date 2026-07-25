@@ -148,6 +148,44 @@ class IntelligenceLifecycle:
             items=normalized,
         )
 
+    def capture_on_approval(self, *, job_id: str, approval_id: int) -> List[MemoryItem]:
+        """Derive durable repository intelligence at the moment of approval.
+
+        Approval — not publication — is the trust boundary for reusable
+        intelligence: an authorized human (or scoped key) accepting the change is
+        what makes its lesson trustworthy, and an external API client must not
+        have to wait on a pull-request publish that may be deferred, retried, or
+        fail for unrelated infrastructure reasons.
+
+        Deliberately idempotent with the publish-time extraction in
+        :mod:`gnsis.service.executor.publish`: both funnel through
+        ``record_reviewed_intelligence_batch``, which is unique per
+        ``(outcome_id, item_key)``, so whichever runs second is a no-op and the
+        two can never double-write.
+
+        The content is the instruction's first line — a bounded, deterministic
+        statement of what was accepted. Entire logs, patches and receipts are
+        deliberately *not* copied in; the item carries provenance references to
+        that evidence instead. Returns ``[]`` when there is no durable lesson
+        (an empty instruction), so approval never manufactures intelligence.
+        """
+        job = self.jobs.get_job(job_id)
+        if job is None:
+            return []
+        content = ((job.instruction or "").strip().splitlines() or [""])[0].strip()
+        if not content:
+            return []
+        return self.process_reviewed_outcome_items(
+            outcome_id=approval_id,
+            intelligence_items=[
+                ReviewedIntelligenceItem(
+                    content=content,
+                    kind=MemoryKind.ACCEPTED_CHANGE,
+                    item_key=MemoryKind.ACCEPTED_CHANGE,
+                )
+            ],
+        )
+
     def process_latest_reviewed_outcome(
         self,
         *,

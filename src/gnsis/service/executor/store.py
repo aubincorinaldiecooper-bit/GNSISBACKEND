@@ -359,6 +359,8 @@ class ExecutionStore:
                 row.completed_at = now
             if status == ExecutionStatus.FAILED:
                 row.completed_at = now
+            if status == ExecutionStatus.BLOCKED:
+                row.completed_at = now
             if status == ExecutionStatus.CANCELLED:
                 row.cancelled_at = now
             s.flush()
