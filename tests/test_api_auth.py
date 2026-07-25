@@ -315,5 +315,178 @@ class RepositoryAndJobScopingTests(ApiAuthTestBase):
         self.assertEqual(ok.status_code, 200, ok.text)
 
 
+class FollowUpAndThreadTests(ApiAuthTestBase):
+    """Conversational run threads: linked immutable runs + thread resolution."""
+
+    def _claim_and_get_repo(self, sub="user-1"):
+        self.client.post(
+            "/v1/github/installations/claim",
+            json={"installation_id": 555},
+            headers=self.auth(sub),
+        )
+        repos = self.client.get("/v1/repositories", headers=self.auth(sub)).json()
+        for r in repos:
+            self.client.patch(
+                f"/v1/repositories/{r['id']}",
+                json={"enabled": True},
+                headers=self.auth(sub),
+            )
+        return self.client.get("/v1/repositories", headers=self.auth(sub)).json()
+
+    def _root(self, sub="user-1", advisor="anthropic/claude-opus-4.8", instruction="first"):
+        repos = self._claim_and_get_repo(sub)
+        body = {"repository_id": repos[0]["id"], "instruction": instruction, "model": "openai/gpt-5.4"}
+        if advisor is not None:
+            body["advisor_model"] = advisor
+        r = self.client.post("/jobs", json=body, headers=self.auth(sub))
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_root_run_is_its_own_thread(self):
+        root = self._root()
+        # A first run roots its own thread and has no parent.
+        self.assertEqual(root["thread_id"], root["id"])
+        self.assertIsNone(root["parent_job_id"])
+
+    def test_follow_up_is_a_new_linked_run_inheriting_config(self):
+        root = self._root(advisor="anthropic/claude-opus-4.8")
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "second"},
+            headers=self.auth("user-1"),
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        fu = r.json()
+        # New immutable run — distinct id, same thread, parent = the previous run.
+        self.assertNotEqual(fu["id"], root["id"])
+        self.assertEqual(fu["thread_id"], root["thread_id"])
+        self.assertEqual(fu["parent_job_id"], root["id"])
+        self.assertEqual(fu["status"], "queued")
+        # Only the instruction is new; repo + models are resolved from the parent.
+        self.assertEqual(fu["instruction"], "second")
+        self.assertEqual(fu["repo"], root["repo"])
+        self.assertEqual(fu["model"], root["model"])
+        self.assertEqual(fu["advisor_model"], root["advisor_model"])
+
+    def test_retry_run_again_reuses_parent_instruction(self):
+        root = self._root(instruction="do the thing")
+        # No instruction supplied — Retry (failed/cancelled) / Run-again (completed).
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up", json={}, headers=self.auth("user-1")
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        retry = r.json()
+        self.assertEqual(retry["instruction"], "do the thing")
+        self.assertEqual(retry["parent_job_id"], root["id"])
+        self.assertEqual(retry["thread_id"], root["thread_id"])
+        self.assertNotEqual(retry["id"], root["id"])
+
+    def test_follow_up_preserves_absent_advisor(self):
+        # A parent that pinned no Advisor yields a follow-up with no Advisor.
+        root = self._root(advisor=None)
+        self.assertIsNone(root["advisor_model"])
+        fu = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "more"},
+            headers=self.auth("user-1"),
+        ).json()
+        self.assertIsNone(fu["advisor_model"])
+
+    def test_follow_up_blank_instruction_rejected(self):
+        root = self._root()
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "   "},
+            headers=self.auth("user-1"),
+        )
+        self.assertEqual(r.status_code, 422, r.text)
+
+    def test_follow_up_on_another_workspace_is_404(self):
+        root = self._root("user-1")
+        # user-2 must not be able to extend user-1's thread by its run id.
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "intrude"},
+            headers=self.auth("user-2"),
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_follow_up_blocked_when_parent_repo_no_longer_accessible(self):
+        root = self._root("user-1")
+        # The parent's repository loses installation access (resynced as disabled).
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        with session_scope() as s:
+            s.query(orm.Repository).update({orm.Repository.enabled: False})
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "again"},
+            headers=self.auth("user-1"),
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_thread_lists_all_runs_oldest_first(self):
+        root = self._root("user-1")
+        fu1 = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "second"},
+            headers=self.auth("user-1"),
+        ).json()
+        fu2 = self.client.post(
+            f"/jobs/{fu1['id']}/follow-up",
+            json={"instruction": "third"},
+            headers=self.auth("user-1"),
+        ).json()
+        # A follow-up of a follow-up stays in the same thread, chained to fu1.
+        self.assertEqual(fu2["thread_id"], root["thread_id"])
+        self.assertEqual(fu2["parent_job_id"], fu1["id"])
+
+        expected = [root["id"], fu1["id"], fu2["id"]]
+        # Opening ANY run in the thread resolves the whole conversation.
+        for opened in (root["id"], fu1["id"], fu2["id"]):
+            thread = self.client.get(
+                f"/jobs/{opened}/thread", headers=self.auth("user-1")
+            ).json()
+            self.assertEqual([j["id"] for j in thread], expected)
+
+    def test_legacy_job_resolves_to_single_run_thread(self):
+        root = self._root("user-1")
+        # A run whose thread was never set (legacy row) is a single-run thread.
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        with session_scope() as s:
+            s.get(orm.Job, root["id"]).thread_id = None
+        thread = self.client.get(
+            f"/jobs/{root['id']}/thread", headers=self.auth("user-1")
+        ).json()
+        self.assertEqual([j["id"] for j in thread], [root["id"]])
+        self.assertEqual(thread[0]["thread_id"], root["id"])
+
+    def test_thread_of_another_workspace_is_404(self):
+        root = self._root("user-1")
+        r = self.client.get(f"/jobs/{root['id']}/thread", headers=self.auth("user-2"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_follow_up_requires_execution_configured(self):
+        root = self._root("user-1")
+        from gnsis.service import settings as settings_mod
+
+        saved = os.environ.pop("GNSIS_EXECUTION_PROVIDER", None)
+        settings_mod._settings = None
+        try:
+            r = self.client.post(
+                f"/jobs/{root['id']}/follow-up",
+                json={"instruction": "x"},
+                headers=self.auth("user-1"),
+            )
+            self.assertEqual(r.status_code, 503, r.text)
+        finally:
+            if saved is not None:
+                os.environ["GNSIS_EXECUTION_PROVIDER"] = saved
+            settings_mod._settings = None
+
+
 if __name__ == "__main__":
     unittest.main()

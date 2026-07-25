@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from ..memory.base import MemoryProvider, MemoryRecord
@@ -47,6 +47,10 @@ def _job_to_record(row: orm.Job) -> JobRecord:
         repository_id=row.repository_id,
         model=row.model,
         advisor_model=getattr(row, "advisor_model", None),
+        # A legacy row predating threading has a NULL thread_id; it is its own
+        # single-run thread, so the record always reports a usable thread id.
+        thread_id=getattr(row, "thread_id", None) or row.id,
+        parent_job_id=getattr(row, "parent_job_id", None),
     )
 
 
@@ -71,10 +75,35 @@ class PostgresJobStore:
                 repository_id=spec.repository_id,
                 model=spec.model,
                 advisor_model=spec.advisor_model,
+                # A root run (no parent) roots its own thread; a follow-up carries
+                # its parent's thread id. Never None on a freshly created row.
+                thread_id=spec.thread_id or job_id,
+                parent_job_id=spec.parent_job_id,
             )
             s.add(row)
             s.flush()
             return _job_to_record(row)
+
+    def list_thread(self, thread_id: str, *, workspace_id: Optional[str] = None) -> List[JobRecord]:
+        """All runs in one conversation thread, oldest first.
+
+        A thread is identified by its root run's id. Legacy rows predating
+        threading have a NULL ``thread_id`` and form a single-run thread keyed by
+        their own id, so both the explicit ``thread_id`` match and the
+        self-rooted legacy case are included. When ``workspace_id`` is given the
+        result is confined to that workspace, so a thread can never span tenants.
+        """
+        with session_scope() as s:
+            q = s.query(orm.Job).filter(
+                or_(
+                    orm.Job.thread_id == thread_id,
+                    and_(orm.Job.thread_id.is_(None), orm.Job.id == thread_id),
+                )
+            )
+            if workspace_id is not None:
+                q = q.filter(orm.Job.workspace_id == workspace_id)
+            rows = q.order_by(orm.Job.created_at.asc(), orm.Job.id.asc()).all()
+            return [_job_to_record(r) for r in rows]
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         with session_scope() as s:

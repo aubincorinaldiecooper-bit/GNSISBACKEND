@@ -157,6 +157,14 @@ class Job(Base):
     # (and internal-API-key runs) remain valid; user runs always set both.
     workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Conversational run threads. A thread groups the linked, immutable runs of
+    # one continuing conversation; ``thread_id`` is the id of the thread's first
+    # (root) run. ``parent_job_id`` is the run this one follows up on (a normal
+    # instruction, a Retry, or a Run-again). Both nullable so legacy rows created
+    # before threading stay valid: such a row is its own single-run thread, so a
+    # NULL ``thread_id`` is read as the row's own id (see ``effective_thread_id``).
+    thread_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    parent_job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

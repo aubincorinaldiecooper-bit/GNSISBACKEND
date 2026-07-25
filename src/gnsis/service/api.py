@@ -188,6 +188,33 @@ def _require_execution_configured(settings) -> None:
         )
 
 
+def _require_accessible_repository(workspace: WorkspaceRecord, repository_id):
+    """Resolve a repository the workspace can currently run against, or raise.
+
+    Shared by job creation and follow-ups so both apply identical access rules:
+
+    * A row with ``enabled=False`` is a repository the workspace previously had
+      access to but that is no longer part of the GitHub App installation (see
+      ``sync_repositories``). The row survives so historical jobs and receipts
+      still resolve, but new runs against it must be blocked. From the user's
+      point of view it isn't in their accessible list at all, so a 404 is the
+      honest response — and it never confirms another workspace's repo exists.
+    * The backing installation must still be usable (not deleted/suspended).
+
+    For a follow-up this is called with the *parent run's* repository id, never a
+    client-supplied one, so the frontend cannot redirect a thread to another repo.
+    """
+    repo = ws.get_repository(workspace.id, repository_id)
+    if repo is None or not repo.enabled:
+        raise HTTPException(status_code=404, detail="repository not found")
+    inst = ws.get_installation_by_record_id(repo.github_installation_record_id)
+    if inst is None or inst.status == "deleted":
+        raise HTTPException(status_code=409, detail="repository installation is unavailable")
+    if inst.status == "suspended":
+        raise HTTPException(status_code=409, detail="repository installation is suspended")
+    return repo
+
+
 # -- schemas ------------------------------------------------------------------
 
 
@@ -228,6 +255,12 @@ class JobResponse(BaseModel):
     created_at: str
     updated_at: str
     usage: dict = Field(default_factory=dict)
+    # Conversational run threads. ``thread_id`` groups the linked runs of one
+    # conversation (equal to the root run's id); a legacy job resolves to a
+    # single-run thread keyed by its own id, so this is always populated.
+    # ``parent_job_id`` is the run this one follows up on (null for the first).
+    thread_id: Optional[str] = None
+    parent_job_id: Optional[str] = None
 
 
 class LogResponse(BaseModel):
@@ -235,6 +268,16 @@ class LogResponse(BaseModel):
     level: str
     message: str
     created_at: str
+
+
+class FollowUpRequest(BaseModel):
+    # The new instruction for this turn of the conversation. Optional: when it is
+    # omitted (or blank) the parent run's instruction is reused verbatim — the
+    # Retry (failed/cancelled) and Run-again (completed) paths — producing a new
+    # linked run with the same instruction and configuration. When present it
+    # must be non-empty. Everything else (repository, models, base branch, thread
+    # and parent linkage) is resolved authoritatively from the parent run.
+    instruction: Optional[str] = None
 
 
 class ApproveRequest(BaseModel):
@@ -805,20 +848,7 @@ def create_job(
     # from job input. If it is missing or invalid, no job can be created — there
     # is no local/Celery/Docker fallback to fall back to.
     _require_execution_configured(settings)
-    repo = ws.get_repository(workspace.id, req.repository_id)
-    # A row with ``enabled=False`` is a repository the workspace previously
-    # had access to but that is no longer part of the GitHub App installation
-    # (see ``sync_repositories``). The row survives so historical jobs and
-    # receipts still resolve, but new runs against it must be blocked. From
-    # the user's point of view it isn't in their accessible list at all, so
-    # a 404 is the honest response.
-    if repo is None or not repo.enabled:
-        raise HTTPException(status_code=404, detail="repository not found")
-    inst = ws.get_installation_by_record_id(repo.github_installation_record_id)
-    if inst is None or inst.status == "deleted":
-        raise HTTPException(status_code=409, detail="repository installation is unavailable")
-    if inst.status == "suspended":
-        raise HTTPException(status_code=409, detail="repository installation is suspended")
+    repo = _require_accessible_repository(workspace, req.repository_id)
 
     # New user-created runs require the primary model. Advisor is optional; when
     # supplied, it is independently validated against the same server allowlist.
@@ -858,6 +888,80 @@ def create_job(
     return _to_response(job)
 
 
+@app.post("/jobs/{job_id}/follow-up", response_model=JobResponse)
+def create_follow_up(
+    job_id: str,
+    req: FollowUpRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> JobResponse:
+    """Queue a new run linked to an existing one in the same conversation thread.
+
+    Every submitted message in a conversation is a new immutable run: this never
+    resets, resumes, or re-opens the parent — it creates a fresh queued job that
+    records ``parent_job_id`` and shares the parent's ``thread_id``.
+
+    Only the new instruction comes from the client. Everything that defines
+    *where and how* the run executes is resolved authoritatively from the parent:
+    workspace, repository identity, base branch, primary model, and Advisor (a
+    parent with no Advisor yields a follow-up with no Advisor). The client cannot
+    override the parent's repository or models, and the parent's repository must
+    still be accessible to the workspace. The follow-up is dispatched through the
+    existing pipeline exactly like any other queued job.
+
+    Retry (failed/cancelled) and Run-again (completed) are the same operation
+    with the instruction omitted, so the parent's instruction is reused verbatim.
+    """
+    settings = get_settings()
+    _require_execution_configured(settings)
+
+    # Workspace-scoped: an unknown or cross-workspace parent is a 404, so a
+    # thread/job id can't be used to reach or extend another tenant's run.
+    parent = _require_owned_job(db, workspace, job_id)
+
+    # Resolve against the *parent's* repository id (never client input) so a
+    # follow-up cannot be redirected to another repo, and so it is blocked if the
+    # workspace has since lost access to that repository.
+    repo = _require_accessible_repository(workspace, parent.repository_id)
+
+    # New instruction for a follow-up; the parent's instruction for Retry/Run-again.
+    raw = req.instruction if req.instruction is not None else parent.instruction
+    instruction = (raw or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=422, detail="instruction is required")
+
+    spec = JobSpec(
+        repo=repo.full_name,
+        instruction=instruction,
+        base_branch=parent.base_branch,
+        engine=parent.engine,
+        model=parent.model,
+        # Preserve a null Advisor: a parent that pinned no Advisor stays advisor-less.
+        advisor_model=parent.advisor_model,
+        workspace_id=workspace.id,
+        repository_id=repo.id,
+        # Continue the parent's thread; link back to the parent run.
+        thread_id=parent.thread_id,
+        parent_job_id=parent.id,
+        # Bounded, deterministic, auditable context handoff — references to the
+        # prior run by id, kept separate from the new instruction. Never an
+        # unbounded copy of the parent's logs, patch, receipt, or transcript.
+        context={
+            "thread": {
+                "thread_id": parent.thread_id,
+                "parent_job_id": parent.id,
+                "parent_status": parent.status,
+            }
+        },
+    )
+    job = db.create_job(spec)
+
+    from .tasks import run_job
+
+    run_job.delay(job.id)
+    return _to_response(job)
+
+
 @app.get("/jobs", response_model=List[JobResponse])
 def list_jobs(
     limit: int = 50,
@@ -875,6 +979,29 @@ def get_job(
     db: PostgresJobStore = Depends(store),
 ) -> JobResponse:
     return _to_response(_require_owned_job(db, workspace, job_id))
+
+
+@app.get("/jobs/{job_id}/thread", response_model=List[JobResponse])
+def get_thread(
+    job_id: str,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+    db: PostgresJobStore = Depends(store),
+) -> List[JobResponse]:
+    """Every run of the conversation this job belongs to, oldest first.
+
+    Opening any run in a thread — including a ``/runs/:jobId`` deep link to a
+    single run — resolves the whole conversation through this endpoint. A legacy
+    job with no thread resolves to a single-run thread containing just itself.
+    The listing is confined to the caller's workspace, so a thread can never
+    surface another tenant's runs.
+    """
+    job = _require_owned_job(db, workspace, job_id)
+    runs = db.list_thread(job.thread_id, workspace_id=workspace.id)
+    # The requested run is always part of its own thread; guard against any edge
+    # (e.g. a legacy row) so the caller never gets an empty or self-excluding list.
+    if not any(r.id == job.id for r in runs):
+        runs = [job, *runs]
+    return [_to_response(r) for r in runs]
 
 
 @app.get("/jobs/{job_id}/logs", response_model=List[LogResponse])
@@ -1110,4 +1237,6 @@ def _to_response(job) -> JobResponse:
         created_at=job.created_at,
         updated_at=job.updated_at,
         usage=(job.context or {}).get("usage", {}),
+        thread_id=getattr(job, "thread_id", None) or job.id,
+        parent_job_id=getattr(job, "parent_job_id", None),
     )

@@ -43,6 +43,12 @@ class JobSpec:
     # a separate role from ``model``; the same model id is valid in one-model
     # deployments. None on legacy rows and on internal/test runs.
     advisor_model: Optional[str] = None
+    # Conversational run threads. ``thread_id`` is the id of the thread's first
+    # (root) run; None on a root spec means "start a new thread rooted at this
+    # job" (the store fills it in with the new job id). ``parent_job_id`` is the
+    # run this one follows up on; None for a thread's first run.
+    thread_id: Optional[str] = None
+    parent_job_id: Optional[str] = None
 
 
 @dataclass
@@ -65,6 +71,11 @@ class JobRecord:
     repository_id: Optional[str] = None
     model: Optional[str] = None
     advisor_model: Optional[str] = None
+    # Conversational run threads (see JobSpec). ``thread_id`` is always populated
+    # on a stored record — either the root run's id or, for a legacy row, the
+    # row's own id. ``parent_job_id`` is None for a thread's first run.
+    thread_id: Optional[str] = None
+    parent_job_id: Optional[str] = None
 
 
 @dataclass

@@ -53,6 +53,12 @@ def get_sessionmaker():
 _ADDITIVE_COLUMNS = [
     ("jobs", "workspace_id", "VARCHAR(64)"),
     ("jobs", "repository_id", "VARCHAR(64)"),
+    # Conversational run threads: additive, nullable links between the immutable
+    # runs of one conversation. ``thread_id`` is the root run's id; a NULL value
+    # on a legacy row means it is its own single-run thread. ``parent_job_id`` is
+    # the previous run this one follows up on (NULL for a thread's first run).
+    ("jobs", "thread_id", "VARCHAR(64)"),
+    ("jobs", "parent_job_id", "VARCHAR(64)"),
     # User-selected OpenRouter model (validated against the server allowlist).
     ("jobs", "model", "VARCHAR(128)"),
     # User-selected Advisor model — powers the openrouter:advisor server tool.
