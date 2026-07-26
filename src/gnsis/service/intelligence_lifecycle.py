@@ -8,6 +8,8 @@ idempotent handoff from a reviewed outcome into CodeMemory plus queryable lineag
 
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
@@ -36,6 +38,14 @@ class ReviewedIntelligenceItem:
     content: str
     kind: Optional[str] = None
     item_key: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class IntelligenceProposal:
+    id: str
+    content: str
+    kind: str
+    evidence: dict
 
 
 class IntelligenceLifecycle:
@@ -125,6 +135,16 @@ class IntelligenceLifecycle:
                 "reviewed_outcome_id": approval_id,
                 "reviewed_outcome_decision": decision,
                 "reviewed_intelligence_item_key": item_key,
+                "final_approved_content": text,
+                "source_model": run.primary_model,
+                "source_policy": {
+                    "name": run.policy_name, "version": run.policy_version,
+                    "hash": run.policy_hash,
+                },
+                "evidence": {
+                    "outcome_summary": run.outcome_summary,
+                    "artifact_hashes": run.artifact_hashes,
+                },
             }
             normalized.append(
                 {
@@ -146,6 +166,59 @@ class IntelligenceLifecycle:
             workspace_id=job.workspace_id,
             repository_id=job.repository_id,
             items=normalized,
+        )
+
+    def proposals_for_run(self, job_id: str) -> List[IntelligenceProposal]:
+        """Deterministically propose lessons from outcome evidence, never task text."""
+        run = self.runs.get_run_for_job(job_id)
+        if run is None or not (run.outcome_summary or "").strip():
+            return []
+        chunks = [
+            re.sub(r"^[-*\u2022]\s*", "", part).strip()
+            for part in re.split(r"[\r\n]+", run.outcome_summary or "")
+        ]
+        chunks = [part for part in chunks if part]
+        evidence = {
+            "source_run_id": run.id,
+            "outcome_summary": run.outcome_summary,
+            "artifact_hashes": dict(run.artifact_hashes or {}),
+        }
+        return [
+            IntelligenceProposal(
+                id="proposal_"
+                + hashlib.sha256(f"{run.id}:{i}:{text}".encode()).hexdigest()[:16],
+                content=text,
+                kind=MemoryKind.ACCEPTED_CHANGE,
+                evidence=evidence,
+            )
+            for i, text in enumerate(chunks)
+        ]
+
+    def capture_on_approval(
+        self, *, job_id: str, approval_id: int,
+        intelligence_items: Optional[Sequence[ReviewedIntelligenceItem | dict]] = None,
+    ) -> List[MemoryItem]:
+        """Derive durable repository intelligence at the moment of approval.
+
+        Approval — not publication — is the trust boundary for reusable
+        intelligence: an authorized human (or scoped key) accepting the change is
+        what makes its lesson trustworthy, and an external API client must not
+        have to wait on a pull-request publish that may be deferred, retried, or
+        fail for unrelated infrastructure reasons.
+
+        Activation funnels through ``record_reviewed_intelligence_batch``, which
+        is unique per ``(outcome_id, item_key)``, so retries cannot double-write.
+
+        Items are activated only from the reviewer's explicit selection. The
+        task instruction is never an input; an empty selection is valid.
+        """
+        # No selection is a valid approval with zero intelligence.  Automatic
+        # proposal activation is intentionally forbidden.
+        if intelligence_items is None:
+            return []
+        return self.process_reviewed_outcome_items(
+            outcome_id=approval_id,
+            intelligence_items=intelligence_items,
         )
 
     def process_latest_reviewed_outcome(
