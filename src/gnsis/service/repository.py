@@ -79,6 +79,7 @@ class PostgresJobStore:
                 # its parent's thread id. Never None on a freshly created row.
                 thread_id=spec.thread_id or job_id,
                 parent_job_id=spec.parent_job_id,
+                idempotency_key=spec.idempotency_key,
             )
             s.add(row)
             s.flush()
@@ -108,6 +109,28 @@ class PostgresJobStore:
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         with session_scope() as s:
             row = s.get(orm.Job, job_id)
+            return _job_to_record(row) if row else None
+
+    def find_by_idempotency_key(self, workspace_id: str, key: str) -> Optional[JobRecord]:
+        """The run a prior request with this Idempotency-Key already created.
+
+        Scoped to the workspace so one tenant's key can never resolve another's
+        run. Backed by the partial unique index on (workspace_id,
+        idempotency_key), so a concurrent replay collides at the database rather
+        than creating a second billable run.
+        """
+        if not workspace_id or not key:
+            return None
+        with session_scope() as s:
+            row = (
+                s.query(orm.Job)
+                .filter(
+                    orm.Job.workspace_id == workspace_id,
+                    orm.Job.idempotency_key == key,
+                )
+                .order_by(orm.Job.created_at.asc())
+                .first()
+            )
             return _job_to_record(row) if row else None
 
     def list_jobs(self, limit: int = 50) -> List[JobRecord]:

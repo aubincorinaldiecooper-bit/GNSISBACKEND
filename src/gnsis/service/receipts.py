@@ -226,8 +226,10 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                 },
                 "failure_category": run.failure_category,
                 # job.error is already control-sequence-stripped + truncated in
-                # the failure paths, so it is safe to surface to the user.
-                "failure_message": job.error if run.status == "failed" else None,
+                # the failure/blocked paths, so it is safe to surface to the user.
+                "failure_message": (
+                    job.error if run.status in ("failed", "blocked") else None
+                ),
             }
         )
         return receipt

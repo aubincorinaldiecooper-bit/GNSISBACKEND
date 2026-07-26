@@ -21,15 +21,19 @@ class ExecutionStatus:
     COMPLETED = "completed"        # outputs validated; job -> awaiting_approval
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # A required prerequisite was absent before dispatch (see FailureCategory's
+    # BLOCKED_* constants for the specific reason). No token was ever minted, no
+    # workflow was ever dispatched, no model or executor infrastructure ran.
+    BLOCKED = "blocked"
 
     #: no further automatic transition happens from these
-    TERMINAL = frozenset({COMPLETED, FAILED, CANCELLED})
+    TERMINAL = frozenset({COMPLETED, FAILED, CANCELLED, BLOCKED})
     #: a run token is only usable while the run is in one of these
     TOKEN_ACTIVE = frozenset({AUTHENTICATED, RUNNING, VALIDATING})
 
 
 class FailureCategory:
-    """Why a run failed — recorded for the receipt and reconciliation."""
+    """Why a run failed or was blocked — recorded for the receipt and reconciliation."""
 
     DISPATCH = "dispatch_failed"
     OIDC = "oidc_failed"
@@ -42,6 +46,15 @@ class FailureCategory:
     ORPHANED = "orphaned"
     LOST_CALLBACK = "lost_callback"
     STALE_ATTEMPT = "stale_attempt"
+
+    # Blocked reasons: a prerequisite was missing during customer-repository
+    # preflight, before any token was minted or workflow dispatched. Distinct
+    # namespace (same field) from the FAILED-only categories above — see
+    # gnsis.service.executor.preflight for the deterministic classifier that
+    # produces these from a GitHubHTTPError status code.
+    BLOCKED_REPOSITORY_EMPTY = "blocked_repository_empty"
+    BLOCKED_BRANCH_NOT_FOUND = "blocked_branch_not_found"
+    BLOCKED_INSTALLATION_INACCESSIBLE = "blocked_installation_inaccessible"
 
 
 @dataclass(frozen=True)
@@ -110,6 +123,7 @@ class ExecutionRunRecord:
     # for this run (a compromised primary cannot swap it out per-request).
     primary_model: Optional[str] = None
     advisor_model: Optional[str] = None
+    outcome_summary: Optional[str] = None
 
     @property
     def is_terminal(self) -> bool:

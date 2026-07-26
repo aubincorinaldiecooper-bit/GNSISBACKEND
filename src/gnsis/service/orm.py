@@ -165,6 +165,11 @@ class Job(Base):
     # NULL ``thread_id`` is read as the row's own id (see ``effective_thread_id``).
     thread_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     parent_job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Public-API idempotency: the caller-supplied Idempotency-Key for the request
+    # that created this run. Unique per workspace (partial unique index, NULLs
+    # exempt) so a retried POST /v1/runs returns the original run instead of
+    # creating or billing a second one. Null for web-composer runs.
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -343,6 +348,7 @@ class ExecutionRun(Base):
     # it without re-running anything. Nullable: legacy runs and runs that emitted
     # no tests.json carry none. Keys: runner, status, passed, failed, skipped.
     tests_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    outcome_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Pinned Advisor model — the gateway reads this authoritatively (never from
     # the executor's request body) when it injects the openrouter:advisor server
@@ -733,6 +739,13 @@ class VirtualKey(Base):
     # Restrictions ("" / null = unrestricted). CSV of provider / "provider/model".
     allowed_providers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     allowed_models: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Public-API authorization scopes (CSV, e.g. "runs:create,runs:read").
+    # NULL means "issued before scopes existed" and is treated as the full
+    # public-beta scope set, so keys created for the model gateway keep working
+    # (they are already workspace-bound, so this never crosses a tenant edge).
+    # See gnsis.service.public_api.PUBLIC_SCOPES.
+    api_scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Per-key spend limits (decimal strings; null = unset). Enforced by the limits
     # engine (a later PR); stored here as the key's own policy inputs.

@@ -75,6 +75,22 @@ def _compact_tests_summary(tests_raw: str) -> Optional[dict]:
     }
 
 
+def _outcome_summary(receipt_raw: object) -> Optional[str]:
+    """Extract bounded outcome evidence from an already validated receipt."""
+    import json
+
+    if not isinstance(receipt_raw, str):
+        return None
+    try:
+        receipt = json.loads(receipt_raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(receipt, dict):
+        return None
+    value = receipt.get("outcome_summary") or receipt.get("summary")
+    return str(value).strip()[:8000] if isinstance(value, str) and value.strip() else None
+
+
 def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> dict:
     """Persist a run event. Idempotent, sequence-checked, redacted."""
     if is_terminal(run.status) or run.status in ExecutionStatus.TERMINAL:
@@ -211,6 +227,7 @@ def handle_complete(
         artifact_hashes=artifact_hashes,
         security_validation="passed",
         tests_summary=tests_summary,
+        outcome_summary=_outcome_summary(receipt_raw),
     )
     exec_store.set_status(run.id, ExecutionStatus.COMPLETED)
     exec_store.revoke_token(run.id)

@@ -117,6 +117,7 @@ def _to_record(row: orm.ExecutionRun) -> ExecutionRunRecord:
         memory_ids=list(row.memory_ids or []),
         primary_model=getattr(row, "primary_model", None),
         advisor_model=getattr(row, "advisor_model", None),
+        outcome_summary=getattr(row, "outcome_summary", None),
     )
 
 
@@ -359,6 +360,8 @@ class ExecutionStore:
                 row.completed_at = now
             if status == ExecutionStatus.FAILED:
                 row.completed_at = now
+            if status == ExecutionStatus.BLOCKED:
+                row.completed_at = now
             if status == ExecutionStatus.CANCELLED:
                 row.cancelled_at = now
             s.flush()
@@ -374,6 +377,7 @@ class ExecutionStore:
         artifact_hashes: dict,
         security_validation: str,
         tests_summary: Optional[dict] = None,
+        outcome_summary: Optional[str] = None,
     ) -> None:
         with session_scope() as s:
             row = s.get(orm.ExecutionRun, run_id)
@@ -384,6 +388,8 @@ class ExecutionStore:
             row.security_validation = security_validation
             if tests_summary is not None:
                 row.tests_summary = dict(tests_summary)
+            if outcome_summary is not None:
+                row.outcome_summary = outcome_summary.strip() or None
             s.flush()
 
 

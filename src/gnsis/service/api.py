@@ -20,7 +20,7 @@ from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..orchestration.models import Approval, JobSpec
@@ -101,6 +101,30 @@ app.include_router(stripe_router)
 from .public_gateway import router as public_gateway_router  # noqa: E402
 
 app.include_router(public_gateway_router)
+
+# The public, versioned API-first surface (/v1/runs, repository intelligence).
+# Authenticated by a Genesis virtual key *or* the dashboard session JWT, so the
+# same routes serve external clients and the reference web client.
+from .public_api import (  # noqa: E402
+    PublicApiError,
+    error_response as _public_error_response,
+    new_request_id as _new_request_id,
+    router as public_api_router,
+)
+
+
+@app.exception_handler(PublicApiError)
+def _handle_public_api_error(request: Request, exc: PublicApiError) -> JSONResponse:
+    """The stable public error envelope: {"error": {code, message, request_id}}.
+
+    Never carries a stack trace or secret; actionable technical detail stays in
+    the safe ``message`` and in server-side logs.
+    """
+    request_id = request.headers.get("X-Genesis-Request-Id") or _new_request_id()
+    return _public_error_response(exc, request_id)
+
+
+app.include_router(public_api_router)
 
 
 # -- dependency providers (overridable in tests) ------------------------------
@@ -1010,11 +1034,15 @@ def get_logs(
     workspace: WorkspaceRecord = Depends(current_workspace),
     db: PostgresJobStore = Depends(store),
 ) -> List[LogResponse]:
+    """The job's Activity timeline — job-level narrative merged with the
+    evidence recorded against its execution run (preflight checks, pinned
+    context, executor-reported progress), chronologically ordered. See
+    :func:`gnsis.service.activity.build_activity`.
+    """
     _require_owned_job(db, workspace, job_id)
-    return [
-        LogResponse(phase=e.phase, level=e.level, message=e.message, created_at=e.created_at)
-        for e in db.get_logs(job_id)
-    ]
+    from .activity import build_activity
+
+    return [LogResponse(**view) for view in build_activity(job_id)]
 
 
 @app.get("/jobs/{job_id}/diff")
@@ -1091,6 +1119,13 @@ def approve(
     )
     db.merge_context(job_id, {"approval_binding": binding, "approval_id": approval.id})
     job = db.set_status(job_id, JobStatus.APPROVED)
+
+    # Approval is the trust boundary for reusable intelligence — capture it here
+    # so the dashboard and the public API behave identically. Idempotent with
+    # the publish-time extraction.
+    from .public_api import _capture_intelligence
+
+    _capture_intelligence(db, job_id, approval.id)
 
     from .tasks import publish_pr
 

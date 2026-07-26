@@ -175,6 +175,13 @@ def run_job(job_id: str) -> str:
         dispatch_execution,
         resolve_base_sha,
     )
+    from .executor.github import GitHubHTTPError
+    from .executor.models import FailureCategory
+    from .executor.preflight import (
+        blocked_explanation,
+        classify_github_ref_error,
+        record_blocked_run,
+    )
     from .executor.store import ExecutionStore
 
     store = _store()
@@ -191,12 +198,29 @@ def run_job(job_id: str) -> str:
         )
         raise RuntimeError("execution provider is not configured")
 
+    def _block(reason_code: str, provider_detail: str) -> str:
+        """Settle the job as BLOCKED with durable evidence. Not a task failure —
+        a blocked attempt is an expected, correctly-classified terminal outcome,
+        so this returns rather than raises (unlike the FAILED paths below)."""
+        record_blocked_run(
+            settings, ExecutionStore(), job,
+            reason_code=reason_code, provider_detail=provider_detail,
+        )
+        explanation = blocked_explanation(
+            reason_code, repo_full_name=job.repo, branch=job.base_branch
+        )
+        store.set_status(
+            job_id, JobStatus.BLOCKED,
+            error=f"{explanation}\n\nTechnical details: {provider_detail}",
+        )
+        return JobStatus.BLOCKED
+
     installation_id = resolve_installation_id(job)
     if installation_id is None:
-        store.set_status(
-            job_id, JobStatus.FAILED, error="no GitHub installation for repository"
+        return _block(
+            FailureCategory.BLOCKED_INSTALLATION_INACCESSIBLE,
+            "no GitHub installation is currently resolvable for this repository",
         )
-        raise RuntimeError(f"no installation resolvable for job {job_id}")
 
     # Resolve the trusted policy version + a bounded, tenant-scoped memory slice
     # to pin onto this run. Policy resolution seeds v1 on first use and is
@@ -205,14 +229,25 @@ def run_job(job_id: str) -> str:
     policy = _resolve_policy_for_run()
     memory_selection = _retrieve_memory_for_job(job)
 
+    app = _app()
     try:
-        app = _app()
         base_sha = resolve_base_sha(
             app,
             customer_installation_id=installation_id,
             repo_full_name=job.repo,
             base_branch=job.base_branch,
         )
+    except GitHubHTTPError as exc:
+        reason_code = classify_github_ref_error(exc)
+        if reason_code is not None:
+            return _block(reason_code, str(exc))
+        store.set_status(job_id, JobStatus.FAILED, error=f"dispatch failed: {exc}")
+        raise
+    except Exception as exc:  # noqa: BLE001
+        store.set_status(job_id, JobStatus.FAILED, error=f"dispatch failed: {exc}")
+        raise
+
+    try:
         run = dispatch_execution(
             settings,
             ExecutionStore(),

@@ -49,6 +49,9 @@ class VirtualKeyView:
     team_id: Optional[str]
     allowed_providers: List[str]
     allowed_models: List[str]
+    #: Public-API scopes. Empty list means the key predates scopes and is
+    #: treated as carrying the full public-beta scope set (see public_api).
+    api_scopes: List[str]
     soft_limit: Optional[str]
     hard_limit: Optional[str]
     per_run_limit: Optional[str]
@@ -76,6 +79,7 @@ def _view(row: orm.VirtualKey) -> VirtualKeyView:
         workspace_id=row.workspace_id, project_id=row.project_id,
         environment_id=row.environment_id, user_id=row.user_id, team_id=row.team_id,
         allowed_providers=_csv(row.allowed_providers), allowed_models=_csv(row.allowed_models),
+        api_scopes=_csv(getattr(row, "api_scopes", None)),
         soft_limit=row.soft_limit, hard_limit=row.hard_limit, per_run_limit=row.per_run_limit,
         daily_limit=row.daily_limit, monthly_limit=row.monthly_limit,
         expires_at=row.expires_at.isoformat() if row.expires_at else None,
@@ -163,6 +167,7 @@ class VirtualKeyStore:
         monthly_limit=None,
         expires_at=None,
         metadata: Optional[dict] = None,
+        api_scopes=None,
     ) -> tuple[VirtualKeyView, str]:
         """Mint a key. Returns ``(view, secret)`` — the secret is shown ONCE."""
         if mode not in _MODES:
@@ -193,6 +198,7 @@ class VirtualKeyStore:
                 workspace_id=workspace_id,
                 project_id=project_id, environment_id=environment_id,
                 user_id=user_id, team_id=team_id,
+                api_scopes=_norm_csv(api_scopes),
                 allowed_providers=_norm_csv(allowed_providers),
                 allowed_models=_norm_csv(allowed_models),
                 expires_at=expiry,

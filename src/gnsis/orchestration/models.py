@@ -49,6 +49,8 @@ class JobSpec:
     # run this one follows up on; None for a thread's first run.
     thread_id: Optional[str] = None
     parent_job_id: Optional[str] = None
+    # Caller-supplied Idempotency-Key (public API only); unique per workspace.
+    idempotency_key: Optional[str] = None
 
 
 @dataclass

@@ -59,6 +59,12 @@ _ADDITIVE_COLUMNS = [
     # the previous run this one follows up on (NULL for a thread's first run).
     ("jobs", "thread_id", "VARCHAR(64)"),
     ("jobs", "parent_job_id", "VARCHAR(64)"),
+    # Public-API run idempotency (Idempotency-Key on POST /v1/runs), unique per
+    # workspace via the partial index created below.
+    ("jobs", "idempotency_key", "VARCHAR(191)"),
+    # Public-API authorization scopes on a Genesis virtual key (CSV). NULL =
+    # legacy key, treated as the full public-beta scope set.
+    ("virtual_keys", "api_scopes", "TEXT"),
     # User-selected OpenRouter model (validated against the server allowlist).
     ("jobs", "model", "VARCHAR(128)"),
     # User-selected Advisor model — powers the openrouter:advisor server tool.
@@ -93,6 +99,7 @@ _ADDITIVE_COLUMNS = [
     ("execution_runs", "memory_ids", "JSON"),
     # Immutable test-outcome snapshot for the run receipt (G6).
     ("execution_runs", "tests_summary", "JSON"),
+    ("execution_runs", "outcome_summary", "TEXT"),
     # Pinned primary + advisor model per run. The gateway reads advisor_model
     # authoritatively to fix the openrouter:advisor server tool definition.
     ("execution_runs", "primary_model", "VARCHAR(128)"),
@@ -139,6 +146,18 @@ def _apply_additive_columns(engine) -> None:
                     "uq_memory_provenance_outcome_item_key "
                     "ON memory_provenance (outcome_id, item_key) "
                     "WHERE item_key IS NOT NULL"
+                )
+            )
+            # One run per (workspace, Idempotency-Key). Partial so the vast
+            # majority of rows (web-composer runs, NULL key) are unconstrained,
+            # and so a replayed public-API create collides at the database
+            # rather than racing two concurrent inserts through.
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_jobs_workspace_idempotency_key "
+                    "ON jobs (workspace_id, idempotency_key) "
+                    "WHERE idempotency_key IS NOT NULL"
                 )
             )
 
