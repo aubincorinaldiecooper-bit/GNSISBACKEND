@@ -93,6 +93,27 @@ def _outcome_summary(receipt_raw: object) -> Optional[str]:
     return str(value).strip()[:8000] if isinstance(value, str) and value.strip() else None
 
 
+#: Executor-reported delivery ids may never exceed what the backend itself
+#: pinned to the run at dispatch time — narrowed here even though the
+#: executor already narrows on its side, since a callback is an external
+#: input and must never be trusted blindly.
+_INTELLIGENCE_DELIVERY_KIND = "intelligence_context_delivered"
+
+
+def _narrow_intelligence_delivery(payload: dict, run) -> dict:
+    ids = payload.get("memory_ids")
+    if not isinstance(ids, list):
+        return {**payload, "memory_ids": []}
+    pinned = set(run.memory_ids or [])
+    seen: set = set()
+    narrowed = []
+    for item in ids:
+        if isinstance(item, str) and item.strip() and item in pinned and item not in seen:
+            seen.add(item)
+            narrowed.append(item)
+    return {**payload, "memory_ids": narrowed}
+
+
 def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> dict:
     """Persist a run event. Idempotent, sequence-checked, redacted."""
     if is_terminal(run.status) or run.status in ExecutionStatus.TERMINAL:
@@ -109,6 +130,11 @@ def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> d
     # No ANSI/control-sequence injection into trusted output.
     if isinstance(message, str):
         payload = safe_payload({**payload, "message": strip_control_sequences(message)[:4000]})
+    if kind == _INTELLIGENCE_DELIVERY_KIND:
+        # Defense in depth: the executor already reports only a subset of the
+        # pinned set, but a callback is external input and must never be
+        # trusted blindly — narrow again here, never enlarge.
+        payload = _narrow_intelligence_delivery(payload, run)
 
     created = exec_store.record_event(
         run.id,

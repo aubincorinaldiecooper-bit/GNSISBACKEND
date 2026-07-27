@@ -171,6 +171,22 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
             .all()
         )
         consumed_ids = [c.memory_id for c in consumptions]
+        # Truthful "delivered" evidence: the executor's own harness-authored
+        # intelligence_context_delivered event(s), already narrowed server-side
+        # (record_run_event) to ids this run was actually pinned to. Never
+        # inferred from selection alone — selection only proves the backend
+        # chose it, not that the executor attached it to a real model request.
+        delivered_ids: set = set()
+        for event in (
+            s.query(orm.ExecutionEvent)
+            .filter(orm.ExecutionEvent.run_id == run_id,
+                    orm.ExecutionEvent.kind == "intelligence_context_delivered")
+            .all()
+        ):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            ids = payload.get("memory_ids")
+            if isinstance(ids, list):
+                delivered_ids.update(item for item in ids if isinstance(item, str))
         supplied_provenance = (
             {
                 p.memory_id: p
@@ -252,12 +268,14 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                                 if memory_id in supplied_memory else None
                             ),
                             "selected": True,
-                            "delivered": True,
-                            # Truthful, not fabricated: the current executor
-                            # reports no semantic-use attestation back to the
-                            # backend, so this is always false today rather
-                            # than implying actual consumption.
-                            "consumption_reported": False,
+                            # True only when the executor's own harness-authored
+                            # attestation named this exact id; never assumed
+                            # from selection alone. Whether the model
+                            # semantically used, followed, or relied on it is
+                            # not claimed here or anywhere else — that remains
+                            # unknown and is deliberately not represented as a
+                            # field at all (an absent claim, not a false one).
+                            "delivered": memory_id in delivered_ids,
                             "source_run_id": (
                                 supplied_provenance[memory_id].source_job_id
                                 if memory_id in supplied_provenance else None

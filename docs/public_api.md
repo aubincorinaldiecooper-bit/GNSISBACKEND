@@ -311,7 +311,6 @@ curl -s https://api.gnsis.studio/v1/runs/$RUN_B/receipt \
         "content": "Harden the authentication middleware",
         "selected": true,
         "delivered": true,
-        "consumption_reported": false,
         "source_run_id": "job_bbec96036ff8",
         "source_model": "anthropic/claude-opus-4.8",
         "source_advisor_model": null,
@@ -334,14 +333,25 @@ it. `memory_ids_consumed` (legacy, unchanged) and the richer `intelligence`
 block above describe the same underlying fact; the latter is the complete,
 self-contained proof of the source → approval → destination chain.
 
-`selected` and `delivered` are always true for anything in `supplied` — the
-backend authoritatively chose and pinned it before dispatch. `consumption_reported`
-is **truthfully `false` today**: the current executor does not attest back which
-memory it semantically used, only what it was given, so this field is never
-claimed `true` without that attestation. `intelligence.proposed` and
-`intelligence.approved` mirror `GET /v1/runs/{id}/intelligence-proposals` and
-this run's own `reviewed_intelligence_created`, respectively — Run B here
-proposed and approved nothing of its own, so both are empty.
+The truthful vocabulary here is exactly three states, and only two of them are
+ever asserted as fields:
+
+- **`selected`** — the backend chose and pinned this item to the run before
+  dispatch. Always `true` for anything in `supplied`.
+- **`delivered`** — the executor's own harness-authored attestation confirmed
+  this exact id was attached to a real outbound model request. This is `false`,
+  not fabricated `true`, until that attestation event has actually been
+  recorded for the run — a run whose executor predates delivery attestation,
+  or whose model request hasn't happened yet, truthfully reports `false` here.
+- **Semantic use is never claimed.** Whether the model understood, followed,
+  relied on, or was influenced by the intelligence is unknown and is
+  deliberately not represented as a field anywhere in this response — an
+  absent claim, never a `false` one standing in for "unknown".
+
+`intelligence.proposed` and `intelligence.approved` mirror
+`GET /v1/runs/{id}/intelligence-proposals` and this run's own
+`reviewed_intelligence_created`, respectively — Run B here proposed and
+approved nothing of its own, so both are empty.
 
 The selected intelligence is delivered to the executor as a **separate field**,
 never spliced into the user's instruction, and the exact ids are pinned to the
