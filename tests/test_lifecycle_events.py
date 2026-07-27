@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from gnsis.service.executor.events import record_lifecycle_event, safe_payload
 from gnsis.service.activity import EventType, _append_persisted_events
-from gnsis.service.executor.callbacks import handle_failed
+from gnsis.service.executor.callbacks import handle_failed, record_run_event
 from gnsis.service.executor.failures import classify_failure
 
 
@@ -28,6 +28,7 @@ def _run(**overrides):
         status="dispatched", source_downloaded=False, token_hashed=False,
         patch_sha256=None, failure_category=None,
         usage=SimpleNamespace(model_calls=0),
+        cancellation_requested=False, memory_ids=None,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -120,3 +121,63 @@ def test_executor_failure_callback_uses_evidence_based_stage():
     payload = store.calls[0][1]["payload"]
     assert payload["stage"] == "source_loading"
     assert payload["execution_started"] is False
+
+
+def _record(store, run, memory_ids, **body_overrides):
+    body = {"kind": "intelligence_context_delivered", "sequence": 1,
+            "idempotency_key": "k1", "data": {
+                "memory_ids": memory_ids, "destination_model": "m",
+                "delivery_state": "delivered", "model_request_started": True,
+            }}
+    body.update(body_overrides)
+    return record_run_event(None, store, run, body)
+
+
+def test_intelligence_delivery_event_is_narrowed_to_the_pinned_set():
+    """The backend never trusts an executor-reported id at face value — even
+    though the executor already narrows on its side, a callback is external
+    input and must be validated again here."""
+    store = _Store()
+    run = _run(memory_ids=["mem1", "mem2"])
+
+    _record(store, run, ["mem1", "mem2", "never-pinned", "mem1"])
+
+    payload = store.calls[0][1]["payload"]
+    assert payload["memory_ids"] == ["mem1", "mem2"]
+
+
+def test_intelligence_delivery_with_no_pinned_ids_narrows_to_empty():
+    store = _Store()
+    run = _run(memory_ids=None)
+
+    _record(store, run, ["mem1"])
+
+    assert store.calls[0][1]["payload"]["memory_ids"] == []
+
+
+def test_other_event_kinds_are_not_narrowed():
+    """Only the intelligence-delivery kind is subject to pinned-set
+    narrowing — ordinary events pass their data through unchanged."""
+    store = _Store()
+    run = _run(memory_ids=["mem1"])
+
+    record_run_event(None, store, run, {
+        "kind": "agent_progress", "sequence": 1, "idempotency_key": "k1",
+        "data": {"message": "working", "memory_ids": ["anything"]},
+    })
+
+    assert store.calls[0][1]["payload"]["memory_ids"] == ["anything"]
+
+
+def test_intelligence_delivery_is_rejected_for_a_terminal_run():
+    store = _Store()
+    run = _run(status="completed", memory_ids=["mem1"])
+
+    try:
+        _record(store, run, ["mem1"])
+        raised = False
+    except Exception:
+        raised = True
+
+    assert raised
+    assert store.calls == []

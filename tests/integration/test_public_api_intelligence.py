@@ -261,14 +261,35 @@ class PublicApiIntelligenceIntegrationTests(unittest.TestCase):
         supplied_item = supplied[0]
         self.assertEqual(supplied_item["memory_id"], intelligence_id)
         self.assertTrue(supplied_item["selected"])
-        self.assertTrue(supplied_item["delivered"])
-        # Truthful: the current executor reports no semantic-use attestation.
-        self.assertFalse(supplied_item["consumption_reported"])
+        # Truthful: selection alone is not delivery. No executor attestation
+        # has been reported for Run B yet, so this must not be fabricated true.
+        self.assertFalse(supplied_item["delivered"])
+        self.assertNotIn("consumption_reported", supplied_item)
         self.assertEqual(supplied_item["source_run_id"], run_a["id"])
         self.assertEqual(supplied_item["source_model"], MODEL_A)
         self.assertEqual(supplied_item["approval_id"], approval_id)
         self.assertEqual(supplied_item["destination_run_id"], run_b["id"])
         self.assertEqual(supplied_item["destination_model"], MODEL_B)
+
+        # Once the executor's own harness-authored attestation arrives (via
+        # the same authenticated events callback real runs use), "delivered"
+        # becomes truthfully true — never claiming semantic use, only that
+        # the executor attached it to a real outbound model request.
+        from gnsis.service.executor.callbacks import record_run_event
+
+        record_run_event(self.settings, ExecutionStore(), run_record_b, {
+            "run_id": run_record_b.workflow_run_id, "run_attempt": run_record_b.workflow_run_attempt,
+            "sequence": 1, "idempotency_key": f"{run_record_b.id}:intel-delivered",
+            "kind": "intelligence_context_delivered",
+            "data": {"memory_ids": [intelligence_id, "not-a-real-pinned-id"],
+                     "destination_model": MODEL_B, "delivery_state": "delivered",
+                     "model_request_started": True},
+        })
+        receipt_b_after = self.client.get(
+            f"/v1/runs/{run_b['id']}/receipt", headers=self.auth()
+        ).json()
+        supplied_after = receipt_b_after["intelligence"]["supplied"][0]
+        self.assertTrue(supplied_after["delivered"])
 
         # Cross-model: produced under A, consumed under B.
         receipt_a = self.client.get(
