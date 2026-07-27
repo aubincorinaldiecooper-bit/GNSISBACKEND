@@ -11,9 +11,12 @@ an injected fetcher) and SQLite stands in for Postgres.
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
 import os
 import sys
+import tarfile
 import time
 import unittest
 
@@ -342,6 +345,109 @@ if __name__ == "__main__":
     unittest.main()
 
 class BeatAndSourceTests(ExecutorTestBase):
+    @staticmethod
+    def _archive_bytes():
+        stream = io.BytesIO()
+        content = b"hello from source\n"
+        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+            info = tarfile.TarInfo("hello.txt")
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+        return stream.getvalue()
+
+    @staticmethod
+    async def _consume_body(response):
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    def _source_headers(self):
+        token = self._exchange().json()["run_token"]
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_source_response_streams_a_valid_archive_body(self):
+        from gnsis.service.executor import api as exec_api
+        from gnsis.service.executor import source as srcmod
+
+        archive_bytes = self._archive_bytes()
+        original = exec_api.src.prepare_source
+        exec_api.src.prepare_source = lambda *args: srcmod.PreparedSource(
+            io.BytesIO(archive_bytes), b"", len(archive_bytes)
+        )
+        try:
+            response = self.client.get(
+                f"/internal/executor/runs/{self.job.id}/source",
+                headers=self._source_headers(),
+            )
+        finally:
+            exec_api.src.prepare_source = original
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.content)
+        self.assertIn("gzip", response.headers["content-type"])
+        self.assertEqual(response.headers["x-gnsis-base-sha"], self.run.base_sha)
+        with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as archive:
+            self.assertEqual(archive.extractfile("hello.txt").read(), b"hello from source\n")
+
+    def test_source_downloaded_event_is_recorded_after_body_completion(self):
+        from gnsis.service.executor import api as exec_api
+        from gnsis.service.executor import source as srcmod
+
+        archive_bytes = self._archive_bytes()
+        original = exec_api.src.prepare_source
+        exec_api.src.prepare_source = lambda *args: srcmod.PreparedSource(
+            io.BytesIO(archive_bytes), b"", len(archive_bytes)
+        )
+        try:
+            response = exec_api.get_source(
+                self.job.id, self._source_headers()["Authorization"]
+            )
+            before = [event["kind"] for event in self.exec_store.events_for(self.run.id)]
+            self.assertNotIn("source_downloaded", before)
+
+            body = asyncio.run(self._consume_body(response))
+
+            self.assertEqual(body, archive_bytes)
+            after = [event["kind"] for event in self.exec_store.events_for(self.run.id)]
+            self.assertIn("source_downloaded", after)
+        finally:
+            exec_api.src.prepare_source = original
+
+    def test_source_mid_stream_failure_uses_existing_failure_path(self):
+        from gnsis.service.executor import api as exec_api
+        from gnsis.service.executor import source as srcmod
+        from gnsis.service.repository import PostgresJobStore
+
+        class FailingPreparedSource:
+            def __init__(self):
+                self.closed = False
+
+            def iter_bytes(self):
+                yield b"partial"
+                raise srcmod.SourceError("controlled stream failure", status=502)
+
+            def close(self):
+                self.closed = True
+
+        prepared = FailingPreparedSource()
+        original = exec_api.src.prepare_source
+        exec_api.src.prepare_source = lambda *args: prepared
+        try:
+            response = exec_api.get_source(
+                self.job.id, self._source_headers()["Authorization"]
+            )
+            with self.assertRaises(srcmod.SourceError):
+                asyncio.run(self._consume_body(response))
+        finally:
+            exec_api.src.prepare_source = original
+
+        self.assertTrue(prepared.closed)
+        events = [event["kind"] for event in self.exec_store.events_for(self.run.id)]
+        self.assertNotIn("source_downloaded", events)
+        self.assertEqual(self.exec_store.get_run(self.run.id).status, "failed")
+        self.assertEqual(PostgresJobStore().get_job(self.job.id).status, "failed")
+
     def test_beat_role_does_not_require_api_only_secrets_and_tasks_registered(self):
         from gnsis.service.settings import get_settings
         from gnsis.service.tasks import celery_app
