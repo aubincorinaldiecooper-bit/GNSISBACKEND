@@ -43,6 +43,13 @@ def test_safe_event_payload_is_redacted_bounded_and_idempotency_is_stable():
     assert store.calls[0][1]["idempotency_key"] == store.calls[1][1]["idempotency_key"]
 
 
+def test_lifecycle_event_never_breaks_execution_for_missing_run_evidence():
+    store = _Store()
+
+    assert record_lifecycle_event(store, None, "agent_progress", {"message": "started"}) is False
+    assert store.calls == []
+
+
 def test_external_failure_before_oidc_does_not_claim_execution():
     result = classify_external_failure(_run())
     assert result["stage"] == "executor_authentication"

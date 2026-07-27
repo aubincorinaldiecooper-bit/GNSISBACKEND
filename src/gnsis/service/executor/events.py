@@ -71,22 +71,28 @@ def record_lifecycle_event(
     identity: str = "",
 ) -> bool:
     """Write a known event idempotently; observability can never fail a run."""
-    if kind not in KNOWN_KINDS:
-        logger.warning("refusing unknown lifecycle event kind %s", kind)
-        return False
-    cleaned = safe_payload(payload or {})
-    # Impose a final serialized ceiling even for unusually large scalar JSON.
-    encoded = json.dumps(cleaned, sort_keys=True, separators=(",", ":"))
-    if len(encoded.encode("utf-8")) > 16_384:
-        cleaned = {"message": "Event details were truncated."}
-        encoded = json.dumps(cleaned)
-    digest = hashlib.sha256(f"{run.id}:{kind}:{identity}:{encoded}".encode()).hexdigest()[:24]
     try:
+        if kind not in KNOWN_KINDS:
+            logger.warning("refusing unknown lifecycle event kind %s", kind)
+            return False
+        cleaned = safe_payload(payload or {})
+        # Impose a final serialized ceiling even for unusually large scalar JSON.
+        encoded = json.dumps(cleaned, sort_keys=True, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 16_384:
+            cleaned = {"message": "Event details were truncated."}
+            encoded = json.dumps(cleaned)
+        digest = hashlib.sha256(
+            f"{run.id}:{kind}:{identity}:{encoded}".encode()
+        ).hexdigest()[:24]
         return store.record_event(
             run.id, job_id=run.job_id,
             workflow_run_attempt=run.workflow_run_attempt, sequence=sequence,
             idempotency_key=f"lifecycle:{kind}:{digest}", kind=kind, payload=cleaned,
         )
     except Exception:  # noqa: BLE001 - telemetry must not affect execution
-        logger.exception("failed to record lifecycle event %s for run %s", kind, run.id)
+        logger.exception(
+            "failed to record lifecycle event %s for run %s",
+            kind,
+            getattr(run, "id", "unknown"),
+        )
         return False
