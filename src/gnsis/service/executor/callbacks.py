@@ -18,6 +18,7 @@ from ...orchestration.status import JobStatus, is_terminal
 from . import basecheckout
 from .models import ExecutionStatus, FailureCategory
 from .store import ExecutionStore
+from .events import record_lifecycle_event, safe_payload
 from .validation import (
     sha256_text,
     strip_control_sequences,
@@ -103,10 +104,10 @@ def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> d
     sequence = int(body.get("sequence") or 0)
     idem = str(body.get("idempotency_key") or f"{run.id}:{sequence}:{kind}")[:128]
     message = body.get("message")
-    payload = body.get("data") if isinstance(body.get("data"), dict) else {}
+    payload = safe_payload(body.get("data") if isinstance(body.get("data"), dict) else {})
     # No ANSI/control-sequence injection into trusted output.
     if isinstance(message, str):
-        payload = {**payload, "message": strip_control_sequences(message)[:4000]}
+        payload = safe_payload({**payload, "message": strip_control_sequences(message)[:4000]})
 
     created = exec_store.record_event(
         run.id,
@@ -127,6 +128,11 @@ def handle_failed(settings, job_store, exec_store: ExecutionStore, run, body: di
         return {"accepted": True, "status": run.status}
     reason = strip_control_sequences(str(body.get("reason") or "executor reported failure"))[:500]
     category = str(body.get("category") or FailureCategory.EXECUTOR_ERROR)[:64]
+    record_lifecycle_event(exec_store, run, "executor_failure_received", {
+        "message": "The executor reported that the run stopped.", "stage": "execution",
+        "execution_started": run.status in (ExecutionStatus.RUNNING, ExecutionStatus.VALIDATING),
+        "model_called": run.usage.model_calls > 0,
+    })
     exec_store.set_status(run.id, ExecutionStatus.FAILED, failure_category=category)
     exec_store.revoke_token(run.id)
     job = job_store.get_job(run.job_id)
@@ -147,6 +153,9 @@ def handle_complete(
 ) -> dict:
     """Validate outputs against the clean base and gate the job for approval."""
     _check_attempt_binding(run, body)
+    record_lifecycle_event(exec_store, run, "executor_completion_received", {
+        "message": "The executor completion callback was received."
+    })
 
     outputs = body.get("outputs") or {}
     patch = outputs.get("patch.diff")
@@ -198,6 +207,9 @@ def handle_complete(
 
     # 6) The patch must apply cleanly to the exact, untouched base commit.
     exec_store.set_status(run.id, ExecutionStatus.VALIDATING)
+    record_lifecycle_event(exec_store, run, "output_validation_started", {
+        "message": "GNSIS started validating the executor output."
+    })
     base_dir = None
     try:
         base_dir = (base_materializer or (lambda: basecheckout.materialize_base(
@@ -230,6 +242,9 @@ def handle_complete(
         outcome_summary=_outcome_summary(receipt_raw),
     )
     exec_store.set_status(run.id, ExecutionStatus.COMPLETED)
+    record_lifecycle_event(exec_store, exec_store.get_run(run.id), "output_validated", {
+        "message": "The executor output was validated."
+    })
     exec_store.revoke_token(run.id)
 
     job_store.save_diff(Diff(run.job_id, patch, files_changed=result.files))
@@ -240,6 +255,10 @@ def handle_complete(
         job_store.append_log(
             LogEntry(run.job_id, "summary", "info", "awaiting human approval before publishing")
         )
+        record_lifecycle_event(exec_store, exec_store.get_run(run.id), "awaiting_approval", {
+            "message": "The changes are ready for human approval.",
+            "next_action": "Review and approve or reject the proposed changes.",
+        })
     return {"accepted": True, "status": ExecutionStatus.COMPLETED, "patch_sha256": patch_sha256}
 
 

@@ -28,6 +28,7 @@ from .oidc import GithubOidcVerifier, OidcError, check_execution_claims
 from .spec import build_run_spec, model_gateway_url
 from .store import ExecutionStore
 from .tokens import hash_secret, new_run_token
+from .events import record_lifecycle_event
 
 router = APIRouter()
 
@@ -120,6 +121,9 @@ async def oidc_exchange(request: Request):
     nonce_ok = store.nonce_matches(run.id, hash_secret(nonce))
     if not nonce_ok:
         raise HTTPException(status_code=401, detail="invalid dispatch nonce")
+    record_lifecycle_event(store, run, "executor_authentication_started", {
+        "message": "The dispatched executor requested authentication."
+    })
 
     def _fail_job(reason: str, category: str):
         store.set_status(run.id, ExecutionStatus.FAILED, failure_category=category)
@@ -172,6 +176,11 @@ async def oidc_exchange(request: Request):
     token = new_run_token()
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.run_token_ttl_seconds)
     store.bind_token(run.id, token_hash=hash_secret(token), expires_at=expires_at)
+    run = store.get_run(run.id)
+    record_lifecycle_event(store, run, "executor_authenticated", {
+        "message": "The trusted executor authenticated successfully.",
+        "technical": {"workflow_run_id": run.workflow_run_id},
+    })
 
     base = (settings.public_api_url or "").rstrip("/")
     return {
@@ -196,6 +205,9 @@ def get_spec(job_id: str, authorization: Optional[str] = Header(default=None)):
     job = _job_store().get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    record_lifecycle_event(store, run, "run_spec_requested", {
+        "message": "The executor requested the run specification."
+    })
     store.mark_started(run.id)
     return build_run_spec(settings, job, run).to_public_dict()
 
@@ -209,6 +221,9 @@ def get_source(job_id: str, authorization: Optional[str] = Header(default=None))
     job = _job_store().get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    record_lifecycle_event(store, run, "source_download_started", {
+        "message": "Repository source download was requested."
+    })
     # Prepare upstream, validate headers and first byte before HTTP response start.
     try:
         prepared = src.prepare_source(settings, run, job.repo)
@@ -218,10 +233,12 @@ def get_source(job_id: str, authorization: Optional[str] = Header(default=None))
     if not store.claim_source_download(run.id):
         prepared.close()
         raise HTTPException(status_code=409, detail="source already delivered")
-
     def generator():
         try:
             yield from prepared.iter_bytes()
+            record_lifecycle_event(store, store.get_run(run.id), "source_downloaded", {
+                "message": "Repository source was prepared and delivered."
+            })
         except src.SourceError as exc:
             src.fail_streaming_source(prepared, store, run, _job_store(), str(exc))
             raise

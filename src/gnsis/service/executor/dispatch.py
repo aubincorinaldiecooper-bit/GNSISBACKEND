@@ -218,6 +218,18 @@ def dispatch_execution(
         ),
     )
 
+    from .events import record_lifecycle_event
+    record_lifecycle_event(store, run, "repository_access_verified", {
+        "message": "Repository access was verified.", "repository_id": job.repository_id,
+    })
+    record_lifecycle_event(store, run, "repository_base_resolved", {
+        "message": "The repository base revision was resolved.", "base_branch": job.base_branch,
+        "base_sha": base_sha,
+    })
+    record_lifecycle_event(store, run, "dispatch_started", {
+        "message": "Dispatch to the trusted executor started."
+    })
+
     # 4b) Record the pinned policy + memory selection on the native event ledger.
     _emit_context_events(store, run, job, policy, memory_selection)
 
@@ -259,4 +271,9 @@ def dispatch_execution(
         workflow_run_attempt=workflow_run_attempt,
         workflow_run_url=workflow_run_url,
     )
+    run = store.get_run(run.id)
+    record_lifecycle_event(store, run, "workflow_dispatched", {
+        "message": "GitHub accepted the workflow dispatch.",
+        "technical": {"workflow_run_id": workflow_run_id} if workflow_run_id else {},
+    })
     return store.get_run(run.id)

@@ -83,6 +83,14 @@ class EventType:
     INTELLIGENCE_CONSUMED = "intelligence.consumed"
     INTELLIGENCE_CREATED = "intelligence.created"
     POLICY_PINNED = "policy.pinned"
+    REPOSITORY_ACCESS_VERIFIED = "repository.access_verified"
+    REPOSITORY_BASE_RESOLVED = "repository.base_resolved"
+    AUTHENTICATION_STARTED = "executor.authentication_started"
+    AUTHENTICATED = "executor.authenticated"
+    SOURCE_DOWNLOAD_STARTED = "source.download_started"
+    SOURCE_DOWNLOADED = "source.downloaded"
+    OUTPUT_VALIDATION_STARTED = "output.validation_started"
+    OUTPUT_VALIDATED = "output.validated"
 
 
 #: Recorded execution-event kinds → public lifecycle type.
@@ -92,6 +100,29 @@ _KIND_TO_TYPE = {
     "memory_selected": EventType.INTELLIGENCE_CONSUMED,
     "tool_call": EventType.TOOL_CALLED,
     "tests_completed": EventType.TESTS_COMPLETED,
+    "repository_access_verified": EventType.REPOSITORY_ACCESS_VERIFIED,
+    "repository_base_resolved": EventType.REPOSITORY_BASE_RESOLVED,
+    "dispatch_started": EventType.RUN_DISPATCH_STARTED,
+    "workflow_dispatched": EventType.WORKFLOW_DISPATCHED,
+    "executor_authentication_started": EventType.AUTHENTICATION_STARTED,
+    "executor_authenticated": EventType.AUTHENTICATED,
+    "run_spec_requested": "executor.run_spec_requested",
+    "source_download_started": EventType.SOURCE_DOWNLOAD_STARTED,
+    "source_downloaded": EventType.SOURCE_DOWNLOADED,
+    "sandbox_prepare_started": "sandbox.prepare_started",
+    "sandbox_ready": "sandbox.ready",
+    "agent_started": "agent.started",
+    "agent_progress": "agent.progress",
+    "tool_file_read": "tool.file_read",
+    "tool_file_changed": "tool.file_changed",
+    "tool_command_started": "tool.command_started",
+    "tool_command_completed": "tool.command_completed",
+    "tests_started": "tests.started",
+    "output_validation_started": EventType.OUTPUT_VALIDATION_STARTED,
+    "output_validated": EventType.OUTPUT_VALIDATED,
+    "awaiting_approval": EventType.AWAITING_APPROVAL,
+    "executor_failure_received": EventType.RUN_FAILED,
+    "run_failed": EventType.RUN_FAILED,
 }
 
 #: Terminal job status → public lifecycle type.
@@ -170,10 +201,15 @@ def build_lifecycle_events(job_id: str) -> List[dict]:
     terminal_type = _STATUS_TO_TYPE.get(status)
     if terminal_type:
         events.append({"type": terminal_type, "at": updated_at, "payload": {"status": status}})
-        # A terminal attempt always has a receipt (including a pre-execution
-        # failure), so the receipt becomes retrievable at the same moment.
+        # Canonical receipts are assembled from the persisted job/run evidence.
+        # A run row is therefore the durable readiness condition, rather than
+        # terminal status alone (which can also describe a dispatch rejection
+        # that happened before an execution attempt existed).
         if status in ("completed", "failed", "blocked", "rejected"):
-            events.append({"type": EventType.RECEIPT_READY, "at": updated_at, "payload": {}})
+            if run is not None:
+                from .receipts import build_receipt
+                if build_receipt(run.workspace_id, job_id) is not None:
+                    events.append({"type": EventType.RECEIPT_READY, "at": updated_at, "payload": {}})
 
     events.sort(key=lambda e: e["at"] or "")
     for i, event in enumerate(events):
