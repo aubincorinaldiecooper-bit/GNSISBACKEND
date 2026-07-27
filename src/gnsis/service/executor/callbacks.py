@@ -101,6 +101,14 @@ _INTELLIGENCE_DELIVERY_KIND = "intelligence_context_delivered"
 
 
 def _narrow_intelligence_delivery(payload: dict, run) -> dict:
+    # A list of pinned ids is not delivery evidence by itself. Retain ids only
+    # for the harness-authored state transition that proves a model request was
+    # actually started with the context attached.
+    if (
+        payload.get("delivery_state") != "delivered"
+        or payload.get("model_request_started") is not True
+    ):
+        return {**payload, "memory_ids": []}
     ids = payload.get("memory_ids")
     if not isinstance(ids, list):
         return {**payload, "memory_ids": []}
