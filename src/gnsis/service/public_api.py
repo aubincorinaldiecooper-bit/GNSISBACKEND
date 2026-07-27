@@ -164,10 +164,15 @@ def _principal_from_session(request: Request, token: str) -> Principal:
 
     verifier = request.app.dependency_overrides.get(get_verifier, get_verifier)()
     try:
-        claims = verifier.verify(token)
+        authed_user = verifier.verify(token)
     except AuthError as exc:
         raise PublicApiError(ErrorCode.AUTHENTICATION_FAILED, exc.message, status=401) from exc
-    subject = claims.get("sub") or ""
+    except AttributeError as exc:
+        # Defensive: verify() is contracted to return an AuthedUser, never a
+        # dict — this should be unreachable, but a caller bug here must yield
+        # a controlled authentication failure, never an unhandled 500.
+        raise PublicApiError(ErrorCode.AUTHENTICATION_FAILED, "malformed authentication result", status=401) from exc
+    subject = str(authed_user.subject or "").strip()
     if not subject:
         raise PublicApiError(ErrorCode.AUTHENTICATION_FAILED, "token has no subject", status=401)
     workspace = ws.get_or_create_workspace(subject)
@@ -578,6 +583,13 @@ def approve_run(
     approval = db.save_approval(
         Approval(job_id=run_id, decision="approved", actor=principal.actor, note=req.note)
     )
+    # A job's decision is recorded exactly once (job_approvals.job_id is
+    # DB-unique). This call may have lost a race to a concurrent decision on
+    # the SAME run — in that case ``approval`` is whatever won, not
+    # necessarily "approved". Converge on it truthfully: only an approval
+    # that actually won activates intelligence or reports "approved".
+    if approval.decision != "approved":
+        return run_view(db.get_job(run_id))
     db.merge_context(run_id, {"approval_binding": binding, "approval_id": approval.id})
     job = db.set_status(run_id, JobStatus.APPROVED)
 
@@ -704,9 +716,14 @@ def create_follow_up_run(
 
 # -- repository intelligence --------------------------------------------------
 
-def _intelligence_view(record) -> dict:
+def _intelligence_view(record, provenance=None) -> dict:
     """The public intelligence object. Workspace id is deliberately omitted —
-    it is internal tenancy, not client-facing information."""
+    it is internal tenancy, not client-facing information.
+
+    ``provenance`` (an ``IntelligenceProvenance``, when known) adds the
+    source-model and approval fields; historical rows with none stay null
+    rather than a fabricated guess.
+    """
     return {
         "id": record.memory_id,
         "object": "intelligence",
@@ -715,6 +732,14 @@ def _intelligence_view(record) -> dict:
         "type": record.kind,
         "status": "active",
         "source_run_id": record.source_job_id,
+        "source_model": provenance.source_model if provenance else None,
+        "source_advisor_model": provenance.source_advisor_model if provenance else None,
+        "approval_id": provenance.outcome_id if provenance else None,
+        "approved_by": provenance.approved_by if provenance else None,
+        "approved_at": (
+            provenance.approved_at.isoformat()
+            if provenance and provenance.approved_at else None
+        ),
         "created_at": record.created_at,
     }
 
@@ -727,6 +752,8 @@ def list_repository_intelligence(
     principal: Principal = Depends(current_principal),
 ) -> dict:
     """Active, approved intelligence for one repository, newest first."""
+    from . import orm
+    from .db import session_scope
     from .repository import PostgresMemoryProvider
 
     principal.require(Scope.INTELLIGENCE_READ)
@@ -740,7 +767,20 @@ def list_repository_intelligence(
         repository_id=repo.id,
         limit=500,
     )
-    return _page([_intelligence_view(r) for r in records], limit, max(0, int(offset)))
+    ids = [r.memory_id for r in records if r.memory_id]
+    provenance_by_id = {}
+    if ids:
+        with session_scope() as s:
+            provenance_by_id = {
+                p.memory_id: p
+                for p in s.query(orm.MemoryProvenance)
+                .filter(orm.MemoryProvenance.memory_id.in_(ids))
+                .all()
+            }
+    return _page(
+        [_intelligence_view(r, provenance_by_id.get(r.memory_id)) for r in records],
+        limit, max(0, int(offset)),
+    )
 
 
 @router.post("/repositories/{repository_id}/intelligence/query")

@@ -50,6 +50,19 @@ def _duration_seconds(start, end) -> Optional[float]:
     return max(0.0, (end - start).total_seconds())
 
 
+def _proposed_for_run(job_id: str) -> List[dict]:
+    """Outcome-derived proposals for ``job_id`` — zero or more, never fabricated.
+
+    Delegates to the one existing proposal generator (never re-implemented
+    here) so the receipt's "proposed" list is always identical to
+    ``GET /v1/runs/{id}/intelligence-proposals``.
+    """
+    from .intelligence_lifecycle import IntelligenceLifecycle
+
+    proposals = IntelligenceLifecycle().proposals_for_run(job_id)
+    return [dict(p.__dict__) for p in proposals]
+
+
 def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
     """Return the run receipt for ``job_id`` within ``workspace_id``, or None.
 
@@ -110,6 +123,7 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                     "model_calls": 0, "tool_calls": 0, "tests": None,
                     "cost": None, "timing": None,
                     "failure_category": None, "failure_message": None,
+                    "intelligence": {"supplied": [], "proposed": [], "approved": []},
                 }
             )
             return receipt
@@ -156,6 +170,50 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
             .order_by(orm.MemoryProvenance.id)
             .all()
         )
+        consumed_ids = [c.memory_id for c in consumptions]
+        # Truthful "delivered" evidence: the executor's own harness-authored
+        # intelligence_context_delivered event(s), already narrowed server-side
+        # (record_run_event) to ids this run was actually pinned to. Never
+        # inferred from selection alone — selection only proves the backend
+        # chose it, not that the executor attached it to a real model request.
+        delivered_ids: set = set()
+        for event in (
+            s.query(orm.ExecutionEvent)
+            .filter(orm.ExecutionEvent.run_id == run_id,
+                    orm.ExecutionEvent.kind == "intelligence_context_delivered")
+            .all()
+        ):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            # Defense in depth for events written before callback validation was
+            # tightened: ids alone never constitute a delivery attestation.
+            if (
+                payload.get("delivery_state") != "delivered"
+                or payload.get("model_request_started") is not True
+            ):
+                continue
+            ids = payload.get("memory_ids")
+            if isinstance(ids, list):
+                delivered_ids.update(item for item in ids if isinstance(item, str))
+        supplied_provenance = (
+            {
+                p.memory_id: p
+                for p in s.query(orm.MemoryProvenance)
+                .filter(orm.MemoryProvenance.memory_id.in_(consumed_ids))
+                .all()
+            }
+            if consumed_ids
+            else {}
+        )
+        supplied_memory = (
+            {
+                m.memory_id: m
+                for m in s.query(orm.AgentMemory)
+                .filter(orm.AgentMemory.memory_id.in_(consumed_ids))
+                .all()
+            }
+            if consumed_ids
+            else {}
+        )
 
         # Reconciliation: any row needing reconciliation dominates.
         recon = "resolved"
@@ -196,6 +254,82 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                     {"memory_id": p.memory_id, "item_key": p.item_key, "kind": p.kind}
                     for p in provenance
                 ],
+                # Structured, cross-model proof: what this run was supplied
+                # (with source-run/model/approval provenance, when known — never
+                # fabricated for legacy items with no recorded provenance), what
+                # it proposed from its own outcome, and what its own approval
+                # made active. Additive: memory_ids_consumed and
+                # reviewed_intelligence_created above are unchanged and remain
+                # the historical, minimal source of truth for those two facts.
+                "intelligence": {
+                    "supplied": [
+                        {
+                            "memory_id": memory_id,
+                            "kind": (
+                                supplied_provenance[memory_id].kind
+                                if memory_id in supplied_provenance
+                                else (supplied_memory[memory_id].kind if memory_id in supplied_memory else None)
+                            ),
+                            "content": (
+                                supplied_memory[memory_id].content
+                                if memory_id in supplied_memory else None
+                            ),
+                            "selected": True,
+                            # True only when the executor's own harness-authored
+                            # attestation named this exact id; never assumed
+                            # from selection alone. Whether the model
+                            # semantically used, followed, or relied on it is
+                            # not claimed here or anywhere else — that remains
+                            # unknown and is deliberately not represented as a
+                            # field at all (an absent claim, not a false one).
+                            "delivered": memory_id in delivered_ids,
+                            "source_run_id": (
+                                supplied_provenance[memory_id].source_job_id
+                                if memory_id in supplied_provenance else None
+                            ),
+                            "source_model": (
+                                supplied_provenance[memory_id].source_model
+                                if memory_id in supplied_provenance else None
+                            ),
+                            "source_advisor_model": (
+                                supplied_provenance[memory_id].source_advisor_model
+                                if memory_id in supplied_provenance else None
+                            ),
+                            "approval_id": (
+                                supplied_provenance[memory_id].outcome_id
+                                if memory_id in supplied_provenance else None
+                            ),
+                            "approved_by": (
+                                supplied_provenance[memory_id].approved_by
+                                if memory_id in supplied_provenance else None
+                            ),
+                            "approved_at": (
+                                _iso(supplied_provenance[memory_id].approved_at)
+                                if memory_id in supplied_provenance else None
+                            ),
+                            "destination_run_id": job_id,
+                            "destination_model": run.primary_model,
+                        }
+                        for memory_id in consumed_ids
+                    ],
+                    # Filled in after this session closes (see below) — the
+                    # proposal generator opens its own session and must not be
+                    # nested inside this one.
+                    "proposed": [],
+                    "approved": [
+                        {
+                            "memory_id": p.memory_id,
+                            "item_key": p.item_key,
+                            "kind": p.kind,
+                            "approval_id": p.outcome_id,
+                            "approved_by": p.approved_by,
+                            "approved_at": _iso(p.approved_at),
+                            "source_model": p.source_model,
+                            "source_advisor_model": p.source_advisor_model,
+                        }
+                        for p in provenance
+                    ],
+                },
                 "tokens": {
                     "input": run.input_tokens,
                     "output": run.output_tokens,
@@ -232,4 +366,8 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                 ),
             }
         )
-        return receipt
+
+    # Computed after the session above closes: the proposal generator opens
+    # its own independent session and must not be nested inside this one.
+    receipt["intelligence"]["proposed"] = _proposed_for_run(job_id)
+    return receipt

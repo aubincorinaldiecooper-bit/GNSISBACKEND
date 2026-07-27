@@ -269,20 +269,45 @@ class PostgresJobStore:
 
     # -- approvals --------------------------------------------------------
     def save_approval(self, approval: Approval) -> Approval:
-        with session_scope() as s:
-            row = orm.JobApproval(
-                job_id=approval.job_id,
-                decision=approval.decision,
-                actor=approval.actor,
-                note=approval.note,
-            )
-            s.add(row)
-            s.flush()
-            approval.id = row.id
-            approval.created_at = (
-                row.created_at.isoformat() if row.created_at else approval.created_at
-            )
-        return approval
+        """Record the job's approve/reject decision exactly once, ever.
+
+        ``job_approvals.job_id`` is DB-uniquely constrained: two concurrent
+        callers that both observed the job as still awaiting approval will
+        race here, and only one insert wins. The loser must not error or
+        record a second decision — it re-reads and returns the winner's row,
+        so both callers (and everything downstream, e.g. intelligence
+        capture) agree on a single approval identity for this job.
+        """
+        try:
+            with session_scope() as s:
+                row = orm.JobApproval(
+                    job_id=approval.job_id,
+                    decision=approval.decision,
+                    actor=approval.actor,
+                    note=approval.note,
+                )
+                s.add(row)
+                s.flush()
+                approval.id = row.id
+                approval.created_at = (
+                    row.created_at.isoformat() if row.created_at else approval.created_at
+                )
+            return approval
+        except IntegrityError:
+            with session_scope() as s:
+                existing = (
+                    s.query(orm.JobApproval)
+                    .filter(orm.JobApproval.job_id == approval.job_id)
+                    .one()
+                )
+                return Approval(
+                    job_id=existing.job_id,
+                    decision=existing.decision,
+                    actor=existing.actor,
+                    note=existing.note,
+                    id=existing.id,
+                    created_at=existing.created_at.isoformat() if existing.created_at else "",
+                )
 
     def get_latest_approval(self, job_id: str) -> Optional[Approval]:
         with session_scope() as s:
@@ -558,6 +583,10 @@ class PostgresMemoryProvider(MemoryProvider):
                         outcome_decision=provenance["outcome_decision"],
                         workspace_id=provenance.get("workspace_id"),
                         repository_id=provenance.get("repository_id"),
+                        source_model=provenance.get("source_model"),
+                        source_advisor_model=provenance.get("source_advisor_model"),
+                        approved_by=provenance.get("approved_by"),
+                        approved_at=provenance.get("approved_at"),
                     )
                 )
                 record.memory_id = memory_id
@@ -657,6 +686,10 @@ class PostgresMemoryProvider(MemoryProvider):
                         outcome_decision=provenance["outcome_decision"],
                         workspace_id=provenance.get("workspace_id"),
                         repository_id=provenance.get("repository_id"),
+                        source_model=provenance.get("source_model"),
+                        source_advisor_model=provenance.get("source_advisor_model"),
+                        approved_by=provenance.get("approved_by"),
+                        approved_at=provenance.get("approved_at"),
                     )
                 )
                 record.memory_id = memory_id

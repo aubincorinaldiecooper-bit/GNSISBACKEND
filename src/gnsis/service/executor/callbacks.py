@@ -19,6 +19,7 @@ from . import basecheckout
 from .models import ExecutionStatus, FailureCategory
 from .store import ExecutionStore
 from .events import record_lifecycle_event, safe_payload
+from .failures import classify_failure
 from .validation import (
     sha256_text,
     strip_control_sequences,
@@ -92,6 +93,35 @@ def _outcome_summary(receipt_raw: object) -> Optional[str]:
     return str(value).strip()[:8000] if isinstance(value, str) and value.strip() else None
 
 
+#: Executor-reported delivery ids may never exceed what the backend itself
+#: pinned to the run at dispatch time — narrowed here even though the
+#: executor already narrows on its side, since a callback is an external
+#: input and must never be trusted blindly.
+_INTELLIGENCE_DELIVERY_KIND = "intelligence_context_delivered"
+
+
+def _narrow_intelligence_delivery(payload: dict, run) -> dict:
+    # A list of pinned ids is not delivery evidence by itself. Retain ids only
+    # for the harness-authored state transition that proves a model request was
+    # actually started with the context attached.
+    if (
+        payload.get("delivery_state") != "delivered"
+        or payload.get("model_request_started") is not True
+    ):
+        return {**payload, "memory_ids": []}
+    ids = payload.get("memory_ids")
+    if not isinstance(ids, list):
+        return {**payload, "memory_ids": []}
+    pinned = set(run.memory_ids or [])
+    seen: set = set()
+    narrowed = []
+    for item in ids:
+        if isinstance(item, str) and item.strip() and item in pinned and item not in seen:
+            seen.add(item)
+            narrowed.append(item)
+    return {**payload, "memory_ids": narrowed}
+
+
 def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> dict:
     """Persist a run event. Idempotent, sequence-checked, redacted."""
     if is_terminal(run.status) or run.status in ExecutionStatus.TERMINAL:
@@ -108,6 +138,11 @@ def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> d
     # No ANSI/control-sequence injection into trusted output.
     if isinstance(message, str):
         payload = safe_payload({**payload, "message": strip_control_sequences(message)[:4000]})
+    if kind == _INTELLIGENCE_DELIVERY_KIND:
+        # Defense in depth: the executor already reports only a subset of the
+        # pinned set, but a callback is external input and must never be
+        # trusted blindly — narrow again here, never enlarge.
+        payload = _narrow_intelligence_delivery(payload, run)
 
     created = exec_store.record_event(
         run.id,
@@ -128,10 +163,10 @@ def handle_failed(settings, job_store, exec_store: ExecutionStore, run, body: di
         return {"accepted": True, "status": run.status}
     reason = strip_control_sequences(str(body.get("reason") or "executor reported failure"))[:500]
     category = str(body.get("category") or FailureCategory.EXECUTOR_ERROR)[:64]
+    outcome = classify_failure(run, failure_category=category)
     record_lifecycle_event(exec_store, run, "executor_failure_received", {
-        "message": "The executor reported that the run stopped.", "stage": "execution",
-        "execution_started": run.status in (ExecutionStatus.RUNNING, ExecutionStatus.VALIDATING),
-        "model_called": run.usage.model_calls > 0,
+        **outcome,
+        "message": "The executor reported that the run stopped.",
     })
     exec_store.set_status(run.id, ExecutionStatus.FAILED, failure_category=category)
     exec_store.revoke_token(run.id)

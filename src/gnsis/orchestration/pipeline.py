@@ -244,6 +244,14 @@ def reject_job(
     approval = store.save_approval(
         Approval(job_id=job_id, decision="rejected", actor=actor, note=note)
     )
+    # A job's decision is recorded exactly once (job_approvals.job_id is
+    # DB-unique); a caller here may have lost a race to a concurrent approval
+    # of the SAME job. In that case ``approval`` is the winning "approved"
+    # decision, not this call's — converge on it truthfully rather than
+    # overwrite the job's status with a rejection that was never recorded.
+    if approval.decision != "rejected":
+        store.set_status(job_id, JobStatus.APPROVED)
+        return
     store.set_status(job_id, JobStatus.REJECTED)
 
     if memory is not None:

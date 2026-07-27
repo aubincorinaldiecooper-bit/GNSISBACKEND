@@ -135,6 +135,34 @@ _STATUS_TO_TYPE = {
     "approved": EventType.RUN_APPROVED,
 }
 
+# These lifecycle milestones have one public occurrence. New runs persist the
+# exact boundary as an execution event; projections synthesize the milestone
+# from older run/job rows only when that canonical event is absent.
+_SINGULAR_TYPES = frozenset({
+    EventType.RUN_DISPATCH_STARTED,
+    EventType.WORKFLOW_DISPATCHED,
+    EventType.RUN_FAILED,
+    EventType.RUN_BLOCKED,
+    EventType.AWAITING_APPROVAL,
+})
+
+
+def _append_persisted_events(events: List[dict], raw_events: List[dict]) -> set[str]:
+    """Append canonical ledger events, collapsing singular public milestones."""
+    persisted_types: set[str] = set()
+    for raw in raw_events:
+        kind = raw.get("kind") or ""
+        event_type = _KIND_TO_TYPE.get(kind, f"executor.{kind}" if kind else "executor.event")
+        if event_type in _SINGULAR_TYPES and event_type in persisted_types:
+            continue
+        events.append({
+            "type": event_type,
+            "at": raw.get("created_at") or "",
+            "payload": dict(raw.get("payload") or {}),
+        })
+        persisted_types.add(event_type)
+    return persisted_types
+
 
 def build_lifecycle_events(job_id: str) -> List[dict]:
     """The run's ordered public lifecycle events, projected from stored evidence.
@@ -166,26 +194,23 @@ def build_lifecycle_events(job_id: str) -> List[dict]:
     events.append({"type": EventType.RUN_QUEUED, "at": created_at, "payload": {}})
 
     run = ExecutionStore().get_run_for_job(job_id)
+    persisted_types: set[str] = set()
     if run is not None:
-        events.append({
-            "type": EventType.RUN_DISPATCH_STARTED,
-            "at": run.created_at,
-            "payload": {"execution_run_id": run.id},
-        })
         events.append({
             "type": EventType.INSTALLATION_LOOKUP_STARTED,
             "at": run.created_at,
             "payload": {"repository_id": run.repository_id},
         })
-        for raw in ExecutionStore().events_for(run.id):
-            kind = raw.get("kind") or ""
-            payload = dict(raw.get("payload") or {})
+        persisted_types = _append_persisted_events(
+            events, ExecutionStore().events_for(run.id)
+        )
+        if EventType.RUN_DISPATCH_STARTED not in persisted_types:
             events.append({
-                "type": _KIND_TO_TYPE.get(kind, f"executor.{kind}" if kind else "executor.event"),
-                "at": raw.get("created_at") or "",
-                "payload": payload,
+                "type": EventType.RUN_DISPATCH_STARTED,
+                "at": run.created_at,
+                "payload": {"execution_run_id": run.id},
             })
-        if run.workflow_run_id:
+        if run.workflow_run_id and EventType.WORKFLOW_DISPATCHED not in persisted_types:
             events.append({
                 "type": EventType.WORKFLOW_DISPATCHED,
                 "at": run.created_at,
@@ -199,17 +224,15 @@ def build_lifecycle_events(job_id: str) -> List[dict]:
             })
 
     terminal_type = _STATUS_TO_TYPE.get(status)
-    if terminal_type:
+    if terminal_type and terminal_type not in persisted_types:
         events.append({"type": terminal_type, "at": updated_at, "payload": {"status": status}})
-        # Canonical receipts are assembled from the persisted job/run evidence.
-        # A run row is therefore the durable readiness condition, rather than
-        # terminal status alone (which can also describe a dispatch rejection
-        # that happened before an execution attempt existed).
-        if status in ("completed", "failed", "blocked", "rejected"):
-            if run is not None:
-                from .receipts import build_receipt
-                if build_receipt(run.workspace_id, job_id) is not None:
-                    events.append({"type": EventType.RECEIPT_READY, "at": updated_at, "payload": {}})
+    # Canonical receipts are assembled from the persisted job/run evidence.
+    # Readiness is independent of whether the terminal lifecycle milestone came
+    # from the ledger or the legacy status fallback.
+    if status in ("completed", "failed", "blocked", "rejected") and run is not None:
+        from .receipts import build_receipt
+        if build_receipt(run.workspace_id, job_id) is not None:
+            events.append({"type": EventType.RECEIPT_READY, "at": updated_at, "payload": {}})
 
     events.sort(key=lambda e: e["at"] or "")
     for i, event in enumerate(events):
