@@ -310,16 +310,25 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         self.assertIn(first[0].memory_id, consumed_b)
 
     def test_processes_explicit_outcome_id_not_newer_latest_review(self):
+        """An explicitly given outcome_id ties provenance to ITS OWN job/run,
+        never to some other, more-recently-reviewed job — even though
+        ``job_approvals.job_id`` is now unique (one decision per job, ever),
+        so this can no longer be modeled as two approvals on one job; two
+        separate jobs, each independently reviewed, is the faithful case.
+        """
         from gnsis.orchestration.models import Approval
         from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
         from gnsis.service.repository import PostgresJobStore
 
         jobs = PostgresJobStore()
         lifecycle = IntelligenceLifecycle(jobs=jobs)
-        job = make_job(instruction="fix payment retry handling")
-        _, run = make_run(job)
-        first = jobs.save_approval(Approval(job_id=job.id, decision="rejected", actor="a", note="first"))
-        second = jobs.save_approval(Approval(job_id=job.id, decision="rejected", actor="b", note="second"))
+        job_first = make_job(instruction="fix payment retry handling")
+        _, run_first = make_run(job_first)
+        first = jobs.save_approval(Approval(job_id=job_first.id, decision="rejected", actor="a", note="first"))
+
+        job_second = make_job(instruction="fix an unrelated timeout bug")
+        make_run(job_second)
+        second = jobs.save_approval(Approval(job_id=job_second.id, decision="rejected", actor="b", note="second"))
 
         item = lifecycle.process_reviewed_outcome(
             outcome_id=first.id,
@@ -327,7 +336,8 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         )
 
         prov = lifecycle.provenance_for_memory(item.memory_id)
-        self.assertEqual(prov.source_run_id, run.id)
+        self.assertEqual(prov.source_run_id, run_first.id)
+        self.assertEqual(prov.source_job_id, job_first.id)
         self.assertEqual(prov.outcome_id, first.id)
         self.assertNotEqual(prov.outcome_id, second.id)
 

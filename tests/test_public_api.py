@@ -216,6 +216,104 @@ class AuthAndScopeTests(PublicApiTestBase):
         self.assertEqual(self.client.get(f"/v1/runs/{run_id}", headers=self.auth(key)).status_code, 404)
 
 
+class SessionAuthTests(PublicApiTestBase):
+    """A signed-in dashboard session (Better Auth JWT, not a Genesis key) must
+    reach the same /v1 routes a virtual key does — this is the reference
+    client's authentication path, not a hypothetical.
+
+    Regression coverage for the bug where the session branch treated the
+    typed ``AuthedUser`` returned by ``JwtVerifier.verify()`` as a dict
+    (``claims.get("sub")``), which raised an unhandled ``AttributeError`` (a
+    500) on every dashboard-session call into ``/v1/*``. These tests mint a
+    real, signed JWT and let it flow through the real (non-mocked)
+    ``JwtVerifier`` — never a dict standing in for ``AuthedUser`` — so they
+    fail the same way production would if the bug reappeared.
+    """
+
+    def _session_auth(self, subject="owner-user"):
+        return {"Authorization": f"Bearer {mint(self.priv, 'k1', subject)}"}
+
+    def test_session_can_create_and_read_a_run(self):
+        # The session subject "owner-user" resolves (via get_or_create_workspace)
+        # to the exact same workspace the virtual key in setUp belongs to.
+        r = self.client.post(
+            "/v1/runs",
+            json={"repository_id": self.repo_id, "instruction": "Add a health check",
+                  "model": MODEL_A},
+            headers=self._session_auth(),
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        run_id = r.json()["id"]
+
+        # Run details.
+        got = self.client.get(f"/v1/runs/{run_id}", headers=self._session_auth())
+        self.assertEqual(got.status_code, 200, got.text)
+        self.assertEqual(got.json()["id"], run_id)
+
+        # Run events.
+        events = self.client.get(f"/v1/runs/{run_id}/events", headers=self._session_auth())
+        self.assertEqual(events.status_code, 200, events.text)
+        self.assertIn("run.created", [e["type"] for e in events.json()["data"]])
+
+        self.drive_to_awaiting_approval(run_id, model=MODEL_A)
+
+        # Run receipt.
+        receipt = self.client.get(f"/v1/runs/{run_id}/receipt", headers=self._session_auth())
+        self.assertEqual(receipt.status_code, 200, receipt.text)
+        self.assertEqual(receipt.json()["run_id"], run_id)
+
+        # Intelligence proposals.
+        proposals = self.client.get(
+            f"/v1/runs/{run_id}/intelligence-proposals", headers=self._session_auth()
+        )
+        self.assertEqual(proposals.status_code, 200, proposals.text)
+
+        # Repository intelligence.
+        intel = self.client.get(
+            f"/v1/repositories/{self.repo_id}/intelligence", headers=self._session_auth()
+        )
+        self.assertEqual(intel.status_code, 200, intel.text)
+        self.assertEqual(intel.json()["object"], "list")
+
+    def test_session_approve_activates_intelligence(self):
+        """The full approval boundary works over a session, not just a key."""
+        run_id = self.create_run().json()["id"]
+        self.drive_to_awaiting_approval(run_id, outcome_summary="Added the health check route")
+        proposal = self.client.get(
+            f"/v1/runs/{run_id}/intelligence-proposals", headers=self._session_auth()
+        ).json()["data"][0]
+        approved = self.client.post(
+            f"/v1/runs/{run_id}/approve",
+            json={"intelligence": [{"proposal_id": proposal["id"]}]},
+            headers=self._session_auth(),
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["status"], "approved")
+
+    def test_a_different_workspaces_session_cannot_read_this_run(self):
+        run_id = self.create_run().json()["id"]
+        r = self.client.get(f"/v1/runs/{run_id}", headers=self._session_auth(subject="someone-else"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_invalid_session_token_is_rejected_not_a_server_error(self):
+        # Malformed token entirely.
+        r = self.client.get("/v1/runs", headers={"Authorization": "Bearer not-a-jwt-at-all"})
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "authentication_failed")
+
+        # Well-formed but signed by a key that isn't in the JWKS.
+        other_priv, _ = make_keypair("other-key")
+        forged = mint(other_priv, "other-key", "owner-user")
+        r2 = self.client.get("/v1/runs", headers={"Authorization": f"Bearer {forged}"})
+        self.assertEqual(r2.status_code, 401)
+        self.assertEqual(r2.json()["error"]["code"], "authentication_failed")
+
+        # Wrong audience.
+        wrong_aud = mint(self.priv, "k1", "owner-user", audience="someone-elses-api")
+        r3 = self.client.get("/v1/runs", headers={"Authorization": f"Bearer {wrong_aud}"})
+        self.assertEqual(r3.status_code, 401)
+
+
 class IdempotencyTests(PublicApiTestBase):
     def test_same_idempotency_key_returns_the_original_run(self):
         first = self.create_run(idem="abc-123")

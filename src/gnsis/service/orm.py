@@ -223,6 +223,13 @@ class JobDiff(Base):
 
 class JobApproval(Base):
     __tablename__ = "job_approvals"
+    __table_args__ = (
+        # A job's approve/reject decision is recorded exactly once, ever — this
+        # is what makes concurrent approve requests collapse to one decision
+        # (and therefore one set of activated intelligence) instead of a race
+        # where both requests observe AWAITING_APPROVAL and both write.
+        UniqueConstraint("job_id", name="uq_job_approvals_job_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
@@ -813,6 +820,18 @@ class MemoryProvenance(Base):
     outcome_decision: Mapped[str] = mapped_column(String(16), index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Typed provenance, denormalized at write time so a receipt/API view never
+    # has to join back through job_approvals/execution_runs to answer "who
+    # approved this, when, and which model produced it". Nullable: additive,
+    # and historical rows written before this column existed stay valid and
+    # are never backfilled with fabricated values.
+    source_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Only populated when an Advisor was actually invoked on the source run
+    # (evidence: a recorded model call for that model) — never the merely
+    # configured/pinned Advisor.
+    source_advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    approved_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

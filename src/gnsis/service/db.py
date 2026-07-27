@@ -106,6 +106,13 @@ _ADDITIVE_COLUMNS = [
     ("execution_runs", "advisor_model", "VARCHAR(128)"),
     # Provider-returned OpenRouter server-tool usage, stored verbatim/additively.
     ("execution_model_calls", "server_tool_usage", "JSON"),
+    # Typed provenance on memory_provenance (denormalized from the source run
+    # and its approval, so a receipt/API view needs no join). Nullable/additive;
+    # historical rows stay valid and are never backfilled with fabricated data.
+    ("memory_provenance", "source_model", "VARCHAR(128)"),
+    ("memory_provenance", "source_advisor_model", "VARCHAR(128)"),
+    ("memory_provenance", "approved_by", "VARCHAR(255)"),
+    ("memory_provenance", "approved_at", "TIMESTAMPTZ"),
 ]
 
 
@@ -158,6 +165,19 @@ def _apply_additive_columns(engine) -> None:
                     "uq_jobs_workspace_idempotency_key "
                     "ON jobs (workspace_id, idempotency_key) "
                     "WHERE idempotency_key IS NOT NULL"
+                )
+            )
+            # A job's approve/reject decision is recorded exactly once, ever —
+            # closes the race where two concurrent approve requests both
+            # observe AWAITING_APPROVAL and both try to record a decision
+            # (which, left unguarded, would each independently activate
+            # intelligence). A plain (non-partial) unique index: this table
+            # never legitimately holds two rows for the same job_id.
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_job_approvals_job_id "
+                    "ON job_approvals (job_id)"
                 )
             )
 

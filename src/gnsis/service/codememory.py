@@ -293,6 +293,10 @@ class CodeMemory:
         workspace_id: Optional[str] = None,
         repository_id: Optional[str] = None,
         metadata: Optional[Dict[str, object]] = None,
+        source_model: Optional[str] = None,
+        source_advisor_model: Optional[str] = None,
+        approved_by: Optional[str] = None,
+        approved_at: Optional[object] = None,
     ) -> Optional[MemoryItem]:
         """Atomically persist reviewed intelligence and its provenance."""
         text = (content or "").strip()
@@ -323,6 +327,10 @@ class CodeMemory:
                     "workspace_id": workspace_id,
                     "repository_id": repository_id,
                     "item_key": kind,
+                    "source_model": source_model,
+                    "source_advisor_model": source_advisor_model,
+                    "approved_by": approved_by,
+                    "approved_at": approved_at,
                 },
             )
         if written is None:
@@ -340,6 +348,10 @@ class CodeMemory:
         workspace_id: Optional[str] = None,
         repository_id: Optional[str] = None,
         items: Sequence[Dict[str, object]],
+        source_model: Optional[str] = None,
+        source_advisor_model: Optional[str] = None,
+        approved_by: Optional[str] = None,
+        approved_at: Optional[object] = None,
     ) -> List[MemoryItem]:
         records = [
             MemoryRecord(
@@ -371,6 +383,10 @@ class CodeMemory:
                     "workspace_id": workspace_id,
                     "repository_id": repository_id,
                     "item_key": str(item["item_key"]),
+                    "source_model": source_model,
+                    "source_advisor_model": source_advisor_model,
+                    "approved_by": approved_by,
+                    "approved_at": approved_at,
                 }
                 for item in items
                 if str(item.get("content", "")).strip()

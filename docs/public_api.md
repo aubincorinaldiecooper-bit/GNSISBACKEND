@@ -245,6 +245,11 @@ curl -s https://api.gnsis.studio/v1/repositories/repo_abc123/intelligence \
       "type": "accepted_change",
       "status": "active",
       "source_run_id": "job_bbec96036ff8",
+      "source_model": "anthropic/claude-opus-4.8",
+      "source_advisor_model": null,
+      "approval_id": 42,
+      "approved_by": "user_2f8a...",
+      "approved_at": "2026-07-25T16:10:00+00:00",
       "created_at": "2026-07-25T16:10:00+00:00"
     }
   ],
@@ -252,10 +257,13 @@ curl -s https://api.gnsis.studio/v1/repositories/repo_abc123/intelligence \
 }
 ```
 
-Each item traces back to the run that produced it, the approval that authorized
-it, and that run's evidence. Content is a bounded, durable lesson — entire logs,
-patches and receipts are deliberately **not** stored as intelligence; the item
-references that evidence instead.
+Each item traces back to the run that produced it, the model that produced it,
+and the approval that authorized it. Content is a bounded, durable lesson —
+entire logs, patches and receipts are deliberately **not** stored as
+intelligence; the item references that evidence instead. `source_advisor_model`
+is populated only when an Advisor was actually invoked on the source run (never
+merely configured); `approved_by`/`approved_at` are null only for historical
+items written before this provenance was tracked — never fabricated.
 
 Preview what a task would retrieve, using the same deterministic ranker that
 selects context at dispatch:
@@ -282,7 +290,7 @@ curl -s -X POST https://api.gnsis.studio/v1/runs \
       }'
 ```
 
-### 8. Confirm Run B consumed Run A's intelligence
+### 8. Inspect which intelligence was supplied, and verify its provenance
 
 ```bash
 curl -s https://api.gnsis.studio/v1/runs/$RUN_B/receipt \
@@ -294,17 +302,53 @@ curl -s https://api.gnsis.studio/v1/runs/$RUN_B/receipt \
   "run_id": "job_77ab91",
   "model": "openai/gpt-5.4",
   "memory_ids_consumed": ["mem_5f2c1d"],
-  "policy": {"name": "genesis", "version": 1, "hash": "…"}
+  "policy": {"name": "genesis", "version": 1, "hash": "…"},
+  "intelligence": {
+    "supplied": [
+      {
+        "memory_id": "mem_5f2c1d",
+        "kind": "accepted_change",
+        "content": "Harden the authentication middleware",
+        "selected": true,
+        "delivered": true,
+        "consumption_reported": false,
+        "source_run_id": "job_bbec96036ff8",
+        "source_model": "anthropic/claude-opus-4.8",
+        "source_advisor_model": null,
+        "approval_id": 42,
+        "approved_by": "user_2f8a...",
+        "approved_at": "2026-07-25T16:10:00+00:00",
+        "destination_run_id": "job_77ab91",
+        "destination_model": "openai/gpt-5.4"
+      }
+    ],
+    "proposed": [],
+    "approved": []
+  }
 }
 ```
 
-`mem_5f2c1d` was **produced** under `anthropic/claude-opus-4.8` and **consumed**
-under `openai/gpt-5.4` — the intelligence outlives the model that created it.
+`mem_5f2c1d` was **produced** under `anthropic/claude-opus-4.8` and **supplied**
+to a run on `openai/gpt-5.4` — the intelligence outlives the model that created
+it. `memory_ids_consumed` (legacy, unchanged) and the richer `intelligence`
+block above describe the same underlying fact; the latter is the complete,
+self-contained proof of the source → approval → destination chain.
+
+`selected` and `delivered` are always true for anything in `supplied` — the
+backend authoritatively chose and pinned it before dispatch. `consumption_reported`
+is **truthfully `false` today**: the current executor does not attest back which
+memory it semantically used, only what it was given, so this field is never
+claimed `true` without that attestation. `intelligence.proposed` and
+`intelligence.approved` mirror `GET /v1/runs/{id}/intelligence-proposals` and
+this run's own `reviewed_intelligence_created`, respectively — Run B here
+proposed and approved nothing of its own, so both are empty.
 
 The selected intelligence is delivered to the executor as a **separate field**,
 never spliced into the user's instruction, and the exact ids are pinned to the
-run, so a historical receipt still identifies what was consumed even after that
-intelligence is later superseded or disabled.
+run before dispatch, so a historical receipt still identifies what was supplied
+even after that intelligence is later superseded or disabled. The client cannot
+steer this selection — `POST /v1/runs` has no memory-id input field; retrieval
+is entirely server-computed from the run's task and repository.
 
 ---
 
@@ -355,6 +399,25 @@ was consumed and the receipt reports true zeros. The specific reason is in
 The pre-existing `/jobs*` routes remain available and unchanged for the current
 web client. `/v1/repositories`, `/v1/repositories/{id}/branches` and `/v1/models`
 already existed and are unchanged — they now additionally accept an API key.
+
+**`/jobs*` and `/v1/runs*` intentionally behave differently around approval,
+publishing and intelligence — a public-beta client should use `/v1` only, and
+should not mix the two on the same run:**
+
+| Behavior | `/v1/runs/{id}` | legacy `/jobs/{id}` |
+|---|---|---|
+| Approve vs. publish | separate steps (`/approve` then `/publish`) | **fused**: `/approve` immediately enqueues publishing |
+| Intelligence on approve | reviewer's explicit `intelligence` selection is activated | **none is ever activated** — the legacy route has no selection input, so approval always captures zero intelligence |
+| Intelligence on reject | none (a rejected run activates nothing) | a rejection lesson is **auto-derived** from the note/diff and activated — there is no reviewer content selection |
+
+Both routes share the same underlying job/run record, the same terminal states,
+and the same DB-enforced rule that a run's approve/reject decision is recorded
+exactly once, ever (so a race between the two routes on the same run — e.g. one
+caller hitting `/jobs/{id}/approve` while another hits
+`/v1/runs/{id}/reject` — resolves to a single, consistent outcome rather than
+each recording its own). The behavioral differences above are the reason
+this API's acceptance proof (reviewer-selected intelligence, source/approval
+provenance, separate approve/publish) is exercised through `/v1` end to end.
 
 ## Reviewer-selected intelligence and publishing
 

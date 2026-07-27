@@ -31,6 +31,10 @@ class IntelligenceProvenance:
     outcome_decision: str
     workspace_id: Optional[str]
     repository_id: Optional[str]
+    source_model: Optional[str] = None
+    source_advisor_model: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[object] = None
 
 
 @dataclass(frozen=True)
@@ -101,11 +105,22 @@ class IntelligenceLifecycle:
             approval_id = approval.id
             job_id = approval.job_id
             decision = approval.decision
+            approved_by = approval.actor
+            approved_at = approval.created_at
 
         job = self.jobs.get_job(job_id)
         run = self.runs.get_run_for_job(job_id)
         if job is None or run is None:
             return []
+
+        # Advisor provenance is recorded only when there is actual evidence the
+        # Advisor was invoked (a recorded model call for it) — never merely
+        # because a run was configured/pinned with one.
+        source_advisor_model = None
+        if run.advisor_model:
+            calls = self.runs.model_calls_for(run.id)
+            if any(c.get("model") == run.advisor_model for c in calls):
+                source_advisor_model = run.advisor_model
 
         normalized = []
         seen_keys = set()
@@ -166,6 +181,10 @@ class IntelligenceLifecycle:
             workspace_id=job.workspace_id,
             repository_id=job.repository_id,
             items=normalized,
+            source_model=run.primary_model,
+            source_advisor_model=source_advisor_model,
+            approved_by=approved_by,
+            approved_at=approved_at,
         )
 
     def proposals_for_run(self, job_id: str) -> List[IntelligenceProposal]:
@@ -257,6 +276,10 @@ class IntelligenceLifecycle:
                 p.outcome_decision,
                 p.workspace_id,
                 p.repository_id,
+                p.source_model,
+                p.source_advisor_model,
+                p.approved_by,
+                p.approved_at,
             )
 
     def intelligence_from_run(self, run_id: str) -> List[IntelligenceProvenance]:
@@ -278,6 +301,10 @@ class IntelligenceLifecycle:
                     r.outcome_decision,
                     r.workspace_id,
                     r.repository_id,
+                    r.source_model,
+                    r.source_advisor_model,
+                    r.approved_by,
+                    r.approved_at,
                 )
                 for r in rows
             ]
