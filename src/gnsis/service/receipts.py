@@ -184,6 +184,13 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
             .all()
         ):
             payload = event.payload if isinstance(event.payload, dict) else {}
+            # Defense in depth for events written before callback validation was
+            # tightened: ids alone never constitute a delivery attestation.
+            if (
+                payload.get("delivery_state") != "delivered"
+                or payload.get("model_request_started") is not True
+            ):
+                continue
             ids = payload.get("memory_ids")
             if isinstance(ids, list):
                 delivered_ids.update(item for item in ids if isinstance(item, str))

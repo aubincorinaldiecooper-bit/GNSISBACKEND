@@ -250,7 +250,7 @@ def get_source(job_id: str, authorization: Optional[str] = Header(default=None))
         "X-GNSIS-Base-SHA": run.base_sha,
         "Content-Disposition": f'attachment; filename="{job_id}-source.tar.gz"',
     }
-    return StreamingResponse(generator, headers=headers, media_type="application/gzip")
+    return StreamingResponse(generator(), headers=headers, media_type="application/gzip")
 
 
 # -- restricted model gateway -------------------------------------------------

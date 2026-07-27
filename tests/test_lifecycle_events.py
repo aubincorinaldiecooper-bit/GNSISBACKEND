@@ -155,6 +155,22 @@ def test_intelligence_delivery_with_no_pinned_ids_narrows_to_empty():
     assert store.calls[0][1]["payload"]["memory_ids"] == []
 
 
+def test_intelligence_delivery_requires_complete_delivery_attestation():
+    run = _run(memory_ids=["mem1"])
+    invalid_attestations = (
+        {},
+        {"delivery_state": "preparing", "model_request_started": True},
+        {"delivery_state": "delivered", "model_request_started": False},
+        {"delivery_state": "delivered", "model_request_started": 1},
+    )
+
+    for index, attestation in enumerate(invalid_attestations):
+        store = _Store()
+        _record(store, run, ["mem1"], data={"memory_ids": ["mem1"], **attestation})
+
+        assert store.calls[0][1]["payload"]["memory_ids"] == [], index
+
+
 def test_other_event_kinds_are_not_narrowed():
     """Only the intelligence-delivery kind is subject to pinned-set
     narrowing — ordinary events pass their data through unchanged."""
