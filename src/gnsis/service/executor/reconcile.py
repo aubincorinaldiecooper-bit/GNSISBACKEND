@@ -17,44 +17,13 @@ from typing import Optional
 from ...orchestration.status import JobStatus, is_terminal
 from ..github_app import GitHubApp
 from .dispatch import run_name_for
+from .failures import classify_failure
 from .github import ExecutorGitHub, GitHubHTTPError
 from .installation import DISPATCH_PERMISSIONS, resolve_executor_installation
 from .models import ExecutionStatus, FailureCategory
 from .store import ExecutionStore
 
 logger = logging.getLogger("gnsis.reconcile")
-
-
-def classify_external_failure(run) -> dict:
-    """Describe the furthest stage proven by durable execution evidence."""
-    model_called = run.usage.model_calls > 0
-    execution_started = run.status in (
-        ExecutionStatus.RUNNING, ExecutionStatus.VALIDATING,
-    ) or model_called or bool(run.patch_sha256)
-    if run.patch_sha256 or run.status == ExecutionStatus.VALIDATING or run.failure_category == FailureCategory.VALIDATION:
-        return {
-            "stage": "output_validation", "execution_started": True,
-            "model_called": model_called,
-            "message": "The executor produced changes, but GNSIS could not validate the result.",
-            "retryable": False, "next_action": "Review the validation details and retry the run.",
-        }
-    if run.source_downloaded and execution_started:
-        return {
-            "stage": "execution", "execution_started": True, "model_called": model_called,
-            "message": "Execution began but stopped before producing a validated result.",
-            "retryable": True, "next_action": "Retry the run; contact support if it stops again.",
-        }
-    if run.token_hashed:
-        return {
-            "stage": "source_loading", "execution_started": False, "model_called": False,
-            "message": "The executor connected successfully but could not load the repository source.",
-            "retryable": True, "next_action": "Verify repository access and retry the run.",
-        }
-    return {
-        "stage": "executor_authentication", "execution_started": False, "model_called": False,
-        "message": "The trusted executor started, but it could not connect to or authenticate with GNSIS.",
-        "retryable": True, "next_action": "Retry the run; contact support if authentication continues to fail.",
-    }
 
 
 def _parse(ts: str) -> Optional[datetime]:
@@ -182,7 +151,7 @@ def _reconcile_one(settings, job_store, store, github, token, run) -> bool:
                 if job is not None and not is_terminal(job.status):
                     job_store.set_status(run.job_id, JobStatus.CANCELLED, error="workflow cancelled")
             else:
-                outcome = classify_external_failure(run)
+                outcome = classify_failure(run)
                 from .events import record_lifecycle_event
                 record_lifecycle_event(store, run, "run_failed", {
                     **outcome,
