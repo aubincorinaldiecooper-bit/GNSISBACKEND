@@ -19,6 +19,7 @@ from . import basecheckout
 from .models import ExecutionStatus, FailureCategory
 from .store import ExecutionStore
 from .events import record_lifecycle_event, safe_payload
+from .failures import classify_failure
 from .validation import (
     sha256_text,
     strip_control_sequences,
@@ -128,10 +129,10 @@ def handle_failed(settings, job_store, exec_store: ExecutionStore, run, body: di
         return {"accepted": True, "status": run.status}
     reason = strip_control_sequences(str(body.get("reason") or "executor reported failure"))[:500]
     category = str(body.get("category") or FailureCategory.EXECUTOR_ERROR)[:64]
+    outcome = classify_failure(run, failure_category=category)
     record_lifecycle_event(exec_store, run, "executor_failure_received", {
-        "message": "The executor reported that the run stopped.", "stage": "execution",
-        "execution_started": run.status in (ExecutionStatus.RUNNING, ExecutionStatus.VALIDATING),
-        "model_called": run.usage.model_calls > 0,
+        **outcome,
+        "message": "The executor reported that the run stopped.",
     })
     exec_store.set_status(run.id, ExecutionStatus.FAILED, failure_category=category)
     exec_store.revoke_token(run.id)
