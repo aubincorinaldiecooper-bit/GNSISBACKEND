@@ -10,12 +10,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from ..clock import utcnow_iso as _now
 
 
 def new_id(prefix: str) -> str:

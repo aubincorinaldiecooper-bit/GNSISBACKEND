@@ -9,30 +9,18 @@ so two concurrent callers can never both win. Callers receive framework-free
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 from .. import orm
+from ...clock import aware as _aware, utcnow as _utcnow
 from ..db import session_scope
 from ...orchestration.models import new_id
 from .models import Budgets, ExecutionRunRecord, ExecutionStatus, Usage
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _iso(dt: Optional[datetime]) -> str:
     return dt.isoformat() if dt else ""
-
-
-def _aware(dt: Optional[datetime]) -> Optional[datetime]:
-    """Normalise to a UTC-aware datetime (SQLite hands back naive values)."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def _is_expired(dt: Optional[datetime]) -> bool:

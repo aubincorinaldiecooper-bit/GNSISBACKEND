@@ -240,23 +240,6 @@ class IntelligenceLifecycle:
             intelligence_items=intelligence_items,
         )
 
-    def process_latest_reviewed_outcome(
-        self,
-        *,
-        job_id: str,
-        reusable_intelligence: str,
-        kind: Optional[str] = None,
-    ) -> Optional[MemoryItem]:
-        """Compatibility wrapper; production paths should pass outcome_id."""
-        approval = self.jobs.get_latest_approval(job_id)
-        if approval is None or approval.id is None:
-            return None
-        return self.process_reviewed_outcome(
-            outcome_id=approval.id,
-            reusable_intelligence=reusable_intelligence,
-            kind=kind,
-        )
-
     def provenance_for_memory(self, memory_id: str) -> Optional[IntelligenceProvenance]:
         with session_scope() as s:
             p = (
@@ -311,3 +294,23 @@ class IntelligenceLifecycle:
 
     def later_runs_that_received(self, memory_id: str):
         return self.runs.runs_that_consumed_memory(memory_id)
+
+
+def capture_intelligence_on_approval(job_store, run_id: str, approval_id, items=None) -> None:
+    """Derive approved repository intelligence. Never fails the approval.
+
+    Intelligence is an enhancement layered on top of a decision that has already
+    been recorded; if extraction breaks, the approval must still stand.
+    """
+    if approval_id is None:
+        return
+    try:
+        IntelligenceLifecycle(jobs=job_store).capture_on_approval(
+            job_id=run_id, approval_id=approval_id, intelligence_items=items
+        )
+    except Exception:  # noqa: BLE001 - approval already committed; never roll it back
+        import logging
+
+        logging.getLogger("gnsis.public_api").exception(
+            "intelligence capture failed for run %s", run_id
+        )

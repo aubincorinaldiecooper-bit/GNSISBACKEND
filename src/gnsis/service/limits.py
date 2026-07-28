@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional
 
 from . import orm
+from ..clock import aware as _aware
 from .db import session_scope
 from .rates import to_money_str
 from ..orchestration.models import new_id
@@ -94,12 +95,6 @@ def _dec(v, field: str) -> Decimal:
     if d.is_nan() or d.is_infinite() or d < 0:
         raise LimitError(f"{field} must be a non-negative amount")
     return d
-
-
-def _aware(dt: Optional[datetime]) -> Optional[datetime]:
-    if dt is None:
-        return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def _policy_view(p: orm.LimitPolicy) -> PolicyView:

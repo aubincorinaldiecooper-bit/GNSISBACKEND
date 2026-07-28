@@ -23,13 +23,12 @@ attested identity recorded for the audit trail, not an authenticated principal.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
 
 from . import orm, rates
+from ..clock import utcnow as _utcnow
 from .db import session_scope
 from ..orchestration.models import new_id
 
@@ -39,10 +38,6 @@ BETA_GRANT_REVERSAL = "beta_grant_reversal"
 
 class BetaCreditError(Exception):
     """A grant/reversal was rejected for a caller-fixable reason."""
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _grant_view(row: orm.BetaCreditGrant, *, duplicate: bool = False) -> dict:

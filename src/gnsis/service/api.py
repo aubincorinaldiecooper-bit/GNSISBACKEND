@@ -1123,9 +1123,9 @@ def approve(
     # Approval is the trust boundary for reusable intelligence — capture it here
     # so the dashboard and the public API behave identically. Idempotent with
     # the publish-time extraction.
-    from .public_api import _capture_intelligence
+    from .intelligence_lifecycle import capture_intelligence_on_approval
 
-    _capture_intelligence(db, job_id, approval.id)
+    capture_intelligence_on_approval(db, job_id, approval.id)
 
     from .tasks import publish_pr
 

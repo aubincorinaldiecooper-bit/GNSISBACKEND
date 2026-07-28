@@ -12,12 +12,9 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from ..clock import utcnow_iso as _now
 
 
 @dataclass

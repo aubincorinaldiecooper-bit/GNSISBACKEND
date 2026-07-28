@@ -36,6 +36,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import workspaces as ws
+from .intelligence_lifecycle import capture_intelligence_on_approval
 from .settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["public"])
@@ -241,28 +242,6 @@ def _require_execution_configured() -> None:
             ErrorCode.EXECUTOR_UNAVAILABLE,
             "execution is not configured on this deployment",
             status=503,
-        )
-
-
-def _capture_intelligence(job_store, run_id: str, approval_id, items=None) -> None:
-    """Derive approved repository intelligence. Never fails the approval.
-
-    Intelligence is an enhancement layered on top of a decision that has already
-    been recorded; if extraction breaks, the approval must still stand.
-    """
-    if approval_id is None:
-        return
-    try:
-        from .intelligence_lifecycle import IntelligenceLifecycle
-
-        IntelligenceLifecycle(jobs=job_store).capture_on_approval(
-            job_id=run_id, approval_id=approval_id, intelligence_items=items
-        )
-    except Exception:  # noqa: BLE001 - approval already committed; never roll it back
-        import logging
-
-        logging.getLogger("gnsis.public_api").exception(
-            "intelligence capture failed for run %s", run_id
         )
 
 
@@ -595,7 +574,7 @@ def approve_run(
 
     # Approval is the trust boundary; only the reviewer's explicit selection is
     # activated, independently of the later publishing action.
-    _capture_intelligence(db, run_id, approval.id, selected)
+    capture_intelligence_on_approval(db, run_id, approval.id, selected)
     return run_view(job)
 
 

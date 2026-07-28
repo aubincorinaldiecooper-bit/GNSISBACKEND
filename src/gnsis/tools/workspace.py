@@ -10,8 +10,8 @@ refuses to touch anything outside it — a relative path that escapes via ``..``
 or an absolute path elsewhere on disk, is rejected rather than silently
 resolved. This is a workspace boundary, not a security sandbox: it stops an
 agent from wandering outside the repo it was asked to change, not a malicious
-actor from breaking out of the process. Real isolation is the job of
-:mod:`gnsis.service.sandbox` (``GNSIS_SANDBOX=docker``).
+actor from breaking out of the process. Real isolation is the job of the
+GitHub Actions executor's hardened, network-firewalled container.
 """
 
 from __future__ import annotations
