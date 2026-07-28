@@ -161,45 +161,17 @@ to your codebase's conventions and decisions. Set `GNSIS_MEMORY=none` to disable
 | --- | --- | --- |
 | `GNSIS_MEMORY` | `postgres` | `postgres` (durable, repo-scoped) or `none`. |
 
-## Sandboxing (executing model-written code)
+## Sandboxing (executing model-written code) — retired
 
-The worker runs the engine's edits and the project's tests — untrusted code.
+User jobs execute exclusively through the GitHub Actions executor (a separate,
+hardened, SHA-pinned repository) — see its own docs for that isolation model.
 
-- **`GNSIS_SANDBOX=none`** (default): runs in the worker's own container. On
-  Railway, that container is ephemeral and isolated per deploy, which is
-  acceptable for dogfooding **your own** repos.
-- **`GNSIS_SANDBOX=docker`**: runs each job's engine in an ephemeral,
-  resource-limited, non-root container that can only see the job's workspace
-  (`Dockerfile.sandbox`). Phase events are streamed back so Postgres
-  checkpointing is unaffected.
-
-> **Railway caveat:** Docker-in-Docker is **not** available on Railway's standard
-> runtime, so `docker` mode requires running the **worker** on a Docker-capable
-> host (a VM, Fly.io Machines, etc.). On Railway, stay on `none` and rely on the
-> ephemeral worker container.
-
-Build the sandbox image (on a Docker host):
-
-```bash
-docker build -f Dockerfile.sandbox -t gnsis-sandbox:latest .
-```
-
-| Var | Default | Purpose |
-| --- | --- | --- |
-| `GNSIS_SANDBOX` | `none` | `none` or `docker`. |
-| `GNSIS_SANDBOX_IMAGE` | `gnsis-sandbox:latest` | Image to run per job. |
-| `GNSIS_SANDBOX_NETWORK` | `bridge` | Container network (needs model-API egress). |
-| `GNSIS_SANDBOX_MEMORY` | `2g` | Memory limit. |
-| `GNSIS_SANDBOX_CPUS` | `2` | CPU limit. |
-| `GNSIS_SANDBOX_TIMEOUT` | `1800` | Max seconds per sandboxed run. |
-
-## A note on safety
-
-Even with `GNSIS_SANDBOX=docker`, the container needs network egress to reach the
-model API, so isolation is filesystem/resource/privilege-based, not network-air-
-gapped. For dogfooding your **own** repos either mode is fine; do not point GNSIS
-at untrusted repositories until egress is also locked down (e.g. an allowlist
-proxy).
+`GNSIS_SANDBOX=docker` and `gnsis.service.sandbox.DockerEngine` (a self-hosted
+alternative that ran a job's engine inside a container the worker itself
+launched) predate the GitHub Actions executor and are no longer wired into the
+user-job path. `Settings.sandbox` and its related fields are retained only as a
+design reference for the hardened container command and for isolated tests —
+setting `GNSIS_SANDBOX` no longer changes runtime behavior.
 
 ## Railway public-beta services
 

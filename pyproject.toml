@@ -33,6 +33,7 @@ dev = [
     "PyJWT[crypto]>=2.8",
     "cryptography>=42",
     "celery[redis]>=5.3",
+    "ruff>=0.11",
 ]
 # The Railway deployment surface (FastAPI API + Celery worker + Postgres).
 # The GNSIS core stays standard-library only; these are needed only to run the
@@ -63,3 +64,12 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 version = { attr = "gnsis.__about__.__version__" }
+
+[tool.ruff.lint]
+# Explicit and narrow on purpose: real-bug rules only (unused imports/names,
+# undefined names, obvious pyflakes/pycodestyle errors) — not style/modernize
+# rules (e.g. UP006/UP035/UP045, RUF022), which the pre-existing codebase
+# doesn't follow yet and which ruff's ever-expanding default selection would
+# otherwise silently start enforcing on the next ruff release, breaking CI on
+# code nobody touched. Broaden deliberately, not by version drift.
+select = ["E4", "E7", "E9", "F"]

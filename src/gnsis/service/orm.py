@@ -9,7 +9,7 @@ safe.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import (
@@ -26,11 +26,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from ..clock import utcnow as _utcnow
 from .db import Base
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 # -- tenancy: one personal workspace per Better Auth user ----------------------

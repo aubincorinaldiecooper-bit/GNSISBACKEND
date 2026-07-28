@@ -12,8 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+from ..clock import utcnow_iso as _now
 
 
 def canonical_hash(content: Any) -> str:
@@ -25,10 +26,6 @@ def canonical_hash(content: Any) -> str:
     """
     payload = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass(frozen=True)

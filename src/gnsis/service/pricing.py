@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 
 from . import orm
+from ..clock import aware as _aware
 from .db import session_scope
 from .rates import to_money_str
 from ..orchestration.models import new_id
@@ -74,12 +75,6 @@ def _view(row: orm.ModelPricing) -> PricingView:
     )
 
 
-def _aware(dt: Optional[datetime]) -> Optional[datetime]:
-    if dt is None:
-        return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-
-
 class PricingStore:
     def add_price(
         self, *, provider: str, model: str, input_price, output_price,
@@ -90,7 +85,8 @@ class PricingStore:
         (provider, model) at the new start so windows never overlap."""
         if not provider or not model:
             raise PricingError("provider and model are required")
-        _dec(input_price, "input_price"); _dec(output_price, "output_price")
+        _dec(input_price, "input_price")
+        _dec(output_price, "output_price")
         if cached_input_price is not None:
             _dec(cached_input_price, "cached_input_price")
         if reasoning_price is not None:
