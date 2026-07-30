@@ -97,9 +97,12 @@ class PublicApiIntelligenceIntegrationTests(unittest.TestCase):
             headers=headers,
         )
 
-    def _drive_to_gate(self, run_id, *, model, memory_ids=None):
+    def _drive_to_gate(self, run_id, *, model, memory_ids=None, outcome_summary=None):
+        from gnsis.service import policy_store as ps
+
         store = PostgresJobStore()
         store.save_diff(Diff(run_id, PATCH, files_changed=["x.txt"]))
+        policy = ps.resolve_active_policy()
         run = ExecutionStore().create_run(
             job_id=run_id, workspace_id=self.ws.id, repository_id=self.repo_id,
             base_branch="main", base_sha="a" * 40, dispatch_nonce_hash=f"n-{run_id}",
@@ -107,13 +110,16 @@ class PublicApiIntelligenceIntegrationTests(unittest.TestCase):
             executor_repository_id=1, executor_workflow="execute.yml",
             executor_ref="main", trusted_workflow_sha="s",
             budgets=Budgets(50, 500000, 100000, 3.0),
+            policy_name=policy.name, policy_version=policy.version, policy_hash=policy.content_hash,
             primary_model=model, memory_ids=memory_ids or None,
         )
         ExecutionStore().set_patch_result(
             run.id, patch_sha256=sha256_text(PATCH), artifact_hashes={},
-            security_validation="passed",
+            security_validation="passed", outcome_summary=outcome_summary,
         )
         store.set_status(run_id, "awaiting_approval")
+        if outcome_summary is not None:
+            run = ExecutionStore().get_run(run.id)
         return run
 
     def test_idempotent_create_on_postgres(self):
@@ -126,10 +132,26 @@ class PublicApiIntelligenceIntegrationTests(unittest.TestCase):
 
     def test_cross_model_intelligence_loop_on_postgres(self):
         run_a = self._create(MODEL_A).json()
-        self._drive_to_gate(run_a["id"], model=MODEL_A)
+        self._drive_to_gate(
+            run_a["id"], model=MODEL_A,
+            outcome_summary=(
+                "Hardened the authentication middleware to reject requests with a "
+                "missing bearer token before touching the session store."
+            ),
+        )
+
+        receipt_a_pre = self.client.get(
+            f"/v1/runs/{run_a['id']}/receipt", headers=self.auth()
+        ).json()
+        proposals = receipt_a_pre["proposed_intelligence"]
+        self.assertTrue(proposals, "a run with real evidence must propose at least one item")
+        proposal = proposals[0]
+        self.assertNotEqual(proposal["content"], run_a["instruction"])
 
         approved = self.client.post(
-            f"/v1/runs/{run_a['id']}/approve", json={"note": "ship"}, headers=self.auth()
+            f"/v1/runs/{run_a['id']}/approve",
+            json={"note": "ship", "intelligence": [{"item_key": proposal["item_key"]}]},
+            headers=self.auth(),
         )
         self.assertEqual(approved.status_code, 200, approved.text)
 
@@ -139,6 +161,10 @@ class PublicApiIntelligenceIntegrationTests(unittest.TestCase):
         self.assertTrue(listed, "approval must produce active intelligence on Postgres")
         item = listed[0]
         self.assertEqual(item["source_run_id"], run_a["id"])
+        self.assertEqual(item["content"], proposal["content"])
+        self.assertNotEqual(item["content"], run_a["instruction"])
+        self.assertEqual(item["source_model"], MODEL_A)
+        self.assertIsNotNone(item["policy_version"])
         intelligence_id = item["id"]
 
         prov = IntelligenceLifecycle().provenance_for_memory(intelligence_id)

@@ -85,8 +85,9 @@ class PostgresFlowTests(unittest.TestCase):
         self.assertEqual(pr.number, 11)
         self.assertEqual(store.get_job(job.id).status, JobStatus.COMPLETED)
 
-        # approval-gated memory write landed and is repo-scoped
-        self.assertTrue(memory.recent("o/int"))
+        # Publishing captures no intelligence of its own against real SQL either
+        # — approval is the sole trust boundary (correction #2).
+        self.assertEqual(memory.recent("o/int"), [])
         self.assertEqual(memory.recent("o/other"), [])
 
     def test_memory_approval_gate_in_postgres(self):
