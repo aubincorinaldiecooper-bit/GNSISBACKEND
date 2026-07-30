@@ -349,6 +349,13 @@ class ExecutionRun(Base):
     # no tests.json carry none. Keys: runner, status, passed, failed, skipped.
     tests_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
+    # Bounded, immutable snapshot of the agent's own account of what it did,
+    # captured from the (already validated) receipt.json at completion. This is
+    # the evidence repository-intelligence proposals are derived from — never
+    # the task instruction. Nullable: legacy runs and runs that emitted no
+    # summary carry none, which correctly yields zero proposals.
+    outcome_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Pinned Advisor model — the gateway reads this authoritatively (never from
     # the executor's request body) when it injects the openrouter:advisor server
     # tool, so a compromised primary agent cannot pick a different Advisor. Both

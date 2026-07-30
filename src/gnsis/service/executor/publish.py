@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 from typing import Any, Dict, Optional
 
-from ...memory.base import MemoryProvider, MemoryRecord
+from ...memory.base import MemoryProvider
 from ...orchestration.models import LogEntry, PRMetadata
 from ...orchestration.status import JobStatus
 from ..github_app import GitHubApp, _request
@@ -196,33 +196,12 @@ def publish_approved(
 
     job_store.set_status(job_id, JobStatus.COMPLETED)
 
-    if memory is not None:
-        # Only a human-approved, successfully-published change reaches memory.
-        # Persist through the reviewed-outcome lifecycle when the approval has a
-        # stable DB id so memory and provenance are committed atomically.
-        content = (job.instruction.strip().splitlines() or [job.instruction])[0]
-        if approval.id is not None:
-            from ..codememory import MemoryKind
-            from ..intelligence_lifecycle import IntelligenceLifecycle
-
-            IntelligenceLifecycle(jobs=job_store).process_reviewed_outcome(
-                outcome_id=approval.id,
-                reusable_intelligence=content,
-                kind=MemoryKind.ACCEPTED_CHANGE,
-            )
-        else:
-            memory.write(
-                MemoryRecord(
-                    repo=job.repo,
-                    content=content,
-                    kind="accepted_change",
-                    metadata={"job_id": job_id, "pr": pr["number"], "files": diff.files_changed},
-                    approved=True,
-                    workspace_id=job.workspace_id,
-                    repository_id=job.repository_id,
-                    source_job_id=job_id,
-                )
-            )
+    # Publishing captures no intelligence of its own. Approval is the sole
+    # trust boundary for reusable intelligence — the reviewer's explicit
+    # selection was already persisted at approval time (see
+    # IntelligenceLifecycle.capture_selected_intelligence), before this
+    # publish step ever runs. ``memory`` is accepted for backward-compatible
+    # call signatures but is otherwise unused here.
     return meta
 
 

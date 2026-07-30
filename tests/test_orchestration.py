@@ -157,7 +157,10 @@ class MemoryWiringTests(unittest.TestCase):
         self.assertNotIn("secret convention", engine.seen_instruction)
         self.assertEqual(engine.seen_instruction, "add feature Z")
 
-    def test_approved_publish_writes_memory(self):
+    def test_approved_publish_writes_no_memory(self):
+        """Publishing captures no intelligence of its own (correction #2):
+        approval is the sole trust boundary, and this compatibility pipeline's
+        publish step never had an approval-time capture to begin with."""
         JobPipeline(self.store, SpyEngine(), memory=self.memory).run(self.job.id)
         self.store.save_approval(
             Approval(job_id=self.job.id, decision="approved", actor="me")
@@ -165,31 +168,29 @@ class MemoryWiringTests(unittest.TestCase):
         self.store.set_status(self.job.id, JobStatus.APPROVED)
         publish(self.store, FakePublisher(), self.job.id, memory=self.memory)
 
-        remembered = self.memory.recent("o/r")
-        self.assertEqual(len(remembered), 1)
-        self.assertEqual(remembered[0].content, "did the thing")
-        self.assertEqual(remembered[0].kind, "accepted_change")
+        self.assertEqual(self.memory.recent("o/r"), [])
 
-    def test_rejection_distills_a_lesson_into_memory(self):
+    def test_rejection_writes_no_memory(self):
+        """A rejected run must not produce intelligence, active or otherwise
+        (correction #1)."""
         JobPipeline(self.store, SpyEngine(), memory=self.memory).run(self.job.id)
         reject_job(
             self.store, self.job.id, actor="me",
             note="touched the wrong module", memory=self.memory,
         )
         self.assertEqual(self.store.get_job(self.job.id).status, JobStatus.REJECTED)
-        lessons = self.memory.recent("o/r")
-        self.assertEqual(len(lessons), 1)
-        self.assertEqual(lessons[0].kind, "lesson")
-        self.assertIn("touched the wrong module", lessons[0].content)
+        self.assertEqual(self.memory.recent("o/r"), [])
 
-    def test_rejection_lesson_feeds_next_job(self):
+    def test_rejection_feeds_no_lesson_to_next_job(self):
         JobPipeline(self.store, SpyEngine(), memory=self.memory).run(self.job.id)
         reject_job(self.store, self.job.id, actor="me", note="bad", memory=self.memory)
-        # a new job for the same repo should see the lesson injected
+        # A rejection never writes a lesson, so a later job for the same repo
+        # sees nothing injected from it.
         job2 = self.store.create_job(JobSpec(repo="o/r", instruction="try again", engine="spy"))
         engine = SpyEngine()
         JobPipeline(self.store, engine, memory=self.memory).run(job2.id)
-        self.assertIn("REJECTED", engine.seen_instruction)
+        self.assertNotIn("REJECTED", engine.seen_instruction)
+        self.assertEqual(engine.seen_instruction, "try again")
 
 
 if __name__ == "__main__":

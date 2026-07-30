@@ -75,6 +75,31 @@ def _compact_tests_summary(tests_raw: str) -> Optional[dict]:
     }
 
 
+_OUTCOME_SUMMARY_MAX_CHARS = 4000
+
+
+def _compact_outcome_summary(receipt_raw: str) -> Optional[str]:
+    """Extract the agent's own account of the outcome from (validated) receipt.json.
+
+    This is the evidence repository-intelligence proposals are derived from —
+    a bounded, sanitized string, never the raw receipt object and never the
+    task instruction. Returns ``None`` if there is nothing usable, so a run
+    with no summary correctly yields zero proposals rather than a fabricated one.
+    """
+    import json
+
+    try:
+        data = json.loads(receipt_raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    summary = strip_control_sequences(str(data.get("summary") or "")).strip()
+    if not summary:
+        return None
+    return summary[:_OUTCOME_SUMMARY_MAX_CHARS]
+
+
 def record_run_event(settings, exec_store: ExecutionStore, run, body: dict) -> dict:
     """Persist a run event. Idempotent, sequence-checked, redacted."""
     if is_terminal(run.status) or run.status in ExecutionStatus.TERMINAL:
@@ -162,10 +187,12 @@ def handle_complete(
             raise CallbackError(tv.reason, status=422)
         tests_summary = _compact_tests_summary(tests_raw)
     receipt_raw = outputs.get("receipt.json")
+    outcome_summary: Optional[str] = None
     if isinstance(receipt_raw, str):
         rv = validate_receipt_json(receipt_raw)
         if not rv.ok:
             raise CallbackError(rv.reason, status=422)
+        outcome_summary = _compact_outcome_summary(receipt_raw)
 
     # 4) Server computes the patch hash; a supplied hash must agree.
     patch_sha256 = sha256_text(patch)
@@ -211,6 +238,7 @@ def handle_complete(
         artifact_hashes=artifact_hashes,
         security_validation="passed",
         tests_summary=tests_summary,
+        outcome_summary=outcome_summary,
     )
     exec_store.set_status(run.id, ExecutionStatus.COMPLETED)
     exec_store.revoke_token(run.id)

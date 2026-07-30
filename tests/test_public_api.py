@@ -129,7 +129,7 @@ class PublicApiTestBase(unittest.TestCase):
             headers["Idempotency-Key"] = idem
         return self.client.post("/v1/runs", json=body, headers=headers)
 
-    def drive_to_awaiting_approval(self, run_id, *, model=MODEL_A, memory_ids=None):
+    def drive_to_awaiting_approval(self, run_id, *, model=MODEL_A, memory_ids=None, outcome_summary=None):
         """Seed the validated execution a real executor run would have produced."""
         from gnsis.orchestration.models import Diff
         from gnsis.service.executor.models import Budgets
@@ -137,8 +137,11 @@ class PublicApiTestBase(unittest.TestCase):
         from gnsis.service.executor.validation import sha256_text
         from gnsis.service.repository import PostgresJobStore
 
+        from gnsis.service import policy_store as ps
+
         store = PostgresJobStore()
         store.save_diff(Diff(run_id, PATCH, files_changed=["x.txt"]))
+        policy = ps.resolve_active_policy()
         run = ExecutionStore().create_run(
             job_id=run_id, workspace_id=self.ws.id, repository_id=self.repo_id,
             base_branch="main", base_sha="a" * 40, dispatch_nonce_hash="n",
@@ -146,13 +149,16 @@ class PublicApiTestBase(unittest.TestCase):
             executor_repository_id=1, executor_workflow="execute.yml",
             executor_ref="main", trusted_workflow_sha="s",
             budgets=Budgets(50, 500000, 100000, 3.0),
+            policy_name=policy.name, policy_version=policy.version, policy_hash=policy.content_hash,
             primary_model=model, memory_ids=memory_ids or None,
         )
         ExecutionStore().set_patch_result(
             run.id, patch_sha256=sha256_text(PATCH), artifact_hashes={},
-            security_validation="passed",
+            security_validation="passed", outcome_summary=outcome_summary,
         )
         store.set_status(run_id, "awaiting_approval")
+        if outcome_summary is not None:
+            run = ExecutionStore().get_run(run.id)
         return run
 
 
@@ -412,8 +418,15 @@ class BetaAcceptanceTests(PublicApiTestBase):
         events_a = self.client.get(f"/v1/runs/{run_a['id']}/events", headers=self.auth()).json()["data"]
         self.assertIn("run.created", [e["type"] for e in events_a])
 
-        # Drive to the approval gate the way a real executor completion would.
-        self.drive_to_awaiting_approval(run_a["id"], model=MODEL_A)
+        # Drive to the approval gate the way a real executor completion would,
+        # including the agent's own outcome summary — the evidence proposals
+        # are derived from. Deliberately distinct from the task instruction.
+        outcome_summary = (
+            "Refactored the authentication middleware to validate bearer tokens "
+            "before touching session state. Added regression tests covering "
+            "missing and expired tokens."
+        )
+        self.drive_to_awaiting_approval(run_a["id"], model=MODEL_A, outcome_summary=outcome_summary)
 
         # 5. Retrieve Run A's receipt.
         receipt_a = self.client.get(f"/v1/runs/{run_a['id']}/receipt", headers=self.auth()).json()
@@ -423,13 +436,23 @@ class BetaAcceptanceTests(PublicApiTestBase):
         self.assertEqual(receipt_a["model"], MODEL_A)
         self.assertTrue(receipt_a["execution_started"])
 
-        # 6. Approve Run A.
+        # A run proposes candidate intelligence derived from its own evidence —
+        # never the task instruction — before any reviewer decision is made.
+        proposals = receipt_a["proposed_intelligence"]
+        self.assertTrue(proposals, "a run with real evidence must propose at least one item")
+        proposal = proposals[0]
+        self.assertNotEqual(proposal["content"], run_a["instruction"])
+
+        # 6. Approve Run A, explicitly selecting the proposal to activate.
         approved = self.client.post(
-            f"/v1/runs/{run_a['id']}/approve", json={"note": "looks right"}, headers=self.auth()
+            f"/v1/runs/{run_a['id']}/approve",
+            json={"note": "looks right", "intelligence": [{"item_key": proposal["item_key"]}]},
+            headers=self.auth(),
         )
         self.assertEqual(approved.status_code, 200, approved.text)
 
-        # 7. At least one provenance-backed intelligence item is now active.
+        # 7. Exactly the reviewer-selected item is now active — derived from
+        # evidence, never the raw task instruction.
         listed = self.client.get(
             f"/v1/repositories/{self.repo_id}/intelligence", headers=self.auth()
         ).json()["data"]
@@ -438,9 +461,19 @@ class BetaAcceptanceTests(PublicApiTestBase):
         self.assertEqual(produced["source_run_id"], run_a["id"])
         self.assertEqual(produced["repository_id"], self.repo_id)
         self.assertEqual(produced["status"], "active")
+        self.assertEqual(produced["content"], proposal["content"])
+        self.assertNotEqual(produced["content"], run_a["instruction"],
+                            "intelligence must be derived from evidence, never the task instruction")
         intelligence_id = produced["id"]
 
-        # Provenance traces back to the run AND the approval that authorized it.
+        # Provenance traces back to the run, the approval that authorized it,
+        # the model that produced it, the policy in effect, and the evidence
+        # item_key it was captured from.
+        self.assertEqual(produced["source_model"], MODEL_A)
+        self.assertIsNotNone(produced["source_approval_id"])
+        self.assertIsNotNone(produced["policy_version"])
+        self.assertEqual(produced["evidence_item_key"], proposal["item_key"])
+
         from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
 
         prov = IntelligenceLifecycle().provenance_for_memory(intelligence_id)

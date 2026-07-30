@@ -90,6 +90,33 @@ class MissingRecordsTests(ReceiptTestBase):
         self.assertEqual(r["files_changed"], [])
         self.assertIsNone(r["cost"])
 
+    def test_job_without_run_reports_truthful_zero_and_not_applicable_values(self):
+        """A run that never started reports known-zero/not-applicable values —
+        never null/"unavailable" (correction #3)."""
+        self._add(self._job(status="queued"))
+        r = self._receipt()
+        self.assertFalse(r["execution_started"])
+        self.assertEqual(r["tests"], "not_run")
+        self.assertEqual(r["tokens"], None)
+        self.assertEqual(r["model_calls"], 0)
+        self.assertEqual(r["files_changed"], [])
+
+    def test_blocked_run_before_any_model_call_reports_execution_started_false(self):
+        self._add(
+            self._job(status="blocked", error="couldn't start: repository is empty"),
+            self._run(status="blocked", failure_category="blocked_repository_empty",
+                      patch_sha256=None, tests_summary=None, model_calls=0,
+                      input_tokens=0, output_tokens=0),
+        )
+        r = self._receipt()
+        self.assertFalse(r["execution_started"])
+        self.assertEqual(r["tests"], "not_run")
+        self.assertEqual(r["model_calls"], 0)
+        self.assertEqual(r["tokens"], {"input": 0, "output": 0, "cached": 0, "reasoning": 0})
+        self.assertEqual(r["files_changed"], [])
+        self.assertEqual(r["cost"]["provider_cost"], "0")
+        self.assertEqual(r["cost"]["total_billed"], "0")
+
     def test_run_without_charges_reports_zero_cost(self):
         self._add(self._job(), self._run())
         r = self._receipt()
@@ -203,6 +230,10 @@ class FailureAndReconTests(ReceiptTestBase):
         self.assertEqual(r["status"], "failed")
         self.assertEqual(r["failure_category"], "executor_error")
         self.assertEqual(r["failure_message"], "dispatch failed: executor unreachable")
+        # Model calls were made (the default fixture's model_calls=3) before the
+        # failure, so this is a mid-execution failure, not a pre-execution
+        # block: tests genuinely is unknown (None), not the "not_run" zero.
+        self.assertTrue(r["execution_started"])
         self.assertIsNone(r["tests"])
 
     def test_needs_reconciliation_dominates(self):

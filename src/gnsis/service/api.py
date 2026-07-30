@@ -106,6 +106,7 @@ app.include_router(public_gateway_router)
 # Authenticated by a Genesis virtual key *or* the dashboard session JWT, so the
 # same routes serve external clients and the reference web client.
 from .public_api import (  # noqa: E402
+    IntelligenceSelection,
     PublicApiError,
     error_response as _public_error_response,
     new_request_id as _new_request_id,
@@ -306,6 +307,9 @@ class FollowUpRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     note: str = ""
+    #: Explicit reviewer selection of which proposed intelligence (if any)
+    #: becomes active. Omitted or empty: approval creates zero intelligence.
+    intelligence: Optional[List[IntelligenceSelection]] = None
 
 
 class ClaimRequest(BaseModel):
@@ -1120,12 +1124,12 @@ def approve(
     db.merge_context(job_id, {"approval_binding": binding, "approval_id": approval.id})
     job = db.set_status(job_id, JobStatus.APPROVED)
 
-    # Approval is the trust boundary for reusable intelligence — capture it here
-    # so the dashboard and the public API behave identically. Idempotent with
-    # the publish-time extraction.
+    # Approval is the trust boundary for reusable intelligence: capture the
+    # reviewer's explicit selection here so the dashboard and the public API
+    # behave identically. Publishing performs no intelligence capture of its own.
     from .public_api import _capture_intelligence
 
-    _capture_intelligence(db, job_id, approval.id)
+    _capture_intelligence(db, job_id, approval.id, req.intelligence)
 
     from .tasks import publish_pr
 

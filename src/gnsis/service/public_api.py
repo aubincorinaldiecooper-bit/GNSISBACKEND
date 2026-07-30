@@ -239,19 +239,26 @@ def _require_execution_configured() -> None:
         )
 
 
-def _capture_intelligence(job_store, run_id: str, approval_id) -> None:
-    """Derive approved repository intelligence. Never fails the approval.
+def _capture_intelligence(job_store, run_id: str, approval_id, selections=None) -> None:
+    """Persist the reviewer-selected repository intelligence. Never fails the approval.
 
     Intelligence is an enhancement layered on top of a decision that has already
     been recorded; if extraction breaks, the approval must still stand.
+    ``selections`` is the reviewer's explicit choice among this run's own
+    evidence-derived proposals — omitted or empty means the reviewer approved
+    the run while producing no intelligence, which is a normal, safe outcome.
     """
     if approval_id is None:
         return
     try:
         from .intelligence_lifecycle import IntelligenceLifecycle
 
-        IntelligenceLifecycle(jobs=job_store).capture_on_approval(
-            job_id=run_id, approval_id=approval_id
+        normalized = [
+            s.model_dump() if hasattr(s, "model_dump") else dict(s)
+            for s in (selections or [])
+        ]
+        IntelligenceLifecycle(jobs=job_store).capture_selected_intelligence(
+            job_id=run_id, approval_id=approval_id, selections=normalized
         )
     except Exception:  # noqa: BLE001 - approval already committed; never roll it back
         import logging
@@ -311,8 +318,26 @@ class FollowUpRequest(BaseModel):
     instruction: Optional[str] = None
 
 
+class IntelligenceSelection(BaseModel):
+    """One reviewer-selected intelligence proposal, optionally edited.
+
+    ``item_key`` must name one of the run's own deterministic, evidence-derived
+    proposals (see the receipt's ``proposed_intelligence``); an unrecognized key
+    is ignored rather than trusted. ``content``/``kind`` let a reviewer edit the
+    proposal's text or reclassify it before it becomes active.
+    """
+
+    item_key: str
+    content: Optional[str] = None
+    kind: Optional[str] = None
+
+
 class DecisionRequest(BaseModel):
     note: str = ""
+    #: Explicit reviewer selection of which proposed intelligence (if any)
+    #: becomes active. Omitted or empty: approval creates zero intelligence —
+    #: approval never automatically activates unreviewed intelligence.
+    intelligence: Optional[List[IntelligenceSelection]] = None
 
 
 class IntelligenceQueryRequest(BaseModel):
@@ -340,15 +365,7 @@ def run_view(job) -> dict:
     }
 
 
-#: Job statuses in which an executor genuinely started doing work. Used to state
-#: ``execution_started`` truthfully on the receipt.
-_EXECUTION_STARTED_STATUSES = frozenset(
-    {"planning", "patching", "testing", "summarizing", "awaiting_approval",
-     "approved", "publishing", "completed", "rejected"}
-)
-
-
-def _public_receipt_view(receipt: dict, job) -> dict:
+def _public_receipt_view(receipt: dict) -> dict:
     """Re-shape the internal receipt for the public run-oriented contract.
 
     Internally ``run_id`` names the *execution* run; publicly a "run" is the job.
@@ -356,19 +373,39 @@ def _public_receipt_view(receipt: dict, job) -> dict:
     existing dashboard contract byte-for-byte stable while the public API stays
     coherent for external clients.
 
-    Also states plainly whether execution ever started, so a client can tell a
-    pre-execution block apart from a mid-execution failure without inferring it.
+    ``execution_started`` and truthful known-zero values (e.g. ``tests:
+    "not_run"``) are already computed once, canonically, in
+    :func:`gnsis.service.receipts.build_receipt` — the same values the
+    dashboard's ``/jobs/{id}/receipt`` returns. This view only renames fields
+    for the public contract; it never re-derives their meaning.
     """
     view = dict(receipt)
-    view["execution_run_id"] = receipt.get("run_id")
+    execution_run_id = receipt.get("run_id")
+    view["execution_run_id"] = execution_run_id
     view["run_id"] = receipt.get("job_id")
     view["object"] = "receipt"
-    started = job.status in _EXECUTION_STARTED_STATUSES or bool(receipt.get("model_calls"))
-    view["execution_started"] = bool(started)
-    if not started:
-        # Terminal before execution: these are known-zero, never "unavailable".
-        view["tests"] = view.get("tests") or "not_run"
+    view["proposed_intelligence"] = _proposed_intelligence_view(execution_run_id)
     return view
+
+
+def _proposed_intelligence_view(execution_run_id: Optional[str]) -> List[dict]:
+    """The run's own deterministic, evidence-derived candidate lessons.
+
+    A reviewer picks among these (and may edit them) via ``intelligence`` on
+    the approve request; nothing here is active until explicitly selected.
+    """
+    if not execution_run_id:
+        return []
+    from .executor.store import ExecutionStore
+    from .intelligence_lifecycle import propose_intelligence_for_run
+
+    run = ExecutionStore().get_run(execution_run_id)
+    if run is None:
+        return []
+    return [
+        {"item_key": p.item_key, "content": p.content, "kind": p.kind}
+        for p in propose_intelligence_for_run(run)
+    ]
 
 
 def _page(items: List[dict], limit: int, offset: int) -> dict:
@@ -487,11 +524,11 @@ def get_run_receipt(run_id: str, principal: Principal = Depends(current_principa
     from .receipts import build_receipt
 
     principal.require(Scope.RECEIPTS_READ)
-    job = _require_run(principal.workspace_id, run_id)
+    _require_run(principal.workspace_id, run_id)
     receipt = build_receipt(principal.workspace_id, run_id)
     if receipt is None:
         raise PublicApiError(ErrorCode.RECEIPT_UNAVAILABLE, "receipt unavailable", status=404)
-    return _public_receipt_view(receipt, job)
+    return _public_receipt_view(receipt)
 
 
 @router.post("/runs/{run_id}/approve")
@@ -503,8 +540,12 @@ def approve_run(
     """Approve a run. Idempotent: approving an already-approved run returns it
     unchanged rather than re-deciding or re-publishing.
 
-    Approval is the trust boundary for reusable repository intelligence: the
-    intelligence extraction runs from the publish path this triggers.
+    Approving a run means the run outcome is trusted and the reviewer-selected
+    intelligence in ``req.intelligence`` is authorized for use by future runs.
+    Publishing the pull request is a separate action that follows approval and
+    performs no intelligence capture of its own. Approval never automatically
+    activates unreviewed intelligence — omitting ``intelligence`` (or sending
+    an empty list) approves the run while producing zero intelligence.
     """
     from ..orchestration.models import Approval
     from ..orchestration.status import JobStatus
@@ -553,10 +594,10 @@ def approve_run(
     db.merge_context(run_id, {"approval_binding": binding, "approval_id": approval.id})
     job = db.set_status(run_id, JobStatus.APPROVED)
 
-    # Approval is the trust boundary for reusable intelligence: capture it here
-    # rather than waiting on the publish task. Idempotent with the publish-time
-    # extraction, so the two can never double-write.
-    _capture_intelligence(db, run_id, approval.id)
+    # Approval is the trust boundary for reusable intelligence: capture the
+    # reviewer's explicit selection here, rather than waiting on the publish
+    # task. Publishing performs no intelligence capture of its own.
+    _capture_intelligence(db, run_id, approval.id, req.intelligence)
 
     from .tasks import publish_pr
 
@@ -570,8 +611,7 @@ def reject_run(
     req: DecisionRequest,
     principal: Principal = Depends(current_principal),
 ) -> dict:
-    """Reject a run. Idempotent. A rejected run never yields active
-    intelligence — its lesson is recorded as a rejection lesson instead."""
+    """Reject a run. Idempotent. A rejected run never produces intelligence."""
     from ..orchestration.pipeline import reject_job
     from ..orchestration.status import JobStatus
     from .repository import PostgresJobStore
@@ -655,9 +695,16 @@ def create_follow_up_run(
 
 # -- repository intelligence --------------------------------------------------
 
-def _intelligence_view(record) -> dict:
-    """The public intelligence object. Workspace id is deliberately omitted —
-    it is internal tenancy, not client-facing information."""
+def _intelligence_view(record, provenance: Optional[dict] = None) -> dict:
+    """The public intelligence object.
+
+    Every active item retains its complete provenance: source run, source
+    approval, source model, policy version, and the evidence item_key it was
+    captured from — all surfaced here when available. Workspace id is
+    deliberately omitted — it is internal tenancy, not client-facing
+    information, and every read of this endpoint is already workspace-scoped.
+    """
+    prov = provenance or {}
     return {
         "id": record.memory_id,
         "object": "intelligence",
@@ -666,6 +713,10 @@ def _intelligence_view(record) -> dict:
         "type": record.kind,
         "status": "active",
         "source_run_id": record.source_job_id,
+        "source_approval_id": prov.get("source_approval_id"),
+        "source_model": prov.get("source_model"),
+        "policy_version": prov.get("policy_version"),
+        "evidence_item_key": prov.get("item_key"),
         "created_at": record.created_at,
     }
 
@@ -678,6 +729,7 @@ def list_repository_intelligence(
     principal: Principal = Depends(current_principal),
 ) -> dict:
     """Active, approved intelligence for one repository, newest first."""
+    from .intelligence_lifecycle import IntelligenceLifecycle
     from .repository import PostgresMemoryProvider
 
     principal.require(Scope.INTELLIGENCE_READ)
@@ -691,7 +743,13 @@ def list_repository_intelligence(
         repository_id=repo.id,
         limit=500,
     )
-    return _page([_intelligence_view(r) for r in records], limit, max(0, int(offset)))
+    provenance = IntelligenceLifecycle().full_provenance_for_memories(
+        [r.memory_id for r in records]
+    )
+    return _page(
+        [_intelligence_view(r, provenance.get(r.memory_id)) for r in records],
+        limit, max(0, int(offset)),
+    )
 
 
 @router.post("/repositories/{repository_id}/intelligence/query")

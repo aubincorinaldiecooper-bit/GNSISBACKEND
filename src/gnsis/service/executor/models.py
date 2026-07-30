@@ -123,6 +123,10 @@ class ExecutionRunRecord:
     # for this run (a compromised primary cannot swap it out per-request).
     primary_model: Optional[str] = None
     advisor_model: Optional[str] = None
+    # The agent's own account of what it did, captured from receipt.json at
+    # completion — the evidence repository-intelligence proposals are derived
+    # from. None for legacy runs and runs that emitted no summary.
+    outcome_summary: Optional[str] = None
 
     @property
     def is_terminal(self) -> bool:

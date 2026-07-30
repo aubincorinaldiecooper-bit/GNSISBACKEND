@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Protocol
 
-from ..memory.base import MemoryProvider, MemoryRecord, NullMemoryProvider
+from ..memory.base import MemoryProvider, NullMemoryProvider
 from .engine import PatchEngine, PhaseSink, Workspace
 from .models import (
     Approval,
@@ -192,33 +192,12 @@ def publish(
         LogEntry(job_id, Phase.PUBLISH, "info", f"opened PR #{pr.number}: {pr.url}")
     )
 
-    # Approval-gated memory write: a published change is a *validated* outcome,
-    # so it is the one thing worth remembering for next time. Scoped to the repo.
-    if memory is not None:
-        summary = _summary_for(store, job_id) or job.instruction
-        item = None
-        if approval.id is not None:
-            from ..service.codememory import MemoryKind
-            from ..service.intelligence_lifecycle import IntelligenceLifecycle
-
-            item = IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
-                outcome_id=approval.id,
-                reusable_intelligence=summary,
-                kind=MemoryKind.ACCEPTED_CHANGE,
-            )
-        if item is None:
-            # Compatibility pipeline jobs do not necessarily have an
-            # execution_runs row. Do not fabricate run provenance after the fact;
-            # preserve the pre-existing approval-gated repo memory behaviour.
-            memory.write(
-                MemoryRecord(
-                    repo=job.repo,
-                    content=summary,
-                    kind="accepted_change",
-                    metadata={"job_id": job_id, "pr": pr.number, "files": diff.files_changed},
-                    approved=True,
-                )
-            )
+    # Publishing captures no intelligence of its own. Approval is the sole
+    # trust boundary for reusable intelligence; a reviewer's explicit
+    # selection is persisted at approval time via
+    # IntelligenceLifecycle.capture_selected_intelligence, before this publish
+    # step ever runs. ``memory`` is accepted for backward-compatible call
+    # signatures but is otherwise unused here.
     return pr
 
 
@@ -229,64 +208,17 @@ def reject_job(
     note: str = "",
     memory: Optional[MemoryProvider] = None,
 ) -> None:
-    """Record a rejection and, from it, a **lesson** the agent can learn from.
+    """Record a rejection. A rejected run must not produce intelligence.
 
-    This is the first Reflexion-style step: a human rejection (with their reason)
-    is exactly the signal worth remembering — "we tried X, it was rejected
-    because Y; don't repeat it." Because the human acted at the gate, the lesson
-    is an *approved*, repo-scoped memory, so it honors approval-gated writes while
-    still letting the system learn from mistakes over time.
+    ``memory`` is accepted for backward-compatible call signatures but is
+    otherwise unused: rejection is a terminal decision, not a trust boundary,
+    so it never writes to repository intelligence, active or otherwise.
     """
     job = store.get_job(job_id)
     if job is None:
         raise JobNotFound(job_id)
 
-    approval = store.save_approval(
+    store.save_approval(
         Approval(job_id=job_id, decision="rejected", actor=actor, note=note)
     )
     store.set_status(job_id, JobStatus.REJECTED)
-
-    if memory is not None:
-        diff = store.get_diff(job_id)
-        files = diff.files_changed if diff else []
-        lesson = _lesson_text(job.instruction, note, files)
-        item = None
-        if approval.id is not None:
-            from ..service.codememory import MemoryKind
-            from ..service.intelligence_lifecycle import IntelligenceLifecycle
-
-            item = IntelligenceLifecycle(jobs=store).process_reviewed_outcome(
-                outcome_id=approval.id,
-                reusable_intelligence=lesson,
-                kind=MemoryKind.REJECTION_LESSON,
-            )
-        if item is None:
-            # Compatibility pipeline jobs may have no execution_runs row. Keep the
-            # legacy approved-memory behaviour without inventing provenance.
-            memory.write(
-                MemoryRecord(
-                    repo=job.repo,
-                    content=lesson,
-                    kind="lesson",
-                    metadata={"job_id": job_id, "files": files},
-                    approved=True,
-                )
-            )
-
-
-def _lesson_text(instruction: str, note: str, files) -> str:
-    head = f"A previous attempt at '{instruction.strip().splitlines()[0]}' was REJECTED."
-    if note:
-        head += f" Reason given: {note}."
-    if files:
-        head += f" It changed: {', '.join(list(files)[:12])}."
-    head += " Avoid repeating that approach."
-    return head
-
-
-def _summary_for(store: JobStore, job_id: str) -> str:
-    """The summary-phase checkpoint, if the engine produced one."""
-    for cp in reversed(store.get_checkpoints(job_id)):
-        if cp.phase == Phase.SUMMARY and isinstance(cp.content, str):
-            return cp.content
-    return ""

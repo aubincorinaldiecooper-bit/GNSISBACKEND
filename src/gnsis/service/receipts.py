@@ -28,6 +28,15 @@ from . import orm
 from .db import session_scope
 
 
+#: Run statuses in which an executor genuinely started doing work. Used to
+#: state ``execution_started`` truthfully, and to report "not_run" rather than
+#: an unknown/null tests value when nothing ever ran.
+_EXECUTION_STARTED_STATUSES = frozenset(
+    {"planning", "patching", "testing", "summarizing", "awaiting_approval",
+     "approved", "publishing", "completed", "rejected"}
+)
+
+
 def _iso(dt) -> Optional[str]:
     return dt.isoformat() if dt else None
 
@@ -101,15 +110,18 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
         }
 
         if run is None:
-            # No execution run yet — return the job-scoped shell with null run data.
+            # No execution run yet — return the job-scoped shell with null run
+            # data. Execution never began, so known-zero/not-applicable values
+            # are reported truthfully rather than as null/"unavailable".
             receipt.update(
                 {
                     "model": None, "base_sha": None, "patch_hash": None,
                     "policy": None, "memory_ids_consumed": [],
                     "reviewed_intelligence_created": [], "tokens": None,
-                    "model_calls": 0, "tool_calls": 0, "tests": None,
+                    "model_calls": 0, "tool_calls": 0, "tests": "not_run",
                     "cost": None, "timing": None,
                     "failure_category": None, "failure_message": None,
+                    "execution_started": False,
                 }
             )
             return receipt
@@ -169,6 +181,11 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
         rate_card_versions = sorted(
             {c.rate_card_version for c in charge_rows if c.rate_card_version}
         )
+        # True the moment the executor genuinely began work — even a run that
+        # later failed or was blocked can have made model calls first. Lets a
+        # client tell a pre-execution block apart from a mid-execution failure
+        # without inferring it, and gates the "not_run" tests value below.
+        execution_started = job.status in _EXECUTION_STARTED_STATUSES or bool(run.model_calls)
 
         receipt.update(
             {
@@ -205,7 +222,10 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                 "model_calls": run.model_calls,
                 "tool_calls": len(tool_call_events),
                 "files_read": files_read,
-                "tests": dict(run.tests_summary) if run.tests_summary else None,
+                "tests": (
+                    dict(run.tests_summary) if run.tests_summary
+                    else ("not_run" if not execution_started else None)
+                ),
                 "cost": {
                     "provider_cost": _sum_decimals([r.upstream_cost for r in usage_rows]),
                     "gnsis_service_fee": _sum_decimals([c.service_fee for c in charge_rows]),
@@ -230,6 +250,7 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                 "failure_message": (
                     job.error if run.status in ("failed", "blocked") else None
                 ),
+                "execution_started": execution_started,
             }
         )
         return receipt

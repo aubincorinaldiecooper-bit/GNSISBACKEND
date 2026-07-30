@@ -193,38 +193,73 @@ execution. Known-zero values are reported as zero — never "not tracked yet":
   "repository": "octo/alpha",
   "model": "anthropic/claude-opus-4.8",
   "advisor_model": null,
-  "status": "blocked",
-  "execution_started": false,
-  "model_calls": 0,
-  "tokens": {"input": 0, "output": 0, "cached": 0, "reasoning": 0},
-  "cost": {"provider_cost": "0", "gnsis_service_fee": "0", "total_billed": "0", "currency": "USD"},
-  "files_changed": [],
-  "tests": "not_run",
-  "failure_category": "blocked_repository_empty",
-  "failure_message": "GNSIS couldn't start this run because …",
+  "status": "awaiting_approval",
+  "execution_started": true,
+  "model_calls": 4,
+  "tokens": {"input": 8210, "output": 640, "cached": 0, "reasoning": 0},
+  "cost": {"provider_cost": "0.14", "gnsis_service_fee": "0.02", "total_billed": "0.16", "currency": "USD"},
+  "files_changed": ["auth/middleware.py", "tests/test_auth_middleware.py"],
+  "tests": {"runner": "pytest", "status": "passed", "passed": 6, "failed": 0, "skipped": 0},
+  "failure_category": null,
+  "failure_message": null,
   "memory_ids_consumed": [],
-  "policy": {"name": "genesis", "version": 1, "hash": "…"}
+  "policy": {"name": "genesis", "version": 1, "hash": "…"},
+  "proposed_intelligence": [
+    {
+      "item_key": "prop-0-8f2a1c9d4e",
+      "content": "The auth middleware now rejects requests with a missing bearer token before touching the session store.",
+      "kind": "security_constraint"
+    }
+  ]
 }
 ```
 
 Receipts are assembled from immutable records, so a later pricing, policy or
 model change never rewrites a historical receipt.
 
-### 5. Approve Run A
+`proposed_intelligence` is computed deterministically (no model call) from the
+run's own evidence — the agent's outcome summary, never the task instruction —
+so a run with no usable evidence proposes zero items. These are candidates
+only; nothing here is active until a reviewer explicitly selects it at
+approval time. A generic or empty summary correctly proposes nothing — that is
+not a bug.
+
+### 5. Approve Run A, selecting which proposed intelligence to keep
 
 ```bash
 curl -s -X POST https://api.gnsis.studio/v1/runs/job_bbec96036ff8/approve \
   -H "Authorization: Bearer $GNSIS_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"note": "looks right"}'
+  -d '{
+        "note": "looks right",
+        "intelligence": [
+          {"item_key": "prop-0-8f2a1c9d4e"}
+        ]
+      }'
 ```
 
-Approval is idempotent and preserves actor identity, timestamp and note.
+Approval is idempotent and preserves actor identity, timestamp, note, the
+selected intelligence, any edited content, and the excluded proposals (implicit
+in what was left out of the list).
 
-**Approval is the trust boundary for reusable intelligence.** Publication of the
-pull request remains a separate step that follows approval; intelligence is
-captured at approval so a client never has to wait on the publish to succeed.
-Rejected runs never yield active accepted-change intelligence.
+**Approving a run means the run outcome is trusted and the reviewer-selected
+intelligence is authorized for use by future runs.** Publishing the pull
+request remains a separate action that follows approval and performs no
+intelligence capture of its own.
+
+`intelligence` is optional and explicit:
+
+* Omit it (or send `[]`) to approve the run while producing **zero**
+  intelligence — a normal, safe outcome, not a degraded one.
+* Each entry names one of the receipt's own `proposed_intelligence` items by
+  `item_key`. An `item_key` that doesn't match a proposal this run's evidence
+  actually produced is ignored, not trusted — a reviewer selects and edits,
+  but cannot inject fabricated intelligence.
+* Add `"content"` and/or `"kind"` to edit the proposal's text or reclassify it
+  before it becomes active: `{"item_key": "prop-0-8f2a1c9d4e", "content": "…edited…", "kind": "convention"}`.
+
+Approval **never** automatically activates unreviewed intelligence, and a
+rejected run never produces any — active or otherwise.
 
 ### 6. Read the intelligence it produced
 
@@ -241,10 +276,14 @@ curl -s https://api.gnsis.studio/v1/repositories/repo_abc123/intelligence \
       "id": "mem_5f2c1d",
       "object": "intelligence",
       "repository_id": "repo_abc123",
-      "content": "Harden the authentication middleware",
-      "type": "accepted_change",
+      "content": "The auth middleware now rejects requests with a missing bearer token before touching the session store.",
+      "type": "security_constraint",
       "status": "active",
       "source_run_id": "job_bbec96036ff8",
+      "source_approval_id": 4821,
+      "source_model": "anthropic/claude-opus-4.8",
+      "policy_version": 1,
+      "evidence_item_key": "prop-0-8f2a1c9d4e",
       "created_at": "2026-07-25T16:10:00+00:00"
     }
   ],
@@ -252,8 +291,10 @@ curl -s https://api.gnsis.studio/v1/repositories/repo_abc123/intelligence \
 }
 ```
 
-Each item traces back to the run that produced it, the approval that authorized
-it, and that run's evidence. Content is a bounded, durable lesson — entire logs,
+Each item retains complete provenance: the run that produced it, the approval
+that authorized it, the model that produced the underlying run, the policy
+version in effect, and the evidence item_key it was captured from. Content is
+a bounded, durable lesson derived from the run's own outcome — entire logs,
 patches and receipts are deliberately **not** stored as intelligence; the item
 references that evidence instead.
 

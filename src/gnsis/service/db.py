@@ -99,6 +99,9 @@ _ADDITIVE_COLUMNS = [
     ("execution_runs", "memory_ids", "JSON"),
     # Immutable test-outcome snapshot for the run receipt (G6).
     ("execution_runs", "tests_summary", "JSON"),
+    # Bounded evidence of the completed outcome, used to derive repository
+    # intelligence proposals — never the task instruction.
+    ("execution_runs", "outcome_summary", "TEXT"),
     # Pinned primary + advisor model per run. The gateway reads advisor_model
     # authoritatively to fix the openrouter:advisor server tool definition.
     ("execution_runs", "primary_model", "VARCHAR(128)"),

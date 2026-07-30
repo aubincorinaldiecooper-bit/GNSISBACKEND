@@ -482,9 +482,10 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
             self.assertEqual(s.query(orm.AgentMemory).count(), 2)
             self.assertEqual(s.query(orm.MemoryProvenance).count(), 2)
 
-    def test_production_reject_job_wires_reviewed_outcome_to_codememory(self):
+    def test_production_reject_job_produces_no_intelligence(self):
+        """A rejected run must not produce active intelligence (correction #1)."""
         from gnsis.orchestration.pipeline import reject_job
-        from gnsis.service.codememory import CodeMemory, MemoryKind
+        from gnsis.service.codememory import CodeMemory
         from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
         from gnsis.service.repository import PostgresJobStore, PostgresMemoryProvider
 
@@ -496,21 +497,20 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
 
         reject_job(jobs, job.id, actor="reviewer", note="use the shared auth helper", memory=PostgresMemoryProvider())
 
-        produced = lifecycle.intelligence_from_run(run.id)
-        self.assertEqual(len(produced), 1)
-        self.assertEqual(produced[0].kind, MemoryKind.REJECTION_LESSON)
+        self.assertEqual(lifecycle.intelligence_from_run(run.id), [])
         selected = memory.retrieve_for_task(
             repo=job.repo,
             instruction="repair search authentication",
             workspace_id=job.workspace_id,
             repository_id=job.repository_id,
         )
-        self.assertIn(produced[0].memory_id, selected.memory_ids)
+        self.assertEqual(selected.items, [])
 
-    def test_approved_publish_with_execution_run_creates_one_accepted_change_with_provenance(self):
+    def test_approved_publish_captures_no_intelligence_of_its_own(self):
+        """Publishing performs no intelligence capture — approval already did
+        (correction #2: approval is the trust boundary, publish is separate)."""
         from gnsis.orchestration.models import Approval, Diff, PRMetadata
         from gnsis.orchestration.pipeline import publish
-        from gnsis.service.codememory import MemoryKind
         from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
         from gnsis.service.repository import PostgresJobStore, PostgresMemoryProvider
 
@@ -524,19 +524,19 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
         job = make_job(instruction="add authentication widget")
         jobs.save_diff(Diff(job_id=job.id, patch="diff --git a/a b/a", files_changed=["a"]))
         _, run = make_run(job)
-        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
         jobs.set_status(job.id, "approved")
 
         publish(jobs, FakePublisher(), job.id, memory=memory)
         publish(jobs, FakePublisher(), job.id, memory=memory)
 
-        produced = lifecycle.intelligence_from_run(run.id)
-        self.assertEqual(len(produced), 1)
-        self.assertEqual(produced[0].kind, MemoryKind.ACCEPTED_CHANGE)
-        self.assertEqual(produced[0].outcome_id, approval.id)
-        self.assertEqual(len(memory.recent("o/r")), 1)
+        self.assertEqual(lifecycle.intelligence_from_run(run.id), [])
+        self.assertEqual(memory.recent("o/r"), [])
 
-    def test_compatibility_pipeline_publish_without_execution_run_writes_legacy_memory_without_provenance(self):
+    def test_compatibility_pipeline_publish_without_execution_run_writes_no_legacy_memory(self):
+        """Even the legacy (no execution_runs row) publish path captures nothing:
+        publishing is intelligence-side-effect-free everywhere, not just on the
+        executor path."""
         from gnsis.orchestration.models import Approval, Diff, PRMetadata
         from gnsis.orchestration.pipeline import publish
         from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
@@ -556,7 +556,7 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
 
         publish(jobs, FakePublisher(), job.id, memory=memory)
 
-        self.assertTrue(memory.recent("o/r"))
+        self.assertEqual(memory.recent("o/r"), [])
         self.assertIsNone(lifecycle.process_reviewed_outcome(outcome_id=approval.id, reusable_intelligence="compatibility widget"))
         self.assertEqual(lifecycle.intelligence_from_run("exec_missing"), [])
 
@@ -618,6 +618,240 @@ class IntelligenceLifecycleIntegrationTests(unittest.TestCase):
             repo="o/r",
         )
         self.assertEqual([item.memory_id for item in pinned], [own_legacy.memory_id])
+
+
+def _complete_with_summary(run_store, run_id, outcome_summary):
+    from gnsis.service.executor.validation import sha256_text
+
+    run_store.set_patch_result(
+        run_id, patch_sha256=sha256_text(outcome_summary), artifact_hashes={},
+        security_validation="passed", outcome_summary=outcome_summary,
+    )
+
+
+class CaptureSelectedIntelligenceIntegrationTests(unittest.TestCase):
+    """The reviewer-selection-driven approval-time capture (correction #1/#2)."""
+
+    def setUp(self):
+        configure()
+
+    def test_task_instruction_is_never_activated_as_intelligence(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import (
+            IntelligenceLifecycle, propose_intelligence_for_run,
+        )
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job(instruction="fix the authentication login bug")
+        run_store, run = make_run(job)
+        _complete_with_summary(
+            run_store, run.id,
+            "Added a rate limiter in front of the login handler to block repeated failed attempts.",
+        )
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+
+        run = run_store.get_run(run.id)
+        proposals = propose_intelligence_for_run(run)
+        self.assertTrue(proposals)
+
+        produced = lifecycle.capture_selected_intelligence(
+            job_id=job.id, approval_id=approval.id,
+            selections=[{"item_key": proposals[0].item_key}],
+        )
+        self.assertEqual(len(produced), 1)
+        self.assertNotEqual(produced[0].content, job.instruction)
+        self.assertEqual(produced[0].content, proposals[0].content)
+
+    def test_approving_with_no_selections_creates_zero_intelligence(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job()
+        run_store, run = make_run(job)
+        _complete_with_summary(run_store, run.id, "Added structured logging around the payment webhook handler.")
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+
+        self.assertEqual(
+            lifecycle.capture_selected_intelligence(job_id=job.id, approval_id=approval.id, selections=[]), []
+        )
+        self.assertEqual(
+            lifecycle.capture_selected_intelligence(job_id=job.id, approval_id=approval.id, selections=None), []
+        )
+        self.assertEqual(lifecycle.intelligence_from_run(run.id), [])
+
+    def test_reviewer_selects_one_of_several_proposals_the_rest_stay_excluded(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import (
+            IntelligenceLifecycle, propose_intelligence_for_run,
+        )
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job()
+        run_store, run = make_run(job)
+        _complete_with_summary(
+            run_store, run.id,
+            "Renamed the export helper to match the dashboard field names. "
+            "Added pytest coverage for the CSV export edge cases.",
+        )
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        run = run_store.get_run(run.id)
+        proposals = propose_intelligence_for_run(run)
+        self.assertGreaterEqual(len(proposals), 2)
+
+        chosen = proposals[0]
+        excluded = proposals[1]
+        produced = lifecycle.capture_selected_intelligence(
+            job_id=job.id, approval_id=approval.id, selections=[{"item_key": chosen.item_key}],
+        )
+        self.assertEqual(len(produced), 1)
+        self.assertEqual(produced[0].content, chosen.content)
+
+        active = lifecycle.intelligence_from_run(run.id)
+        self.assertEqual(len(active), 1)
+        self.assertNotIn(excluded.item_key, [p.item_key for p in active])
+
+    def test_reviewer_can_edit_content_and_kind_before_approval(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.codememory import MemoryKind
+        from gnsis.service.intelligence_lifecycle import (
+            IntelligenceLifecycle, propose_intelligence_for_run,
+        )
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job()
+        run_store, run = make_run(job)
+        _complete_with_summary(run_store, run.id, "Added a caching layer in front of the pricing lookup.")
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        run = run_store.get_run(run.id)
+        proposal = propose_intelligence_for_run(run)[0]
+
+        produced = lifecycle.capture_selected_intelligence(
+            job_id=job.id, approval_id=approval.id,
+            selections=[{
+                "item_key": proposal.item_key,
+                "content": "Pricing lookups must go through the shared cache layer, never call the pricing service directly.",
+                "kind": MemoryKind.ARCHITECTURAL_DECISION,
+            }],
+        )
+        self.assertEqual(len(produced), 1)
+        self.assertEqual(
+            produced[0].content,
+            "Pricing lookups must go through the shared cache layer, never call the pricing service directly.",
+        )
+        self.assertEqual(produced[0].kind, MemoryKind.ARCHITECTURAL_DECISION)
+
+    def test_unknown_item_key_is_ignored_not_trusted(self):
+        """A client cannot inject fabricated intelligence outside this run's evidence."""
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import IntelligenceLifecycle
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job()
+        run_store, run = make_run(job)
+        _complete_with_summary(run_store, run.id, "Added a caching layer in front of the pricing lookup.")
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+
+        produced = lifecycle.capture_selected_intelligence(
+            job_id=job.id, approval_id=approval.id,
+            selections=[{"item_key": "fabricated-not-a-real-proposal", "content": "made up lesson"}],
+        )
+        self.assertEqual(produced, [])
+        self.assertEqual(lifecycle.intelligence_from_run(run.id), [])
+
+    def test_capture_selected_intelligence_is_idempotent(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import (
+            IntelligenceLifecycle, propose_intelligence_for_run,
+        )
+        from gnsis.service.repository import PostgresJobStore
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job()
+        run_store, run = make_run(job)
+        _complete_with_summary(run_store, run.id, "Added a caching layer in front of the pricing lookup.")
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        run = run_store.get_run(run.id)
+        proposal = propose_intelligence_for_run(run)[0]
+        selections = [{"item_key": proposal.item_key}]
+
+        first = lifecycle.capture_selected_intelligence(job_id=job.id, approval_id=approval.id, selections=selections)
+        second = lifecycle.capture_selected_intelligence(job_id=job.id, approval_id=approval.id, selections=selections)
+        self.assertEqual(first[0].memory_id, second[0].memory_id)
+        with session_scope() as s:
+            self.assertEqual(
+                s.query(orm.AgentMemory).filter(orm.AgentMemory.memory_id == first[0].memory_id).count(), 1
+            )
+
+    def test_rejected_outcome_never_activates_selected_intelligence(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import (
+            IntelligenceLifecycle, propose_intelligence_for_run,
+        )
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job()
+        run_store, run = make_run(job)
+        _complete_with_summary(run_store, run.id, "Added a caching layer in front of the pricing lookup.")
+        run = run_store.get_run(run.id)
+        proposal = propose_intelligence_for_run(run)[0]
+        rejected = jobs.save_approval(Approval(job_id=job.id, decision="rejected", actor="reviewer"))
+
+        produced = lifecycle.capture_selected_intelligence(
+            job_id=job.id, approval_id=rejected.id, selections=[{"item_key": proposal.item_key}],
+        )
+        self.assertEqual(produced, [])
+        self.assertEqual(lifecycle.intelligence_from_run(run.id), [])
+
+    def test_active_intelligence_retains_complete_provenance(self):
+        from gnsis.orchestration.models import Approval
+        from gnsis.service.intelligence_lifecycle import (
+            IntelligenceLifecycle, propose_intelligence_for_run,
+        )
+        from gnsis.service.repository import PostgresJobStore
+
+        jobs = PostgresJobStore()
+        lifecycle = IntelligenceLifecycle(jobs=jobs)
+        job = make_job(workspace_id="ws-A", repository_id="repo-1")
+        run_store, run = make_run(job)
+        with_summary = "Added a caching layer in front of the pricing lookup to cut p99 latency."
+        _complete_with_summary(run_store, run.id, with_summary)
+        from gnsis.service.db import session_scope
+        from gnsis.service import orm
+
+        with session_scope() as s:
+            s.get(orm.ExecutionRun, run.id).primary_model = "anthropic/claude-opus-4.8"
+        approval = jobs.save_approval(Approval(job_id=job.id, decision="approved", actor="reviewer"))
+        run = run_store.get_run(run.id)
+        proposal = propose_intelligence_for_run(run)[0]
+
+        produced = lifecycle.capture_selected_intelligence(
+            job_id=job.id, approval_id=approval.id, selections=[{"item_key": proposal.item_key}],
+        )
+        memory_id = produced[0].memory_id
+
+        full = lifecycle.full_provenance_for_memories([memory_id])[memory_id]
+        self.assertEqual(full["source_run_id"], run.id)
+        self.assertEqual(full["source_job_id"], job.id)
+        self.assertEqual(full["source_approval_id"], approval.id)
+        self.assertEqual(full["item_key"], proposal.item_key)
+        self.assertEqual(full["source_model"], "anthropic/claude-opus-4.8")
+        self.assertIsNotNone(full["policy_version"])
 
 
 if __name__ == "__main__":
