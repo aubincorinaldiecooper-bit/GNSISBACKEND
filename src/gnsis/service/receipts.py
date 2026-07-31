@@ -114,7 +114,13 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
         }
 
         if run is None:
-            # No execution run yet — return the job-scoped shell with null run data.
+            # No execution run yet — return the job-scoped shell with null run
+            # data. A dispatch-time failure (e.g. the trusted-executor SHA
+            # check) happens before any ExecutionRun exists, so its category
+            # and sanitized details — captured onto job.context by run_job()'s
+            # DispatchError handler — are the only evidence available; never
+            # invent a failure_message from the raw exception text here.
+            context = job.context or {}
             receipt.update(
                 {
                     "model": None, "base_sha": None, "patch_hash": None,
@@ -122,7 +128,9 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                     "reviewed_intelligence_created": [], "tokens": None,
                     "model_calls": 0, "tool_calls": 0, "tests": None,
                     "cost": None, "timing": None,
-                    "failure_category": None, "failure_message": None,
+                    "failure_category": context.get("failure_category"),
+                    "failure_message": None,
+                    "failure_details": context.get("failure_details"),
                     "intelligence": {"supplied": [], "proposed": [], "approved": []},
                 }
             )
@@ -364,6 +372,10 @@ def build_receipt(workspace_id: str, job_id: str) -> Optional[dict]:
                 "failure_message": (
                     job.error if run.status in ("failed", "blocked") else None
                 ),
+                # Structured, sanitized details beyond a plain message exist
+                # only for the dispatch-time (no-ExecutionRun-yet) path today;
+                # always present in the shape, null when there is none.
+                "failure_details": (job.context or {}).get("failure_details"),
             }
         )
 

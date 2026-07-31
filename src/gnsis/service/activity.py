@@ -185,6 +185,7 @@ def build_lifecycle_events(job_id: str) -> List[dict]:
         updated_at = job.updated_at.isoformat() if job.updated_at else ""
         status = job.status
         instruction_present = bool(job.instruction)
+        context = dict(job.context or {})
 
     events.append({
         "type": EventType.RUN_CREATED,
@@ -225,7 +226,22 @@ def build_lifecycle_events(job_id: str) -> List[dict]:
 
     terminal_type = _STATUS_TO_TYPE.get(status)
     if terminal_type and terminal_type not in persisted_types:
-        events.append({"type": terminal_type, "at": updated_at, "payload": {"status": status}})
+        payload: dict = {"status": status}
+        # A dispatch-time failure (e.g. the trusted-executor SHA check) happens
+        # before any ExecutionRun exists, so no persisted event carries its
+        # cause — the only evidence is what run_job()'s DispatchError handler
+        # captured onto job.context. Never fabricated: only surfaced when a
+        # category was actually recorded.
+        if terminal_type in (EventType.RUN_FAILED, EventType.RUN_BLOCKED) and run is None:
+            failure_category = context.get("failure_category")
+            if failure_category:
+                payload["category"] = failure_category
+                payload["execution_started"] = False
+                payload["model_called"] = False
+                details = context.get("failure_details")
+                if details:
+                    payload["technical"] = {"failure_category": failure_category, **details}
+        events.append({"type": terminal_type, "at": updated_at, "payload": payload})
     # Canonical receipts are assembled from the persisted job/run evidence.
     # Readiness is independent of whether the terminal lifecycle milestone came
     # from the ledger or the legacy status fallback.
