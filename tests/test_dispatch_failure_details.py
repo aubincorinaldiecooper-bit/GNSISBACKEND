@@ -135,6 +135,54 @@ class DispatchExecutionShaMismatchTests(unittest.TestCase):
             exc.details, {"expected_sha": TRUSTED_SHA, "observed_sha": OBSERVED_SHA}
         )
 
+    def test_malformed_trusted_sha_is_redacted_not_leaked(self):
+        """A misconfigured GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA (e.g. an
+        accidentally pasted token instead of a real commit sha) must never be
+        echoed back verbatim — job.context feeds tenant-visible Activity and
+        receipt responses."""
+        from gnsis.service import settings as settings_mod
+        from gnsis.service.executor.dispatch import DispatchError, dispatch_execution
+        from gnsis.service.settings import get_settings
+
+        os.environ["GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA"] = "ghp_looksLikeATokenNotASha12345"
+        settings_mod._settings = None
+        settings = get_settings()
+        self.addCleanup(lambda: os.environ.__setitem__(
+            "GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA", TRUSTED_SHA
+        ))
+
+        class FakeGitHub:
+            def __init__(self, app=None):
+                pass
+
+            def repo_installation(self, owner, repo):
+                return {
+                    "id": 1,
+                    "app_id": settings.github_app_id,
+                    "permissions": {"actions": "write", "contents": "read"},
+                }
+
+            def scoped_installation_token(self, installation_id, *, repositories, permissions):
+                return {"token": "ghs_test"}
+
+            def get_repo(self, owner, repo, token):
+                return {"id": 1, "private": True}
+
+            def ref_sha(self, owner, repo, ref, token):
+                return OBSERVED_SHA
+
+        job = _make_job()
+        with self.assertRaises(DispatchError) as ctx:
+            dispatch_execution(
+                settings, store=None, job=job, base_sha="b" * 40,
+                app=object(), github=FakeGitHub(),
+            )
+        exc = ctx.exception
+        self.assertEqual(exc.details["expected_sha"], "(not a valid commit sha)")
+        # The observed side came straight from the GitHub API and is a real
+        # sha — it must not be redacted just because the other side was bad.
+        self.assertEqual(exc.details["observed_sha"], OBSERVED_SHA)
+
 
 class ActivityFailureEnrichmentTests(unittest.TestCase):
     """The synthesized run.failed event for a job with no ExecutionRun."""
@@ -231,6 +279,35 @@ class ReceiptFailureFieldsTests(unittest.TestCase):
         self.assertIsNone(receipt["failure_category"])
         self.assertIsNone(receipt["failure_details"])
         self.assertIsNone(receipt["failure_message"])
+
+    def test_empty_details_normalize_to_null_not_empty_dict(self):
+        """A DispatchError raised without an explicit details= (most dispatch
+        failures, e.g. a GitHub API error minting the dispatch token) must
+        never surface failure_details as {} — the documented contract is null
+        when there is none, and a frontend truthy-check on {} would
+        incorrectly try to render technical details that don't exist."""
+        from gnsis.orchestration.status import JobStatus
+        from gnsis.service.executor.dispatch import DispatchError
+        from gnsis.service.executor.models import FailureCategory
+        from gnsis.service.receipts import build_receipt
+        from gnsis.service.repository import PostgresJobStore
+
+        store = PostgresJobStore()
+        job = _make_job()
+        exc = DispatchError(
+            "could not mint dispatch token: boom", category=FailureCategory.DISPATCH
+        )
+        self.assertEqual(exc.details, {})
+        # Mirrors run_job()'s except DispatchError handler in tasks.py.
+        store.merge_context(
+            job.id,
+            {"failure_category": exc.category, "failure_details": exc.details or None},
+        )
+        store.set_status(job.id, JobStatus.FAILED, error=f"dispatch failed: {exc}")
+
+        receipt = build_receipt(job.workspace_id, job.id)
+        self.assertEqual(receipt["failure_category"], FailureCategory.DISPATCH)
+        self.assertIsNone(receipt["failure_details"])
 
 
 if __name__ == "__main__":
