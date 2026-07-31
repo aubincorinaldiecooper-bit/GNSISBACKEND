@@ -401,6 +401,30 @@ class FollowUpAndThreadTests(ApiAuthTestBase):
         )
         self.assertEqual(r.status_code, 422, r.text)
 
+    def test_follow_up_can_override_model_via_allowlist(self):
+        root = self._root()  # model="openai/gpt-5.4"
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "switch models", "model": "anthropic/claude-opus-4.8"},
+            headers=self.auth("user-1"),
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        fu = r.json()
+        self.assertEqual(fu["model"], "anthropic/claude-opus-4.8")
+        self.assertEqual(fu["advisor_model"], root["advisor_model"])
+        # The parent's own model is untouched.
+        again = self.client.get(f"/jobs/{root['id']}", headers=self.auth("user-1")).json()
+        self.assertEqual(again["model"], root["model"])
+
+    def test_follow_up_rejects_model_outside_allowlist(self):
+        root = self._root()
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "x", "model": "unknown/not-a-real-model"},
+            headers=self.auth("user-1"),
+        )
+        self.assertEqual(r.status_code, 422, r.text)
+
     def test_follow_up_on_another_workspace_is_404(self):
         root = self._root("user-1")
         # user-2 must not be able to extend user-1's thread by its run id.

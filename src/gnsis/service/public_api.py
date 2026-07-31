@@ -293,6 +293,12 @@ class CreateRunRequest(BaseModel):
 
 class FollowUpRequest(BaseModel):
     instruction: Optional[str] = None
+    # Optional primary-model override for a normal follow-up, validated against
+    # the same allowlist (server + key-scoped) as a new run. Omitted (as Retry/
+    # Run-again always do) means inherit the parent's model verbatim — the
+    # active run's own model never changes underneath it. The Advisor model is
+    # never client-selectable here; it always follows the parent.
+    model: Optional[str] = None
 
 
 class DecisionRequest(BaseModel):
@@ -641,9 +647,10 @@ def create_follow_up_run(
 ) -> dict:
     """Create a new immutable run linked into the parent's thread.
 
-    The client supplies only the new instruction; workspace, repository, branch,
-    models, policy and thread identity are resolved authoritatively from the
-    parent. The parent is never mutated, resumed, or appended to.
+    The client supplies only the new instruction and, optionally, a primary
+    model override; workspace, repository, branch, Advisor, policy and thread
+    identity are resolved authoritatively from the parent and are never
+    client-overridable. The parent is never mutated, resumed, or appended to.
     """
     from ..orchestration.models import JobSpec
     from .repository import PostgresJobStore
@@ -658,6 +665,27 @@ def create_follow_up_run(
     if not instruction:
         raise PublicApiError(ErrorCode.INVALID_REQUEST, "instruction is required", status=422)
 
+    # Omitted model inherits the parent's verbatim (already validated when the
+    # parent was created). An explicit override goes through the same
+    # allowlist — including key-scoped narrowing — as a new run.
+    if req.model is None:
+        selected_model = parent.model
+    else:
+        from .model_catalog import resolve_allowed_model
+
+        settings = get_settings()
+        selected_model = resolve_allowed_model(settings, req.model)
+        if selected_model is None:
+            raise PublicApiError(
+                ErrorCode.INVALID_MODEL, f"model '{req.model}' is not available", status=422
+            )
+        if principal.allowed_models and selected_model not in principal.allowed_models:
+            raise PublicApiError(
+                ErrorCode.AUTHORIZATION_FAILED,
+                f"model not allowed for this key: {selected_model}",
+                status=403,
+            )
+
     db = PostgresJobStore()
     key = (idempotency_key or "").strip() or None
     if key:
@@ -670,7 +698,7 @@ def create_follow_up_run(
         instruction=instruction,
         base_branch=parent.base_branch,
         engine=parent.engine,
-        model=parent.model,
+        model=selected_model,
         advisor_model=parent.advisor_model,
         workspace_id=principal.workspace_id,
         repository_id=repo.id,
