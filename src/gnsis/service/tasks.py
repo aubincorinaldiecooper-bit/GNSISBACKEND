@@ -260,7 +260,13 @@ def run_job(job_id: str) -> str:
     except DispatchError as exc:
         store.set_status(job_id, JobStatus.FAILED, error=f"dispatch failed: {exc}")
         store.merge_context(
-            job_id, {"failure_category": exc.category, "failure_details": exc.details}
+            job_id,
+            # exc.details defaults to {} for a DispatchError raised without an
+            # explicit details= (most dispatch failures) — normalized to None
+            # so the receipt/Activity contract's "null when there is none"
+            # holds, and a frontend truthy-check never treats an empty dict
+            # as if it had real diagnostics to render.
+            {"failure_category": exc.category, "failure_details": exc.details or None},
         )
         raise
     except Exception as exc:  # noqa: BLE001

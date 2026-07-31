@@ -15,6 +15,7 @@ spec. The workflow input carries no instruction, repo, SHA, credential or budget
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..github_app import GitHubApp
@@ -27,6 +28,19 @@ from .tokens import hash_secret, new_nonce
 if TYPE_CHECKING:  # avoid import cost/cycles on the hot path
     from ..codememory import MemorySelection
     from ..policy_store import ResolvedPolicy
+
+#: Full git commit SHA-1, lowercase hex. Both sides of the trusted-workflow
+#: comparison must look like this before either is echoed into job.context —
+#: which is tenant-visible via the Activity and receipt surfaces — since
+#: GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA is operator-supplied config and could
+#: be misconfigured with something sensitive (e.g. a pasted credential).
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _safe_sha(value: Optional[str]) -> str:
+    if isinstance(value, str) and _GIT_SHA_RE.match(value):
+        return value
+    return "(not a valid commit sha)"
 
 logger = logging.getLogger("gnsis.executor.dispatch")
 
@@ -194,7 +208,10 @@ def dispatch_execution(
             f"trusted workflow sha {trusted_sha}; re-audit and update "
             "GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA before dispatching",
             category=FailureCategory.SECURITY,
-            details={"expected_sha": trusted_sha, "observed_sha": head_sha},
+            details={
+                "expected_sha": _safe_sha(trusted_sha),
+                "observed_sha": _safe_sha(head_sha),
+            },
         )
 
     # 4) Create the durable run record (nonce stored only as a hash).
