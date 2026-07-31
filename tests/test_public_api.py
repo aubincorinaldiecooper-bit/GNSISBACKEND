@@ -517,6 +517,42 @@ class FollowUpTests(PublicApiTestBase):
         )
         self.assertEqual(r.status_code, 404)
 
+    def test_follow_up_can_override_model_via_allowlist(self):
+        parent = self.create_run(model=MODEL_A).json()
+        r = self.client.post(
+            f"/v1/runs/{parent['id']}/follow-ups",
+            json={"instruction": "now target the other model", "model": MODEL_B},
+            headers=self.auth(),
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        child = r.json()
+        self.assertEqual(child["model"], MODEL_B)
+        self.assertEqual(child["advisor_model"], parent["advisor_model"])
+        # The parent's own model is untouched.
+        again = self.client.get(f"/v1/runs/{parent['id']}", headers=self.auth()).json()
+        self.assertEqual(again["model"], MODEL_A)
+
+    def test_follow_up_rejects_model_outside_allowlist(self):
+        parent = self.create_run(model=MODEL_A).json()
+        r = self.client.post(
+            f"/v1/runs/{parent['id']}/follow-ups",
+            json={"instruction": "x", "model": "unknown/not-a-real-model"},
+            headers=self.auth(),
+        )
+        self.assertEqual(r.status_code, 422, r.text)
+
+    def test_follow_up_rejects_empty_string_model_rather_than_switching_to_the_default(self):
+        # An empty string is a distinct, explicit value from an omitted field —
+        # it must never be treated as "inherit the parent's model" nor silently
+        # resolve to the server's first-allowed default.
+        parent = self.create_run(model=MODEL_B).json()
+        r = self.client.post(
+            f"/v1/runs/{parent['id']}/follow-ups",
+            json={"instruction": "x", "model": ""},
+            headers=self.auth(),
+        )
+        self.assertEqual(r.status_code, 422, r.text)
+
 
 class IntelligenceScopeTests(PublicApiTestBase):
     def test_intelligence_is_repository_and_workspace_scoped(self):

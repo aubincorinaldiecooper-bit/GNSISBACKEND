@@ -299,9 +299,16 @@ class FollowUpRequest(BaseModel):
     # omitted (or blank) the parent run's instruction is reused verbatim — the
     # Retry (failed/cancelled) and Run-again (completed) paths — producing a new
     # linked run with the same instruction and configuration. When present it
-    # must be non-empty. Everything else (repository, models, base branch, thread
-    # and parent linkage) is resolved authoritatively from the parent run.
+    # must be non-empty. Repository, base branch, thread and parent linkage are
+    # always resolved authoritatively from the parent run and are never
+    # client-overridable.
     instruction: Optional[str] = None
+    # Optional primary-model override for a normal follow-up, validated against
+    # the same server allowlist as a new run. Omitted (the Retry/Run-again path
+    # always omits it) means inherit the parent's model verbatim. The Advisor
+    # model is never client-selectable here — it always follows the parent,
+    # same as repository/base branch.
+    model: Optional[str] = None
 
 
 class ApproveRequest(BaseModel):
@@ -925,16 +932,21 @@ def create_follow_up(
     resets, resumes, or re-opens the parent — it creates a fresh queued job that
     records ``parent_job_id`` and shares the parent's ``thread_id``.
 
-    Only the new instruction comes from the client. Everything that defines
-    *where and how* the run executes is resolved authoritatively from the parent:
-    workspace, repository identity, base branch, primary model, and Advisor (a
-    parent with no Advisor yields a follow-up with no Advisor). The client cannot
-    override the parent's repository or models, and the parent's repository must
-    still be accessible to the workspace. The follow-up is dispatched through the
-    existing pipeline exactly like any other queued job.
+    Only the new instruction and (optionally) the primary model come from the
+    client. Everything else that defines *where and how* the run executes is
+    resolved authoritatively from the parent: workspace, repository identity,
+    base branch, and Advisor (a parent with no Advisor yields a follow-up with
+    no Advisor — the client can never select or enable one here). The client
+    cannot override the parent's repository, and the parent's repository must
+    still be accessible to the workspace. The follow-up is dispatched through
+    the existing pipeline exactly like any other queued job.
 
     Retry (failed/cancelled) and Run-again (completed) are the same operation
-    with the instruction omitted, so the parent's instruction is reused verbatim.
+    with the instruction omitted, so the parent's instruction is reused
+    verbatim — and by the same convention they omit ``model`` too, so the
+    active run's model never changes underneath an in-progress attempt; only a
+    normal follow-up (a new immutable run in the thread) may choose a
+    different model.
     """
     settings = get_settings()
     _require_execution_configured(settings)
@@ -954,12 +966,31 @@ def create_follow_up(
     if not instruction:
         raise HTTPException(status_code=422, detail="instruction is required")
 
+    # Omitted model inherits the parent's verbatim (no re-validation needed —
+    # it was already validated when the parent was created). An explicit
+    # override goes through the exact same allowlist as a new run. An empty
+    # string is a distinct, invalid explicit value — never treated as
+    # "omitted" (which would silently inherit) nor passed to
+    # resolve_allowed_model (which treats falsy input as "use the default",
+    # silently switching the follow-up to a model nobody asked for).
+    if req.model is None:
+        selected_model = parent.model
+    else:
+        from .model_catalog import resolve_allowed_model
+
+        requested_model = req.model.strip()
+        if not requested_model:
+            raise HTTPException(status_code=422, detail="model must not be empty")
+        selected_model = resolve_allowed_model(settings, requested_model)
+        if selected_model is None:
+            raise HTTPException(status_code=422, detail=f"model '{req.model}' is not available")
+
     spec = JobSpec(
         repo=repo.full_name,
         instruction=instruction,
         base_branch=parent.base_branch,
         engine=parent.engine,
-        model=parent.model,
+        model=selected_model,
         # Preserve a null Advisor: a parent that pinned no Advisor stays advisor-less.
         advisor_model=parent.advisor_model,
         workspace_id=workspace.id,
