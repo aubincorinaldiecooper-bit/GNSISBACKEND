@@ -259,7 +259,9 @@ def run_job(job_id: str) -> str:
         )
     except DispatchError as exc:
         store.set_status(job_id, JobStatus.FAILED, error=f"dispatch failed: {exc}")
-        store.merge_context(job_id, {"failure_category": exc.category})
+        store.merge_context(
+            job_id, {"failure_category": exc.category, "failure_details": exc.details}
+        )
         raise
     except Exception as exc:  # noqa: BLE001
         store.set_status(job_id, JobStatus.FAILED, error=f"dispatch failed: {exc}")

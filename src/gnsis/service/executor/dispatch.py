@@ -15,7 +15,7 @@ spec. The workflow input carries no instruction, repo, SHA, credential or budget
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..github_app import GitHubApp
 from .github import ExecutorGitHub, GitHubHTTPError
@@ -70,9 +70,19 @@ def _emit_context_events(
 
 
 class DispatchError(RuntimeError):
-    def __init__(self, message: str, category: str = FailureCategory.DISPATCH):
+    def __init__(
+        self,
+        message: str,
+        category: str = FailureCategory.DISPATCH,
+        details: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(message)
         self.category = category
+        # Sanitized, structured facts a client can safely render (never
+        # tokens/secrets/raw exception text) — only populated where a
+        # confirmed frontend need exists (currently: the trusted-executor
+        # SHA comparison, both sides of which are public git commit shas).
+        self.details = details or {}
 
 
 def run_name_for(job_id: str) -> str:
@@ -184,6 +194,7 @@ def dispatch_execution(
             f"trusted workflow sha {trusted_sha}; re-audit and update "
             "GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA before dispatching",
             category=FailureCategory.SECURITY,
+            details={"expected_sha": trusted_sha, "observed_sha": head_sha},
         )
 
     # 4) Create the durable run record (nonce stored only as a hash).
