@@ -667,14 +667,21 @@ def create_follow_up_run(
 
     # Omitted model inherits the parent's verbatim (already validated when the
     # parent was created). An explicit override goes through the same
-    # allowlist — including key-scoped narrowing — as a new run.
+    # allowlist — including key-scoped narrowing — as a new run. An empty
+    # string is a distinct, invalid explicit value — never treated as
+    # "omitted" (which would silently inherit) nor passed to
+    # resolve_allowed_model (which treats falsy input as "use the default",
+    # silently switching the follow-up to a model nobody asked for).
     if req.model is None:
         selected_model = parent.model
     else:
         from .model_catalog import resolve_allowed_model
 
         settings = get_settings()
-        selected_model = resolve_allowed_model(settings, req.model)
+        requested_model = req.model.strip()
+        if not requested_model:
+            raise PublicApiError(ErrorCode.INVALID_MODEL, "model must not be empty", status=422)
+        selected_model = resolve_allowed_model(settings, requested_model)
         if selected_model is None:
             raise PublicApiError(
                 ErrorCode.INVALID_MODEL, f"model '{req.model}' is not available", status=422

@@ -425,6 +425,18 @@ class FollowUpAndThreadTests(ApiAuthTestBase):
         )
         self.assertEqual(r.status_code, 422, r.text)
 
+    def test_follow_up_rejects_empty_string_model_rather_than_switching_to_the_default(self):
+        # An empty string is a distinct, explicit value from an omitted field —
+        # it must never be treated as "inherit the parent's model" nor silently
+        # resolve to the server's first-allowed default.
+        root = self._root()  # model="openai/gpt-5.4"
+        r = self.client.post(
+            f"/jobs/{root['id']}/follow-up",
+            json={"instruction": "x", "model": ""},
+            headers=self.auth("user-1"),
+        )
+        self.assertEqual(r.status_code, 422, r.text)
+
     def test_follow_up_on_another_workspace_is_404(self):
         root = self._root("user-1")
         # user-2 must not be able to extend user-1's thread by its run id.
