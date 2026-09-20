@@ -54,6 +54,18 @@ class Settings:
     anthropic_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
 
+    # Modal compute is owned by the Railway worker. These are the same workspace
+    # credentials Clipit's worker used: GNSIS holds them at runtime and uses
+    # Modal as an execution provider rather than making GitHub Actions the
+    # production credential holder.
+    modal_token_id: Optional[str] = None
+    modal_token_secret: Optional[str] = None
+    modal_environment: str = "main"
+    gander_modal_app_name: str = "gnsis-live"
+    gander_modal_function_name: str = "gander_server"
+    gander_models_volume: str = "clipit-gander-weights"
+    gander_secret_name: str = "clipit-gander-ornith"
+
     # GitHub App — the platform-owned credentials. The App id + private key are
     # used to mint short-lived installation tokens per run. The global
     # installation id is DEPRECATED for user runs (each run now resolves its own
@@ -303,8 +315,9 @@ class Settings:
 
         * ``api`` — HTTP/auth, the model gateway (OpenRouter), webhook signing,
           GitHub App (for internal source-token minting) and executor OIDC/audience.
-        * ``worker`` — queue, database, GitHub publishing (App key) and the
-          executor dispatch settings. It does NOT need OpenRouter or the webhook
+        * ``worker`` — queue, database, GitHub publishing (App key), executor
+          dispatch settings, and the Modal workspace credentials that let GNSIS
+          own its live GPU compute. It does NOT need OpenRouter or the webhook
           secret, and does not need browser/engine settings.
 
         Used by the startup check to fail loudly and actionably rather than
@@ -332,6 +345,16 @@ class Settings:
         # API and worker need the public-beta execution configuration: without it
         # there is no permitted way to run a user job.
         missing.extend(self.missing_execution_vars())
+
+        if role == "worker":
+            # The worker is the authority for GPU compute. GitHub Actions no
+            # longer holds the production Modal token or deploys the live runtime.
+            for name, value in (
+                ("MODAL_TOKEN_ID", self.modal_token_id),
+                ("MODAL_TOKEN_SECRET", self.modal_token_secret),
+            ):
+                if not value:
+                    missing.append(name)
 
         if role == "api":
             if not self.user_auth_enabled:
@@ -415,6 +438,13 @@ class Settings:
             redis_url=redis_url,
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
             openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
+            modal_token_id=os.environ.get("MODAL_TOKEN_ID"),
+            modal_token_secret=os.environ.get("MODAL_TOKEN_SECRET"),
+            modal_environment=os.environ.get("MODAL_ENVIRONMENT", "main"),
+            gander_modal_app_name=os.environ.get("GANDER_MODAL_APP_NAME", "gnsis-live"),
+            gander_modal_function_name=os.environ.get("GANDER_MODAL_FUNCTION_NAME", "gander_server"),
+            gander_models_volume=os.environ.get("GANDER_MODELS_VOLUME", "clipit-gander-weights"),
+            gander_secret_name=os.environ.get("GANDER_SECRET_NAME", "clipit-gander-ornith"),
             github_app_id=os.environ.get("GITHUB_APP_ID"),
             github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY"),
             github_app_installation_id=os.environ.get("GITHUB_APP_INSTALLATION_ID"),
