@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -129,8 +128,6 @@ class ModalCompute:
         env["GANDER_SECRET_NAME"] = secret_name
         subprocess.run(
             [
-                sys.executable,
-                "-m",
                 "modal",
                 "deploy",
                 "-e",
