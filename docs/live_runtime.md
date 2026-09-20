@@ -29,25 +29,38 @@ CI runs exactly this in `.github/workflows/gander-validation.yml`, only when fil
 
 ## Deploying
 
-`.github/workflows/deploy-gander.yml` deploys on every push to `main` that touches the runtime, and on demand from the Actions tab. It needs, on this repository:
+The production Modal credentials live on **Railway → GNSISWORKER**, not in
+GitHub Actions. The worker owns the Modal workspace relationship in the same
+shape Clipit's worker used.
+
+Required on GNSISWORKER:
 
 | kind | name | value |
 | --- | --- | --- |
-| secret | `MODAL_TOKEN_ID` | A Modal token for the workspace that owns the model volume. |
-| secret | `MODAL_TOKEN_SECRET` | Its secret. |
-| variable | `GANDER_MODELS_VOLUME` | Optional. The existing Modal Volume holding `MiniCPM-o-4_5/` and `Gander/thinker/`. Defaults to `clipit-gander-weights`, the name CLIPIT #134 recorded from the live deployment. |
-| variable | `GANDER_SECRET_NAME` | Optional. The existing Modal Secret holding `ORNITH_API_KEY`. Defaults to `clipit-gander-ornith`, from the same place. |
-| variable | `MODAL_ENVIRONMENT` | Optional. Defaults to `main`. |
+| secret | `MODAL_TOKEN_ID` | Modal workspace token id. |
+| secret | `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
+| variable | `MODAL_ENVIRONMENT` | Optional; defaults to `main`. |
+| variable | `GANDER_MODELS_VOLUME` | Optional; defaults to `clipit-gander-weights`. |
+| variable | `GANDER_SECRET_NAME` | Optional; defaults to `clipit-gander-ornith`. |
 
-A deploy creates nothing: the volume and the secret must already exist, and a name that does not exist fails the deploy, so a wrong name can never create a second production resource by accident. The two token secrets are the only values a deploy cannot do without.
+The worker image includes `gander/` and `modal/` and installs `modal==1.5.0`.
+Deployment is explicit, not a startup side effect:
 
-By hand, from the repository root, with the two token values in the environment (and the names, if they differ from the defaults):
-
-```bash
-python -m pip install "modal==1.5.0"
-modal deploy -e main modal/gander.py
-python scripts/verify-modal-gander.py
+```python
+from gnsis.service.tasks import deploy_live_runtime
+result = deploy_live_runtime.run(smoke=False)
 ```
+
+To inspect the current deployment without redeploying:
+
+```python
+from gnsis.service.tasks import modal_gander_status
+result = modal_gander_status.run(smoke=False)
+```
+
+Setting `smoke=True` opens `/health`, which cold-starts the GPU and may take
+several minutes. GitHub Actions validates code but does not hold the production
+Modal token or deploy the live runtime.
 
 ## Cutover from `clipit-gander-thinker`
 
