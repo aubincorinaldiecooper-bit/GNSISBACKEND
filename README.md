@@ -175,9 +175,11 @@ Claude Code web sessions.
 Besides the service, this repository carries the GNSIS live runtime: the phone
 page a scanned QR code opens, and the model behind it (MiniCPM-o 4.5 with the
 Gander Thinker), under `gander/`, deployed to Modal as `gnsis-live` from
-`modal/gander.py`. It shares nothing with the service above: separate tests
-(`pytest gander/gander_runtime/tests`), a separate CI job, a separate deploy.
-See [docs/live_runtime.md](docs/live_runtime.md).
+`modal/gander.py`. The **Railway GNSISWORKER owns the Modal workspace credentials
+and runtime operations**; GitHub Actions validates source but is not the
+production Modal credential holder. The live GPU runtime stays isolated from the
+HTTP API while GNSIS remains its orchestration authority. See
+[docs/live_runtime.md](docs/live_runtime.md).
 
 ---
 

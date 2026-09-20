@@ -29,34 +29,48 @@ CI runs exactly this in `.github/workflows/gander-validation.yml`, only when fil
 
 ## Deploying
 
-`.github/workflows/deploy-gander.yml` deploys on every push to `main` that touches the runtime, and on demand from the Actions tab. It needs, on this repository:
+The production Modal credentials live on **Railway → GNSISWORKER**, not in
+GitHub Actions. The worker owns the Modal workspace relationship in the same
+shape Clipit's worker used.
+
+Required on GNSISWORKER:
 
 | kind | name | value |
 | --- | --- | --- |
-| secret | `MODAL_TOKEN_ID` | A Modal token for the workspace that owns the model volume. |
-| secret | `MODAL_TOKEN_SECRET` | Its secret. |
-| variable | `GANDER_MODELS_VOLUME` | The name of the existing Modal Volume holding `MiniCPM-o-4_5/` and `Gander/thinker/`. |
-| variable | `GANDER_SECRET_NAME` | The name of the existing Modal Secret holding `ORNITH_API_KEY`. |
-| variable | `MODAL_ENVIRONMENT` | Optional. Defaults to `main`. |
+| secret | `MODAL_TOKEN_ID` | Modal workspace token id. |
+| secret | `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
+| variable | `MODAL_ENVIRONMENT` | Optional; defaults to `main`. |
+| variable | `GANDER_MODELS_VOLUME` | Optional; defaults to `clipit-gander-weights`. |
+| variable | `GANDER_SECRET_NAME` | Optional; defaults to `clipit-gander-ornith`. |
 
-A deploy creates nothing: the volume and the secret must already exist, and the definition refuses to run without their names so it can never create a second production resource by accident.
+The worker image includes `gander/` and `modal/` and installs `modal==1.5.0`.
+Deployment is explicit, not a startup side effect:
 
-By hand, from the repository root, with the same four values in the environment:
-
-```bash
-python -m pip install "modal==1.5.0"
-modal deploy -e main modal/gander.py
-python scripts/verify-modal-gander.py
+```python
+from gnsis.service.tasks import deploy_live_runtime
+result = deploy_live_runtime.run(smoke=False)
 ```
+
+To inspect the current deployment without redeploying:
+
+```python
+from gnsis.service.tasks import modal_gander_status
+result = modal_gander_status.run(smoke=False)
+```
+
+Setting `smoke=True` opens `/health`, which cold-starts the GPU and may take
+several minutes. GitHub Actions validates code but does not hold the production
+Modal token or deploy the live runtime.
 
 ## Cutover from `clipit-gander-thinker`
 
 The same runtime ran from CLIPIT as the Modal app `clipit-gander-thinker`. The new app uses the same volume and the same secret, so the two can run side by side.
 
 1. Deploy `gnsis-live` (above). Keep `clipit-gander-thinker` running.
-2. Verify the new app. `GANDER_SMOKE=1 python scripts/verify-modal-gander.py` opens `/health` and checks the status and the tool list; that starts a GPU container, and a cold start takes several minutes. Then open the printed address with `/live` on a computer and scan the QR with a phone. A session that reaches *Session ready.* is the real check.
-3. Point whatever used the old address at the new one.
-4. Stop the old app: `modal app stop clipit-gander-thinker` in the same environment.
+2. Verify the new app. `GANDER_SMOKE=1 python scripts/verify-modal-gander.py` opens `/health`, checks the status and the tool list, and prints the settings the runtime reports about itself; that starts a GPU container, and a cold start takes several minutes. Then open the printed address with `/live` on a computer and scan the QR with a phone. A session that reaches *Session ready.* is the real check.
+3. Compare the settings with the app being replaced: `GANDER_HEALTH_URL=https://<the old app's address> python scripts/verify-modal-gander.py` prints the same lines for it, with no Modal token. Each line is named by the key that sets it in `gander/configs/gnsis-live.yaml`, because the file is where a difference has to go and its loader refuses any key it does not know; `/health` itself calls the slate setting `task_slate_visible_to_model`, while the file's key is `duplex.expose_task_slate_to_model`, and its `client_video` and `asr_enabled` fields are derived from `duplex.allow_client_video`, `client_video_mode`, `client_video_sources` and `asr.mode`. CLIPIT #134 said the live app's duplex settings differed from the checked-in configuration in nine values, of which the comparison shows four: `sliding_window_mode`, `context_max_units`, `context_previous_max_tokens` and `expose_task_slate_to_model`. If the old app reports different values, put them into the file under those keys and redeploy before switching. The other five (`trailing_silence_sec`, `turn_bind_grace_sec`, `speak_text_tokens_per_unit`, `max_new_speak_tokens_per_chunk`, and the two tool token limits) are only visible in the old app's own configuration.
+4. Point whatever used the old address at the new one.
+5. Stop the old app: `modal app stop clipit-gander-thinker` in the same environment.
 
 The model artifacts on the volume and the secret are not touched by any of this.
 

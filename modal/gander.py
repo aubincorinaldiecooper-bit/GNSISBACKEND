@@ -19,14 +19,13 @@ APP_NAME = "gnsis-live"
 PORT = 7975
 CONFIG_PATH = "/workspace/gander/configs/gnsis-live.yaml"
 
-# These names are not versioned here either. Require them explicitly rather
-# than guessing and accidentally creating a second production resource.
-MODELS_VOLUME_NAME = os.environ.get("GANDER_MODELS_VOLUME")
-SECRET_NAME = os.environ.get("GANDER_SECRET_NAME")
-if not MODELS_VOLUME_NAME:
-    raise RuntimeError("Set GANDER_MODELS_VOLUME to the existing Gander model Volume name")
-if not SECRET_NAME:
-    raise RuntimeError("Set GANDER_SECRET_NAME to the existing Modal Secret containing ORNITH_API_KEY")
+# The Volume that holds the weights and the Secret that holds ORNITH_API_KEY.
+# The names default to the existing resources CLIPIT #134 recorded from the
+# live deployment; a deploy can override either through the environment.
+# Neither call creates anything: a name that does not exist fails the deploy,
+# so a wrong name cannot make a second production resource by accident.
+MODELS_VOLUME_NAME = os.environ.get("GANDER_MODELS_VOLUME") or "clipit-gander-weights"
+SECRET_NAME = os.environ.get("GANDER_SECRET_NAME") or "clipit-gander-ornith"
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 ornith_secret = modal.Secret.from_name(SECRET_NAME)

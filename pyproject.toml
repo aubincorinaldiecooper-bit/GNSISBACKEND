@@ -49,6 +49,7 @@ service = [
     "PyJWT[crypto]>=2.8",
     "cryptography>=42",
     "claude-agent-sdk>=0.1",
+    "modal==1.5.0",
 ]
 
 [project.scripts]

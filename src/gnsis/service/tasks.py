@@ -322,3 +322,38 @@ def observe_customer_ci() -> str:
 
     observed = observe_all(settings, _store())
     return f"ci-observed:{observed}"
+
+
+@celery_app.task(name="gnsis.modal_gander_status")
+def modal_gander_status(smoke: bool = False) -> dict:
+    """Return the live Gander endpoint and optionally cold-start /health."""
+    from .modal_compute import from_settings
+
+    compute = from_settings(get_settings())
+    url = compute.gander_web_url()
+    result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
+    if smoke:
+        result["health"] = compute.gander_health()
+    return result
+
+
+@celery_app.task(name="gnsis.deploy_live_runtime")
+def deploy_live_runtime(smoke: bool = False) -> dict:
+    """Explicitly deploy Gander from the GNSIS worker, then verify it.
+
+    This is intentionally not wired to worker startup or a periodic schedule.
+    Production infrastructure changes only when this task is deliberately run.
+    """
+    from .modal_compute import from_settings
+
+    s = get_settings()
+    compute = from_settings(s)
+    compute.deploy_gander(
+        models_volume=s.gander_models_volume,
+        secret_name=s.gander_secret_name,
+    )
+    url = compute.gander_web_url()
+    result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
+    if smoke:
+        result["health"] = compute.gander_health()
+    return result
