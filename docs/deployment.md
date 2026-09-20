@@ -240,5 +240,17 @@ Required variables for `GNSISBEAT`:
 - `GNSIS_EXECUTOR_OIDC_ISSUER=https://token.actions.githubusercontent.com`
 - `GNSIS_EXECUTOR_OIDC_AUDIENCE`
 - `GNSIS_EXECUTOR_TRUSTED_WORKFLOW_SHA`
+- `MODAL_TOKEN_ID`
+- `MODAL_TOKEN_SECRET`
+- `MODAL_ENVIRONMENT=main` (optional; defaults to `main`)
+- `GANDER_MODAL_APP_NAME=gnsis-live` (optional)
+- `GANDER_MODAL_FUNCTION_NAME=gander_server` (optional)
+- `GANDER_MODELS_VOLUME=clipit-gander-weights` (optional override)
+- `GANDER_SECRET_NAME=clipit-gander-ornith` (optional override)
+
+`GNSISWORKER` owns the Modal workspace relationship. It can discover the live
+Gander URL, smoke `/health`, and explicitly deploy the checked-in runtime through
+the `gnsis.modal_gander_status` and `gnsis.deploy_live_runtime` Celery tasks.
+Neither task runs automatically on worker startup; GitHub Actions is CI only.
 
 Remove API-only variables from `GNSISWORKER`: `OPENROUTER_API_KEY`, `GITHUB_WEBHOOK_SECRET`, Better Auth secret material, and `GNSIS_AUTH_INTERNAL_SECRET`.
