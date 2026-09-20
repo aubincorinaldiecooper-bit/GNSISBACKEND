@@ -30,6 +30,24 @@ SMOKE = os.environ.get("GANDER_SMOKE", "").strip().lower() not in {"", "0", "fal
 # A cold start loads MiniCPM-o on the GPU before the server answers.
 SMOKE_TIMEOUT_SEC = float(os.environ.get("GANDER_SMOKE_TIMEOUT_SEC", "1800"))
 
+# (key in gander/configs/gnsis-live.yaml, field name in /health). The health
+# route reports a few settings under other names, and two of its fields are
+# derived from several keys or from none, so the mapping is spelled out.
+HEALTH_SETTINGS = (
+    ("duplex.sliding_window_mode", "sliding_window_mode"),
+    ("duplex.context_max_units", "context_max_units"),
+    ("duplex.context_previous_max_tokens", "context_previous_max_tokens"),
+    ("duplex.expose_task_slate_to_model", "task_slate_visible_to_model"),
+    ("duplex.generate_audio", "generate_audio"),
+    (
+        "duplex.allow_client_video, client_video_mode and client_video_sources; "
+        "vision_available and recommended_frame_rate are derived, not set",
+        "client_video",
+    ),
+    ("asr.mode", "asr_enabled"),
+    ("not a file setting, fixed by the model core", "chunk_ms"),
+)
+
 
 def main() -> int:
     if HEALTH_URL:
@@ -87,21 +105,16 @@ def smoke(url: str) -> int:
         )
         return 1
     print(f"OK: {url}/health answers with status ok and tools {', '.join(map(str, tools))}")
-    # The settings the runtime reports about itself. The cutover compares
-    # these between the app being replaced and the new one; a difference
-    # means the checked-in configuration is not what was running.
-    print("Settings reported by /health:")
-    for key in (
-        "chunk_ms",
-        "sliding_window_mode",
-        "context_max_units",
-        "context_previous_max_tokens",
-        "task_slate_visible_to_model",
-        "client_video",
-        "generate_audio",
-        "asr_enabled",
-    ):
-        print(f"  {key}: {body.get(key)!r}")
+    # The settings the runtime reports about itself, named by the keys that
+    # set them in gander/configs/gnsis-live.yaml, because that is where a
+    # difference has to be carried: the loader refuses any key it does not
+    # know, and /health does not always use the file's name for a setting.
+    # The cutover compares these between the app being replaced and the new
+    # one; a difference means the checked-in configuration is not what ran.
+    print("Settings reported by /health, named by their keys in gander/configs/gnsis-live.yaml:")
+    for key, health_field in HEALTH_SETTINGS:
+        label = key if key.endswith(health_field) else f"{key} (health calls it {health_field})"
+        print(f"  {label}: {body.get(health_field)!r}")
     return 0
 
 
