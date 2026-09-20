@@ -170,6 +170,17 @@ Claude Code web sessions.
 
 ---
 
+## The live runtime
+
+Besides the service, this repository carries the GNSIS live runtime: the phone
+page a scanned QR code opens, and the model behind it (MiniCPM-o 4.5 with the
+Gander Thinker), under `gander/`, deployed to Modal as `gnsis-live` from
+`modal/gander.py`. It shares nothing with the service above: separate tests
+(`pytest gander/gander_runtime/tests`), a separate CI job, a separate deploy.
+See [docs/live_runtime.md](docs/live_runtime.md).
+
+---
+
 ## Credits & license
 
 GNSIS is MIT-licensed (see `LICENSE`). It is a clean-room reimplementation of a

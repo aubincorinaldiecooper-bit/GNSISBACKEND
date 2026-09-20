@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Fail unless the deployed live runtime is reachable as a web server.
+
+Run after ``modal deploy modal/gander.py``. It looks the deployed function up
+by name and asks Modal for its web address, which does not start a container.
+With ``GANDER_SMOKE=1`` it also opens ``/health``, which does: the model loads
+on a GPU first, so that is a cold start of several minutes, and it costs money.
+The address is printed so the cutover in docs/live_runtime.md can use it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+import modal
+
+APP_NAME = os.environ.get("MODAL_APP_NAME", "gnsis-live")
+FUNCTION_NAME = os.environ.get("MODAL_FUNCTION_NAME", "gander_server")
+ENVIRONMENT = os.environ.get("MODAL_ENVIRONMENT", "main")
+SMOKE = os.environ.get("GANDER_SMOKE", "").strip().lower() not in {"", "0", "false", "no"}
+# A cold start loads MiniCPM-o on the GPU before the server answers.
+SMOKE_TIMEOUT_SEC = float(os.environ.get("GANDER_SMOKE_TIMEOUT_SEC", "1800"))
+
+
+def main() -> int:
+    deployed = modal.Function.from_name(
+        APP_NAME,
+        FUNCTION_NAME,
+        environment_name=ENVIRONMENT,
+    )
+    try:
+        deployed.hydrate()
+    except Exception as exc:  # a missing app and a bad token both land here
+        print(
+            f"ERROR: could not find {APP_NAME}/{FUNCTION_NAME} in {ENVIRONMENT}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    url = deployed.get_web_url()
+    if not url:
+        print(
+            f"ERROR: {APP_NAME}/{FUNCTION_NAME} in {ENVIRONMENT} is deployed "
+            "but has no web address, so there is nothing to connect to",
+            file=sys.stderr,
+        )
+        return 1
+    url = url.rstrip("/")
+    print(f"OK: {APP_NAME}/{FUNCTION_NAME} in {ENVIRONMENT} is served at {url}")
+
+    if not SMOKE:
+        print("Skipped opening /health (set GANDER_SMOKE=1 to start a container and open it).")
+        return 0
+    return smoke(url)
+
+
+def smoke(url: str) -> int:
+    """Open /health on the deployed runtime and check what it says about itself."""
+
+    try:
+        with urllib.request.urlopen(f"{url}/health", timeout=SMOKE_TIMEOUT_SEC) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, ValueError, OSError) as exc:
+        print(f"ERROR: {url}/health did not answer: {exc}", file=sys.stderr)
+        return 1
+
+    status = body.get("status") if isinstance(body, dict) else None
+    tools = body.get("tools") if isinstance(body, dict) else None
+    if status != "ok":
+        print(f"ERROR: {url}/health reports status {status!r}", file=sys.stderr)
+        return 1
+    if not isinstance(tools, list) or "haptic" not in tools:
+        print(
+            f"ERROR: {url}/health does not list the haptic output tool: {tools!r}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"OK: {url}/health answers with status ok and tools {', '.join(map(str, tools))}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,8 +1,11 @@
-"""Versioned Modal definition for Clipit's existing Gander Thinker service.
+"""Modal definition for the GNSIS live runtime: the phone page and the model behind it.
 
-The Gander runtime is vendored under ``gander/``. This deployment keeps the
-existing Modal app/function identity while moving the source of truth into
-CLIPIT. Model weights and secrets remain external runtime prerequisites.
+The runtime is vendored under ``gander/``. This app is the GNSIS-owned
+successor of CLIPIT's ``clipit-gander-thinker``: the same runtime, the same
+model volume and the same secret, under a new name so the two can run side by
+side until the new one is verified and the old one is shut down
+(docs/live_runtime.md). Model weights and secrets remain external runtime
+prerequisites.
 """
 
 from __future__ import annotations
@@ -12,11 +15,11 @@ import subprocess
 
 import modal
 
-APP_NAME = "clipit-gander-thinker"
+APP_NAME = "gnsis-live"
 PORT = 7975
-CONFIG_PATH = "/workspace/gander/configs/clipit-video-search.yaml"
+CONFIG_PATH = "/workspace/gander/configs/gnsis-live.yaml"
 
-# These names were never versioned in CLIPIT. Require them explicitly rather
+# These names are not versioned here either. Require them explicitly rather
 # than guessing and accidentally creating a second production resource.
 MODELS_VOLUME_NAME = os.environ.get("GANDER_MODELS_VOLUME")
 SECRET_NAME = os.environ.get("GANDER_SECRET_NAME")
@@ -91,7 +94,7 @@ def cache_gander_models() -> dict[str, str]:
 )
 @modal.web_server(PORT, startup_timeout=1800)
 def gander_server() -> None:
-    """Serve Gander from the vendored CLIPIT runtime."""
+    """Serve the live runtime from the vendored source under gander/."""
     env = os.environ.copy()
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     subprocess.Popen(

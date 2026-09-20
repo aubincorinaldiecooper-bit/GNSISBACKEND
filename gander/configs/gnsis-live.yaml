@@ -1,3 +1,9 @@
+# The live runtime as modal/gander.py deploys it: MiniCPM-o 4.5 with the
+# Gander Thinker checkpoint on the model volume, and the Ornith worker on its
+# own Modal app. The model paths, the volume and the secret are external
+# prerequisites, unchanged from CLIPIT's clipit-video-search.yaml. See
+# docs/live_runtime.md.
+
 model:
   model_name_or_path: /models/MiniCPM-o-4_5
   processor_name_or_path: /models/MiniCPM-o-4_5
