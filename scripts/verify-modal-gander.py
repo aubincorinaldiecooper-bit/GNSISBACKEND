@@ -6,6 +6,8 @@ by name and asks Modal for its web address, which does not start a container.
 With ``GANDER_SMOKE=1`` it also opens ``/health``, which does: the model loads
 on a GPU first, so that is a cold start of several minutes, and it costs money.
 The address is printed so the cutover in docs/live_runtime.md can use it.
+With ``GANDER_HEALTH_URL`` set, only ``/health`` at that address is opened, with
+no Modal lookup and no token, so the app being replaced can be read the same way.
 """
 
 from __future__ import annotations
@@ -18,6 +20,9 @@ import urllib.request
 
 import modal
 
+# Set to any runtime's address to run only the /health check against it, with
+# no Modal lookup and no token: this is how the app being replaced is read.
+HEALTH_URL = os.environ.get("GANDER_HEALTH_URL", "").strip()
 APP_NAME = os.environ.get("MODAL_APP_NAME", "gnsis-live")
 FUNCTION_NAME = os.environ.get("MODAL_FUNCTION_NAME", "gander_server")
 ENVIRONMENT = os.environ.get("MODAL_ENVIRONMENT", "main")
@@ -27,6 +32,8 @@ SMOKE_TIMEOUT_SEC = float(os.environ.get("GANDER_SMOKE_TIMEOUT_SEC", "1800"))
 
 
 def main() -> int:
+    if HEALTH_URL:
+        return smoke(HEALTH_URL.rstrip("/"))
     deployed = modal.Function.from_name(
         APP_NAME,
         FUNCTION_NAME,
@@ -80,6 +87,21 @@ def smoke(url: str) -> int:
         )
         return 1
     print(f"OK: {url}/health answers with status ok and tools {', '.join(map(str, tools))}")
+    # The settings the runtime reports about itself. The cutover compares
+    # these between the app being replaced and the new one; a difference
+    # means the checked-in configuration is not what was running.
+    print("Settings reported by /health:")
+    for key in (
+        "chunk_ms",
+        "sliding_window_mode",
+        "context_max_units",
+        "context_previous_max_tokens",
+        "task_slate_visible_to_model",
+        "client_video",
+        "generate_audio",
+        "asr_enabled",
+    ):
+        print(f"  {key}: {body.get(key)!r}")
     return 0
 
 

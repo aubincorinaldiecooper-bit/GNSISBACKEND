@@ -1,11 +1,12 @@
 name: Deploy the live runtime to Modal
 
 # Deploys gander/ as the Modal app `gnsis-live` (modal/gander.py). Needs, on
-# this repository: the secrets MODAL_TOKEN_ID and MODAL_TOKEN_SECRET, and the
-# variables GANDER_MODELS_VOLUME and GANDER_SECRET_NAME naming the existing
-# model Volume and the existing Secret that holds ORNITH_API_KEY. Nothing is
-# created: both must already exist. The cutover from clipit-gander-thinker is
-# in docs/live_runtime.md.
+# this repository, the secrets MODAL_TOKEN_ID and MODAL_TOKEN_SECRET. The
+# existing model Volume and the existing Secret that holds ORNITH_API_KEY are
+# named by default (clipit-gander-weights, clipit-gander-ornith); the variables
+# GANDER_MODELS_VOLUME and GANDER_SECRET_NAME override them. Nothing is
+# created: a name that does not exist fails the deploy. The cutover from
+# clipit-gander-thinker is in docs/live_runtime.md.
 
 on:
   push:
@@ -44,13 +45,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Require Modal credentials and the resource names
+      - name: Require Modal credentials, and say which resources will be used
         shell: bash
         run: |
           test -n "$MODAL_TOKEN_ID" || { echo "Missing repository secret MODAL_TOKEN_ID"; exit 1; }
           test -n "$MODAL_TOKEN_SECRET" || { echo "Missing repository secret MODAL_TOKEN_SECRET"; exit 1; }
-          test -n "$GANDER_MODELS_VOLUME" || { echo "Missing repository variable GANDER_MODELS_VOLUME: the existing model Volume"; exit 1; }
-          test -n "$GANDER_SECRET_NAME" || { echo "Missing repository variable GANDER_SECRET_NAME: the existing Secret holding ORNITH_API_KEY"; exit 1; }
+          echo "Model Volume: ${GANDER_MODELS_VOLUME:-clipit-gander-weights (default)}"
+          echo "Ornith Secret: ${GANDER_SECRET_NAME:-clipit-gander-ornith (default)}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
