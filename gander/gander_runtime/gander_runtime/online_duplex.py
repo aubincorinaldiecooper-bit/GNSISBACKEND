@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import json
 import logging
@@ -64,6 +65,10 @@ MODEL_HAPTIC_TOOL_SCHEMA: dict[str, Any] = {
         },
     },
 }
+# The tools the runtime itself puts in front of the model. Their names are
+# reserved, and they do not count against the schema budget a deployment
+# configures for its own tools (see _reserve_built_in_tools).
+BUILT_IN_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (MODEL_HAPTIC_TOOL_SCHEMA,)
 # Longest we wait for the talker to finish draining before cancelling it.
 # Teardown holds the single model slot, so it must be bounded.
 SPEECH_PUMP_DRAIN_TIMEOUT_SEC = 5.0
@@ -344,9 +349,46 @@ def _model_tool_schemas(runtime: _Runtime) -> list[dict[str, Any]]:
     from mcpmft.tool_protocol import ensure_lean_task_tools
 
     configured = list(runtime.settings.tool_schemas)
-    if any(str(schema.get("name") or "") == "haptic" for schema in configured):
-        raise ValueError("haptic is a reserved built-in realtime output tool")
-    return ensure_lean_task_tools([*configured, MODEL_HAPTIC_TOOL_SCHEMA])
+    reserved = {str(schema.get("name") or "") for schema in BUILT_IN_TOOL_SCHEMAS}
+    for schema in configured:
+        name = str(schema.get("name") or "")
+        if name in reserved:
+            raise ValueError(f"{name} is a reserved built-in realtime output tool")
+    return ensure_lean_task_tools([*configured, *BUILT_IN_TOOL_SCHEMAS])
+
+
+def _reserve_built_in_tools(params: Any, bundle: Any) -> Any:
+    """Keep the runtime's own tools outside the schema budget a deployment sets.
+
+    `max_tool_schemas` and `max_tool_schema_tokens` are a deployment's
+    allowance for *its* tools, but the model core checks them over everything
+    the model is shown, built-ins included. So three business tools, the
+    previous maximum beside the three task tools, made seven schemas once
+    `haptic` was appended, and a deployment that had always started refused to
+    (Codex's finding on CLIPIT #159). The budget is raised here by exactly what
+    the built-ins take: one slot each, and the tokens their schemas render to,
+    measured with the model's own tokenizer the way the core measures them.
+    A bundle without a tokenizer cannot check schema tokens at all, so there is
+    nothing to reserve for it; a params stub without the fields is left alone.
+    """
+
+    from mcpmft.tool_protocol import compact_json, normalize_tool_schema
+
+    if not BUILT_IN_TOOL_SCHEMAS or not hasattr(params, "max_tool_schemas"):
+        return params
+    changes: dict[str, int] = {
+        "max_tool_schemas": int(params.max_tool_schemas) + len(BUILT_IN_TOOL_SCHEMAS),
+    }
+    tokenizer = getattr(bundle, "tokenizer", None)
+    if hasattr(params, "max_tool_schema_tokens") and hasattr(tokenizer, "encode"):
+        rendered = "\n".join(
+            compact_json(normalize_tool_schema(schema)) for schema in BUILT_IN_TOOL_SCHEMAS
+        )
+        # The core joins schemas with newlines; one more per built-in covers that.
+        reserved = len(tokenizer.encode(rendered, add_special_tokens=False))
+        reserved += len(BUILT_IN_TOOL_SCHEMAS)
+        changes["max_tool_schema_tokens"] = int(params.max_tool_schema_tokens) + reserved
+    return replace(params, **changes)
 
 
 def _tool_names(runtime: _Runtime) -> list[str]:
@@ -357,26 +399,69 @@ def _tool_names(runtime: _Runtime) -> list[str]:
     ]
 
 
-def _model_haptic_control(event: Any) -> dict[str, str] | None:
-    """Translate one valid model-owned haptic tool call into a client event."""
+@dataclass(frozen=True)
+class _HapticSplit:
+    """What one unit of tool calls means for the phone's touch, and for the rest."""
 
-    if not bool(getattr(event, "is_tool_call", False)):
-        return None
-    if getattr(event, "tool_error", None):
-        return None
-    calls = list(getattr(event, "tool_calls", ()) or ())
-    if len(calls) != 1:
-        return None
-    call = calls[0]
+    # Cues for the phone, in the order the model gave them.
+    cues: tuple[dict[str, str], ...] = ()
+    # The event that continues down the ordinary tool path: the original when
+    # nothing was lifted out, a copy carrying only the other calls, or None
+    # when touch was all the unit asked for.
+    remainder: Any | None = None
+    # Why the whole unit is refused: a call named haptic that is not a cue.
+    rejected: str | None = None
+
+
+def _haptic_cue(call: Any) -> str | None:
+    """The cue a valid haptic call names, else None."""
+
     if not isinstance(call, dict) or call.get("name") != "haptic":
         return None
     arguments = call.get("arguments")
     if not isinstance(arguments, dict):
         return None
     cue = arguments.get("cue")
-    if cue not in MODEL_HAPTIC_CUES:
-        return None
-    return {"type": "haptic.cue", "cue": str(cue), "source": "model"}
+    return str(cue) if cue in MODEL_HAPTIC_CUES else None
+
+
+def _split_model_haptics(event: Any) -> _HapticSplit:
+    """Separate the model's touch output from whatever else the unit asked for.
+
+    A unit may carry up to four calls, and the model may validly put `haptic`
+    beside a task or business call. Taken whole, such a unit was refused by
+    the coordinator as a mixed batch, so the cue was never felt and the other
+    call was thrown away with it (Codex's finding on CLIPIT #159). So the
+    haptic calls are lifted out here: each becomes a `haptic.cue` for the
+    phone, and the remaining calls go on as a unit of their own, answered by
+    whoever answers them. Only when touch was all the unit asked for does the
+    runtime answer the model itself.
+    """
+
+    if not bool(getattr(event, "is_tool_call", False)) or getattr(event, "tool_error", None):
+        return _HapticSplit(remainder=event)
+    cues: list[dict[str, str]] = []
+    rest: list[Any] = []
+    for call in list(getattr(event, "tool_calls", ()) or ()):
+        cue = _haptic_cue(call)
+        if cue is not None:
+            cues.append({"type": "haptic.cue", "cue": cue, "source": "model"})
+        elif isinstance(call, dict) and call.get("name") == "haptic":
+            # The core validates arguments against the schema before a call
+            # gets here, so this is belt and braces: a haptic call that names
+            # no cue must not travel on as if it were an external tool.
+            return _HapticSplit(
+                rejected=f"haptic cue must be one of {', '.join(MODEL_HAPTIC_CUES)}"
+            )
+        else:
+            rest.append(call)
+    if not cues:
+        return _HapticSplit(remainder=event)
+    if not rest:
+        return _HapticSplit(cues=tuple(cues))
+    remainder = copy.copy(event)
+    remainder.tool_calls = rest
+    return _HapticSplit(cues=tuple(cues), remainder=remainder)
 
 
 def _codex_frame_interval_ms(runtime: _Runtime) -> float:
@@ -758,7 +843,7 @@ def create_online_duplex_app(
 
     runtime = _Runtime(
         bundle=bundle,
-        params=params,
+        params=_reserve_built_in_tools(params, bundle),
         settings=settings or OnlineDuplexSettings(),
         gateway_factory=gateway_factory,
         provider_name=provider_name,
@@ -1426,27 +1511,31 @@ def create_online_duplex_app(
             assert coordinator is not None
             if output is None:
                 output = coordinator.model_output(event)
-            haptic_control = _model_haptic_control(event)
-            if haptic_control is not None:
-                # Haptics are a local output modality, not an external side effect.
-                # The model chooses the semantic cue; the phone owns the physical
-                # pattern. Do not expose the underlying tool.call to the client.
-                await send_text(
-                    haptic_control,
-                    wait_sent=output.delivery_id is not None,
-                )
+            split = _split_model_haptics(event)
+            for cue in split.cues:
+                # Haptics are a local output modality, not an external side
+                # effect. The model chooses the semantic cue; the phone owns the
+                # physical pattern. The underlying tool.call is not shown to
+                # the client.
+                await send_text(cue, wait_sent=output.delivery_id is not None)
+            if split.remainder is None:
+                # Touch was the whole unit, or a haptic call was malformed:
+                # either way the runtime answers the model itself.
                 if output.delivery_id is not None:
                     coordinator.acknowledge_output(output)
-                followup = await asyncio.to_thread(
-                    session.feed_tool_response,
-                    {
-                        "status": "accepted",
-                        "cue": haptic_control["cue"],
-                    },
-                )
+                if split.rejected is not None:
+                    answer: dict[str, Any] = {"status": "rejected", "error": split.rejected}
+                elif len(split.cues) == 1:
+                    answer = {"status": "accepted", "cue": split.cues[0]["cue"]}
+                else:
+                    answer = {"status": "accepted", "cues": [cue["cue"] for cue in split.cues]}
+                followup = await asyncio.to_thread(session.feed_tool_response, answer)
                 if followup is not None:
                     await emit_model_event(followup)
                 return
+            # What is left of the unit, which is all of it when no touch was
+            # asked for, takes the ordinary path.
+            event = split.remainder
             await send_model_event(
                 event,
                 wait_sent=output.delivery_id is not None,

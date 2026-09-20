@@ -268,8 +268,8 @@ def test_gander_has_a_bounded_semantic_haptic_output_tool():
 
     from gander_runtime.online_duplex import (
         MODEL_HAPTIC_CUES,
-        _model_haptic_control,
         _model_tool_schemas,
+        _split_model_haptics,
     )
 
     runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=()))
@@ -287,11 +287,11 @@ def test_gander_has_a_bounded_semantic_haptic_output_tool():
         tool_error=None,
         tool_calls=[{"name": "haptic", "arguments": {"cue": "confirmation"}}],
     )
-    assert _model_haptic_control(event) == {
-        "type": "haptic.cue",
-        "cue": "confirmation",
-        "source": "model",
-    }
+    split = _split_model_haptics(event)
+    assert split.cues == (
+        {"type": "haptic.cue", "cue": "confirmation", "source": "model"},
+    )
+    assert split.remainder is None and split.rejected is None
 
 
 def test_haptic_is_reserved_for_the_runtime():
@@ -312,6 +312,161 @@ def test_haptic_is_reserved_for_the_runtime():
     )
     with pytest.raises(ValueError, match="reserved"):
         _model_tool_schemas(runtime)
+
+
+def test_the_built_in_tool_does_not_consume_the_configured_schema_budget():
+    """Three business tools beside the three task tools filled the budget of six.
+
+    Appending `haptic` made seven, and a deployment that had always started
+    refused to (Codex on CLIPIT #159). The runtime's own tools now sit outside
+    the configured budget: one slot each, and exactly the tokens their schemas
+    render to, measured the way the model core measures them.
+    """
+
+    from dataclasses import dataclass
+
+    from mcpmft.tool_protocol import (
+        ToolProtocolError,
+        compact_json,
+        ensure_lean_task_tools,
+        normalize_tool_schema,
+        validate_realtime_tool_context,
+    )
+
+    from gander_runtime.online_duplex import (
+        MODEL_HAPTIC_TOOL_SCHEMA,
+        _model_tool_schemas,
+        _reserve_built_in_tools,
+    )
+
+    class Tokenizer:
+        def encode(self, text, add_special_tokens=False):
+            return list(text)
+
+    @dataclass
+    class Params:
+        max_tool_schemas: int = 6
+        max_tool_schema_tokens: int = 0
+
+    business = [
+        {"name": f"tool_{n}", "description": "d", "parameters": {"type": "object"}}
+        for n in range(3)
+    ]
+    # A deployment exactly at the old limit: six tools, and a token budget
+    # that fits them and not one character more.
+    six = ensure_lean_task_tools(business)
+    budget = len("\n".join(compact_json(tool) for tool in six))
+    tokenizer = Tokenizer()
+    validate_realtime_tool_context(six, tokenizer, max_tools=6, max_schema_tokens=budget)
+
+    runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=tuple(business)))
+    seven = _model_tool_schemas(runtime)
+    assert [tool["name"] for tool in seven] == [
+        "tool_0", "tool_1", "tool_2", "haptic", "task_start", "task_send", "task_resolve",
+    ]
+    with pytest.raises(ToolProtocolError, match="exposes 7 tools; maximum is 6"):
+        validate_realtime_tool_context(seven, tokenizer, max_tools=6, max_schema_tokens=budget)
+
+    reserved = _reserve_built_in_tools(
+        Params(max_tool_schema_tokens=budget), SimpleNamespace(tokenizer=tokenizer)
+    )
+    haptic = compact_json(normalize_tool_schema(MODEL_HAPTIC_TOOL_SCHEMA))
+    assert reserved.max_tool_schemas == 7
+    assert reserved.max_tool_schema_tokens == budget + len(haptic) + 1
+    validate_realtime_tool_context(
+        seven,
+        tokenizer,
+        max_tools=reserved.max_tool_schemas,
+        max_schema_tokens=reserved.max_tool_schema_tokens,
+    )
+
+    # A bundle with no tokenizer cannot check tokens, so only the slot is reserved;
+    # a params stub without the fields is left alone.
+    count_only = _reserve_built_in_tools(Params(max_tool_schema_tokens=budget), SimpleNamespace())
+    assert (count_only.max_tool_schemas, count_only.max_tool_schema_tokens) == (7, budget)
+    stub = SimpleNamespace(chunk_ms=1000)
+    assert _reserve_built_in_tools(stub, SimpleNamespace()) is stub
+
+
+def test_the_app_reserves_its_built_in_tools_when_it_is_built(harness, monkeypatch):
+    """The reservation is worthless unless the app applies it to the params it runs on."""
+
+    from gander_runtime import online_duplex
+
+    seen = []
+    real = online_duplex._reserve_built_in_tools
+
+    def spy(params, bundle):
+        seen.append((params, bundle))
+        return real(params, bundle)
+
+    monkeypatch.setattr(online_duplex, "_reserve_built_in_tools", spy)
+    harness()
+    assert len(seen) == 1
+
+
+def test_a_haptic_beside_another_call_is_lifted_out_and_the_rest_goes_on():
+    """The model may put touch beside a task call in one unit.
+
+    Taken whole, the coordinator refused that batch as mixed, so the cue was
+    never felt and the other call was thrown away with it (Codex on CLIPIT
+    #159). Now the cue goes to the phone and the other call goes on alone.
+    """
+
+    from gander_runtime.online_duplex import _split_model_haptics
+
+    task = {"name": "task_send", "arguments": {"task_id": "t1", "text": "look left"}}
+    event = SimpleNamespace(
+        index=7,
+        is_tool_call=True,
+        tool_error=None,
+        tool_calls=[{"name": "haptic", "arguments": {"cue": "attention"}}, task],
+        metrics={},
+    )
+    split = _split_model_haptics(event)
+    assert split.cues == ({"type": "haptic.cue", "cue": "attention", "source": "model"},)
+    assert split.rejected is None
+    assert split.remainder is not event
+    assert split.remainder.tool_calls == [task]
+    assert split.remainder.index == 7 and split.remainder.is_tool_call
+    # The original event is not touched.
+    assert len(event.tool_calls) == 2
+
+
+def test_a_unit_without_touch_passes_through_untouched():
+    from gander_runtime.online_duplex import _split_model_haptics
+
+    plain = SimpleNamespace(is_tool_call=False, tool_error=None, tool_calls=[], text="hi")
+    assert _split_model_haptics(plain).remainder is plain
+    other = SimpleNamespace(
+        is_tool_call=True, tool_error=None, tool_calls=[{"name": "task_send", "arguments": {}}]
+    )
+    split = _split_model_haptics(other)
+    assert split.remainder is other and split.cues == () and split.rejected is None
+    errored = SimpleNamespace(
+        is_tool_call=True,
+        tool_error="a previous tool call is still awaiting its response",
+        tool_calls=[],
+    )
+    assert _split_model_haptics(errored).remainder is errored
+
+
+def test_a_malformed_haptic_call_is_refused_not_forwarded():
+    """A call named haptic that names no cue must never travel on as an external tool."""
+
+    from gander_runtime.online_duplex import _split_model_haptics
+
+    event = SimpleNamespace(
+        is_tool_call=True,
+        tool_error=None,
+        tool_calls=[
+            {"name": "haptic", "arguments": {"cue": "buzz"}},
+            {"name": "task_send", "arguments": {}},
+        ],
+    )
+    split = _split_model_haptics(event)
+    assert split.remainder is None and split.cues == ()
+    assert split.rejected.startswith("haptic cue must be one of ")
 
 
 def test_the_phone_renders_model_haptics_as_device_presets(harness):
