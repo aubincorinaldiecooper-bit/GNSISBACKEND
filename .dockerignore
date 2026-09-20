@@ -1,4 +1,2 @@
-# Not part of the Railway image. The live runtime under gander/ deploys to
-# Modal from modal/gander.py, and nothing in src/gnsis imports either.
-gander/
-modal/
+# GNSISWORKER owns Modal compute, including explicit live-runtime deploys.
+# Keep gander/ and modal/ in the image; weights stay on the external Modal Volume.
