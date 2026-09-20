@@ -319,6 +319,13 @@ class ClaimRequest(BaseModel):
     installation_id: int
 
 
+class GanderDeployRequest(BaseModel):
+    # Deployment is destructive infrastructure mutation, so require an explicit
+    # confirmation value instead of letting a stray POST trigger production.
+    confirm: str
+    smoke: bool = False
+
+
 # -- health / meta ------------------------------------------------------------
 
 
@@ -1210,6 +1217,96 @@ def cancel(
 
 
 # -- internal / emergency (raw repo, behind the internal key) -----------------
+
+
+def _compute_task_response(task_id: str) -> dict:
+    """Return a safe projection of a Celery infrastructure task.
+
+    Do not return traceback text or arbitrary exception reprs: provider errors can
+    carry request metadata and the HTTP surface must never become a secret leak.
+    """
+    from .tasks import celery_app
+
+    result = celery_app.AsyncResult(task_id)
+    payload = {
+        "task_id": task_id,
+        "state": result.state,
+        "ready": result.ready(),
+        "successful": result.successful() if result.ready() else None,
+    }
+    if not result.ready():
+        return payload
+    if result.successful():
+        value = result.result
+        if isinstance(value, dict):
+            # These tasks deliberately return only this bounded operator view.
+            payload["result"] = {
+                key: value[key]
+                for key in ("app", "environment", "url", "health")
+                if key in value
+            }
+        else:
+            payload["result"] = value
+    else:
+        payload["error"] = "task failed; inspect GNSISWORKER logs"
+        payload["error_type"] = type(result.result).__name__
+    return payload
+
+
+@app.post(
+    "/internal/compute/gander/status",
+    status_code=202,
+    dependencies=[Depends(require_internal_key)],
+)
+def internal_gander_status(smoke: bool = False) -> dict:
+    """Queue a worker-owned Modal/Gander status check.
+
+    smoke=false resolves only the deployed web address and does not cold-start
+    the GPU. smoke=true also opens /health and can take several minutes.
+    """
+    from .tasks import modal_gander_status
+
+    queued = modal_gander_status.delay(smoke=smoke)
+    return {
+        "task_id": queued.id,
+        "operation": "gander_status",
+        "smoke": smoke,
+        "state": "queued",
+    }
+
+
+@app.post(
+    "/internal/compute/gander/deploy",
+    status_code=202,
+    dependencies=[Depends(require_internal_key)],
+)
+def internal_gander_deploy(req: GanderDeployRequest) -> dict:
+    """Explicitly queue a production Gander deploy from GNSISWORKER."""
+    settings = get_settings()
+    if req.confirm != settings.gander_modal_app_name:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirm must equal '{settings.gander_modal_app_name}'",
+        )
+    from .tasks import deploy_live_runtime
+
+    queued = deploy_live_runtime.delay(smoke=req.smoke)
+    return {
+        "task_id": queued.id,
+        "operation": "gander_deploy",
+        "app": settings.gander_modal_app_name,
+        "smoke": req.smoke,
+        "state": "queued",
+    }
+
+
+@app.get(
+    "/internal/compute/tasks/{task_id}",
+    dependencies=[Depends(require_internal_key)],
+)
+def internal_compute_task(task_id: str) -> dict:
+    """Poll an infrastructure task without exposing worker/provider secrets."""
+    return _compute_task_response(task_id)
 
 
 @app.post(

@@ -253,4 +253,22 @@ Gander URL, smoke `/health`, and explicitly deploy the checked-in runtime throug
 the `gnsis.modal_gander_status` and `gnsis.deploy_live_runtime` Celery tasks.
 Neither task runs automatically on worker startup; GitHub Actions is CI only.
 
+### Internal Gander compute admin API
+
+The API service never receives Modal credentials. Operator requests are authenticated by
+`GNSIS_API_KEY` and only enqueue work onto `GNSISWORKER`, which owns the Modal
+workspace token:
+
+```sh
+POST /internal/compute/gander/status?smoke=false
+POST /internal/compute/gander/deploy
+GET  /internal/compute/tasks/<task_id>
+```
+
+All three require `Authorization: Bearer <GNSIS_API_KEY>`. Deploy also requires the
+JSON body `{"confirm":"gnsis-live","smoke":false}`; the explicit confirmation prevents
+an accidental POST from mutating production infrastructure. The API only returns a
+bounded task result (app, environment, URL and optional health document) and never
+returns provider exception text or secret values.
+
 Remove API-only variables from `GNSISWORKER`: `OPENROUTER_API_KEY`, `GITHUB_WEBHOOK_SECRET`, Better Auth secret material, and `GNSIS_AUTH_INTERNAL_SECRET`.
