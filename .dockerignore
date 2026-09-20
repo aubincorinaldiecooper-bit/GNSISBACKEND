@@ -1,0 +1,4 @@
+# Not part of the Railway image. The live runtime under gander/ deploys to
+# Modal from modal/gander.py, and nothing in src/gnsis imports either.
+gander/
+modal/
