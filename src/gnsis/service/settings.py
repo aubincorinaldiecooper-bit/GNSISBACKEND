@@ -64,10 +64,10 @@ class Settings:
     gnsis_modal_app_name: str = "gnsis-live"
     gnsis_modal_function_name: str = "gnsis_live_server"
     gnsis_models_volume: str = "gnsis-models"
-    # One secret, both sides of the same call: the runtime reads ORNITH_API_KEY
-    # from it to reach Ornith, and Ornith reads the same value to require it.
-    gnsis_secret_name: str = "gnsis-ornith-auth"
-    # Ornith is the brain the live runtime asks for tasks. It deploys under a
+    # Reserved for the optional Ornith action layer; the live perception MVP
+    # does not receive or require this secret.
+    ornith_secret_name: str = "gnsis-ornith-auth"
+    # Ornith is the optional action layer. It deploys under a
     # name of its own so a deploy from here never replaces the service that is
     # already running; see modal/ornith.py and docs/live_runtime.md.
     ornith_modal_app_name: str = "gnsis-ornith"
@@ -451,7 +451,7 @@ class Settings:
             gnsis_modal_app_name=os.environ.get("GNSIS_MODAL_APP_NAME", "gnsis-live"),
             gnsis_modal_function_name=os.environ.get("GNSIS_MODAL_FUNCTION_NAME", "gnsis_live_server"),
             gnsis_models_volume=os.environ.get("GNSIS_MODELS_VOLUME", "gnsis-models"),
-            gnsis_secret_name=os.environ.get("GNSIS_SECRET_NAME", "gnsis-ornith-auth"),
+            ornith_secret_name=os.environ.get("ORNITH_SECRET_NAME", "gnsis-ornith-auth"),
             ornith_modal_app_name=os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith"),
             ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "gnsis-ornith-cache"),
             github_app_id=os.environ.get("GITHUB_APP_ID"),
