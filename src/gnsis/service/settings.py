@@ -71,7 +71,6 @@ class Settings:
     # name of its own so a deploy from here never replaces the service that is
     # already running; see modal/ornith.py and docs/live_runtime.md.
     ornith_modal_app_name: str = "gnsis-ornith"
-    ornith_modal_function_name: str = "ornith_server_v2"
     ornith_cache_volume: str = "clipit-ornith-cache"
 
     # GitHub App — the platform-owned credentials. The App id + private key are
@@ -454,7 +453,6 @@ class Settings:
             gander_models_volume=os.environ.get("GANDER_MODELS_VOLUME", "clipit-gander-weights"),
             gander_secret_name=os.environ.get("GANDER_SECRET_NAME", "clipit-gander-ornith"),
             ornith_modal_app_name=os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith"),
-            ornith_modal_function_name=os.environ.get("ORNITH_MODAL_FUNCTION_NAME", "ornith_server_v2"),
             ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "clipit-ornith-cache"),
             github_app_id=os.environ.get("GITHUB_APP_ID"),
             github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY"),

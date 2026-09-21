@@ -129,20 +129,47 @@ class ModalComputeTests(unittest.TestCase):
         self.assertEqual(compute.ornith_ref.app_name, "gnsis-ornith")
         self.assertNotEqual(compute.ornith_ref.app_name, "clipit-ornith-brain-v2")
 
-    def test_settings_carry_the_ornith_names(self):
+    def test_settings_carry_the_ornith_app_but_never_its_function_name(self):
+        """The app is a setting; the function name cannot be one.
+
+        A Modal function is named by its `def`, so modal/ornith.py always
+        publishes ornith_server_v2. A configurable lookup name would let a
+        publish succeed and the very next lookup fail, so even a settings
+        object that carries one must not change where the provider looks
+        (Codex on #58).
+        """
+
         settings = SimpleNamespace(
             modal_token_id="id",
             modal_token_secret="secret",
             modal_environment="main",
             gander_modal_app_name="gnsis-live",
             gander_modal_function_name="gander_server",
-            ornith_modal_app_name="gnsis-ornith",
-            ornith_modal_function_name="ornith_server_v2",
+            ornith_modal_app_name="adopted-app",
+            ornith_modal_function_name="not_a_real_function",
         )
         compute = from_settings(settings)
-        self.assertEqual(compute.ornith_ref.app_name, "gnsis-ornith")
+        self.assertEqual(compute.ornith_ref.app_name, "adopted-app")
         self.assertEqual(compute.ornith_ref.function_name, "ornith_server_v2")
         self.assertEqual(compute.ref.app_name, "gnsis-live")
+
+    def test_the_looked_up_function_is_the_one_the_definition_publishes(self):
+        """Tie the name we look up to the name Modal will actually create.
+
+        These live in two files, and nothing but this check keeps them equal.
+        """
+
+        import ast
+        from pathlib import Path
+
+        definition = Path(__file__).resolve().parents[1] / "modal" / "ornith.py"
+        published = {
+            node.name
+            for node in ast.parse(definition.read_text()).body
+            if isinstance(node, ast.FunctionDef)
+        }
+        compute = ModalCompute(token_id="id-test", token_secret="secret-test")
+        self.assertIn(compute.ornith_ref.function_name, published)
 
     def test_settings_boundary_requires_both_modal_values(self):
         settings = SimpleNamespace(

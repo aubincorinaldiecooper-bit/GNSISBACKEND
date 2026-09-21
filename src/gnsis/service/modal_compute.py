@@ -205,6 +205,8 @@ def from_settings(settings) -> ModalCompute:
         environment=settings.modal_environment,
         gander_app_name=settings.gander_modal_app_name,
         gander_function_name=settings.gander_modal_function_name,
+        # No function-name setting on purpose: a Modal function is named by its
+        # `def`, so modal/ornith.py always publishes ornith_server_v2 and a
+        # configurable lookup name could only ever point at nothing.
         ornith_app_name=getattr(settings, "ornith_modal_app_name", "gnsis-ornith"),
-        ornith_function_name=getattr(settings, "ornith_modal_function_name", "ornith_server_v2"),
     )
