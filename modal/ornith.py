@@ -1,18 +1,8 @@
-"""Modal definition for Ornith, the brain the live runtime asks for tasks.
+"""Optional Ornith action-layer deployment for GNSIS.
 
-The live runtime under ``gnsis/`` watches and listens; when it needs a task
-carried out it calls a second model over an OpenAI-compatible HTTP API. That
-model is Ornith-1.5-9B, served by vLLM on one GPU. The runtime reaches it at
-the address in ``live/configs/gnsis-live.yaml``.
-
-Until now that service existed only as a notebook deployment: it was running
-in production and no repository described it, so it could not be rebuilt. This
-file is that description, brought over from an earlier internal revision, which recorded the
-deployment before the live runtime moved here.
-
-It deploys under a GNSIS-owned name of its own, beside the existing service
-rather than over it. Pointing the runtime at the new one is a deliberate
-cutover step, written down in docs/live_runtime.md.
+The live perception MVP does not depend on this app. When enabled later, Ornith
+is served through a separate OpenAI-compatible vLLM endpoint and can be selected
+as a worker provider by an explicit live configuration.
 """
 
 from __future__ import annotations
@@ -22,11 +12,8 @@ import subprocess
 
 import modal
 
-# A name of its own, so a deploy from this repository can never replace the
-# running service by accident. Set ORNITH_MODAL_APP_NAME to the existing app
-# (legacy-ornith-service) to adopt it in place instead; the function keeps the
-# name that deployment uses, so adopting it updates the same function and the
-# address callers already hold does not change.
+# Kept as a separate app so perception and delegated task execution can scale
+# independently.
 APP_NAME = os.environ.get("ORNITH_MODAL_APP_NAME") or "gnsis-ornith"
 PORT = 8000
 MODEL = "ornith-ai/Ornith-1.5-9B"
@@ -39,10 +26,7 @@ SERVED_MODEL_NAME = "ornith"
 CACHE_VOLUME_NAME = os.environ.get("ORNITH_CACHE_VOLUME") or "gnsis-ornith-cache"
 SECRET_NAME = os.environ.get("ORNITH_SECRET_NAME") or "gnsis-ornith-auth"
 
-# The historical notebook deployment used vLLM's `latest` tag, and this mirrors
-# it for parity with what is running. `latest` moves, and a vLLM release that
-# renames a serving flag would break a redeploy that changed nothing else, so
-# pin the resolved digest here once parity with the running service is proven.
+# Pin this to a tested digest before production use.
 IMAGE_TAG = os.environ.get("ORNITH_VLLM_IMAGE") or "vllm/vllm-openai:latest"
 
 cache = modal.Volume.from_name(CACHE_VOLUME_NAME, create_if_missing=False)
