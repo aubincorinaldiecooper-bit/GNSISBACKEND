@@ -7,7 +7,7 @@ from typing import Any, Literal
 from .screen import LatestScreenFrameBuffer, ScreenFrame
 
 
-class GanderDuplexSession:
+class GNSISDuplexSession:
     """Thread-safe facade over one native-tool ``DuplexLiveSession``."""
 
     def __init__(
@@ -204,7 +204,7 @@ class GanderDuplexSession:
 
     def _annotate(self, events: list[Any]) -> list[Any]:
         for event in events:
-            event.metrics["gander"] = {
+            event.metrics["gnsis"] = {
                 "protocol": "native_tools",
                 "front_control": None,
                 "terminal_share_ids": [],
@@ -216,7 +216,7 @@ class GanderDuplexSession:
                         "MiniCPM consumed a native tool input without a matching Runtime receipt"
                     )
                 receipt = self._pending_native_inputs.popleft()
-                event.metrics["gander"]["native_input_kind"] = receipt["kind"]
+                event.metrics["gnsis"]["native_input_kind"] = receipt["kind"]
                 self._native_input_receipts[id(event)] = receipt
         return events
 

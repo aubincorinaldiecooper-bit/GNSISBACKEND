@@ -132,7 +132,7 @@ class AsrService:
             raise
         self._watcher = threading.Thread(
             target=self._watch_process,
-            name="gander-asr-watch",
+            name="gnsis-asr-watch",
             daemon=True,
         )
         self._watcher.start()

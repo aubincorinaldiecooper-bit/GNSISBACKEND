@@ -13,7 +13,7 @@ from typing import Any, Literal
 import yaml
 
 from mcpmft.args import ModelArguments
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tool_protocol import ensure_lean_task_tools, normalize_tool_schema
 
 from .asr_process import AsrConfig, AsrService, asr_base_url, validate_asr_config
@@ -26,7 +26,7 @@ class ServerConfig:
     port: int = 7975
     ws_ping_interval: float = 20.0
     ws_ping_timeout: float = 120.0
-    runtime_dir: str = "var/gander"
+    runtime_dir: str = "var/gnsis"
     ledger_dir: str | None = None
     mode: Literal["lean", "coordinator"] = "lean"
     log_level: str = "info"
@@ -47,7 +47,7 @@ class DuplexConfig:
     # rejected, so there was no way to say yes.
     persist_camera_frames: bool = False
     decode_mode: Literal["sampling", "greedy"] = "sampling"
-    system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT
+    system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT
     ref_audio_path: str | None = None
     tools_path: str | None = None
     trailing_silence_sec: float = 8.0
@@ -107,7 +107,7 @@ class CoordinatorConfig:
 @dataclass(frozen=True)
 class MemoryConfig:
     url: str | None = None
-    token_env: str = "GANDER_MEMORY_TOKEN"
+    token_env: str = "GNSIS_MEMORY_TOKEN"
     timeout_sec: float = 10.0
 
 
@@ -187,7 +187,7 @@ def validate_release_config(config: ReleaseConfig) -> None:
         raise ValueError("worker.settings must be a YAML mapping")
     validate_asr_config(config.asr)
     if config.asr.mode == "managed" and config.asr.port == server.port:
-        raise ValueError("managed ASR and the Gander server must use different ports")
+        raise ValueError("managed ASR and the GNSIS server must use different ports")
     if not duplex.checkpoint:
         raise ValueError("duplex.checkpoint is required")
     if duplex.generate_audio and not config.model.init_tts:
@@ -380,7 +380,7 @@ def _validate_gpu_assignment(config: ReleaseConfig) -> None:
     overlap = sorted(set(server_devices) & set(asr_devices))
     if overlap:
         raise ValueError(
-            "ASR and Gander CUDA assignments overlap: " + ", ".join(overlap)
+            "ASR and GNSIS CUDA assignments overlap: " + ", ".join(overlap)
         )
     if config.asr.device_index >= len(asr_devices):
         raise ValueError("asr.device_index is outside asr.cuda_visible_devices")
@@ -470,7 +470,7 @@ def build_app(config: ReleaseConfig):
 
     from .codex_coordinator import CodexCoordinator, CodexCoordinatorConfig
     from .contracts import storage_key
-    from .gateway import GanderGateway, ProviderRegistry
+    from .gateway import GNSISGateway, ProviderRegistry
     from .memory_provider import HttpMemoryProvider
     from .online_duplex import OnlineDuplexSettings, create_online_duplex_app
     from .providers import ProviderBuildContext, builtin_provider_registry
@@ -551,7 +551,7 @@ def build_app(config: ReleaseConfig):
         else None
     )
 
-    def gateway_factory(session_id: str) -> GanderGateway:
+    def gateway_factory(session_id: str) -> GNSISGateway:
         session_key = storage_key(session_id)
         ledger_dir.mkdir(parents=True, exist_ok=True)
         ledger = TaskLedger(ledger_dir / f"{session_key}.sqlite")
@@ -587,7 +587,7 @@ def build_app(config: ReleaseConfig):
             if server.mode == "coordinator"
             else None
         )
-        return GanderGateway(
+        return GNSISGateway(
             coordinator=coordinator,
             providers=providers,
             ledger=ledger,
@@ -612,7 +612,7 @@ def build_app(config: ReleaseConfig):
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Serve the complete Gander runtime")
+    parser = argparse.ArgumentParser(description="Serve the complete GNSIS runtime")
     parser.add_argument("--config", required=True)
     parser.add_argument(
         "--check-config",

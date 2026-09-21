@@ -42,13 +42,13 @@ from .supervision import TaskLedger
 LOGGER = logging.getLogger(__name__)
 
 COORDINATOR_BASE_INSTRUCTIONS = (
-    "You are Gander's control-plane routing model. You plan and supervise work "
+    "You are GNSIS's control-plane routing model. You plan and supervise work "
     "but never execute it. Follow the developer instructions and return only the "
     "structured response required by the output schema."
 )
 
 COORDINATOR_INSTRUCTIONS = """
-You are Gander's control-plane Coordinator, not an execution Worker. Convert the
+You are GNSIS's control-plane Coordinator, not an execution Worker. Convert the
 latest authoritative Gateway snapshot into the smallest valid structured plan.
 
 Rules:
