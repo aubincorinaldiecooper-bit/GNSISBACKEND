@@ -339,7 +339,7 @@ def modal_live_status(smoke: bool = False) -> dict:
 
 @celery_app.task(name="gnsis.ornith_status")
 def ornith_status() -> dict:
-    """Return the deployed address of the brain the live runtime calls.
+    """Return the deployed address of the optional Ornith action layer.
 
     No smoke option: asking Ornith anything needs the API key, and that key
     lives in the Modal secret the GPU container receives, not on this worker.
@@ -356,7 +356,7 @@ def ornith_status() -> dict:
 
 @celery_app.task(name="gnsis.deploy_ornith_brain")
 def deploy_ornith_brain() -> dict:
-    """Explicitly publish Ornith from the GNSIS worker, then report its address.
+    """Explicitly publish the optional Ornith action layer, then report its address.
 
     Like the runtime's own, never wired to startup or a schedule. It does not
     repoint the runtime: that is a configuration change plus a redeploy of the
