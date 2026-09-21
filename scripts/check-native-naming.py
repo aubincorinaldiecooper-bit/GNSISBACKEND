@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 
+# Current-tree guard: both tracked paths and file contents are checked.
 FORBIDDEN = (
     "".join(chr(n) for n in (103, 97, 110, 100, 101, 114)),
     "".join(chr(n) for n in (99, 108, 105, 112, 105, 116)),
