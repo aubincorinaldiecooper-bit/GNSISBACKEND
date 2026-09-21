@@ -1,8 +1,8 @@
-# The live runtime as modal/gander.py deploys it: MiniCPM-o 4.5 with the
-# Gander Thinker checkpoint on the model volume, and the Ornith worker on its
-# own Modal app. The model paths, the volume and the secret are external
-# prerequisites, unchanged from CLIPIT's clipit-video-search.yaml. See
-# docs/live_runtime.md.
+# GNSIS live MVP: MiniCPM-o 4.5 with the Gander Thinker checkpoint on the
+# model volume. This release is deliberately perception-only: Gander handles
+# realtime vision/duplex directly and has no external action/worker provider.
+# Ornith remains available in the repository for a later action-layer phase,
+# but it is not a dependency of this MVP. See docs/live_runtime.md.
 
 model:
   model_name_or_path: /models/MiniCPM-o-4_5
@@ -36,6 +36,7 @@ duplex:
   allow_client_video: true
   client_video_mode: omni
   client_video_sources:
+    - camera
     - screen
   vision_max_slice_nums: 1
   vision_batch_feed: false
@@ -46,14 +47,7 @@ duplex:
   top_k: 20
   warm_first_unit: true
 
+# The MVP has no action layer. Native task tools remain protocol-compatible,
+# but there is intentionally no worker to dispatch them to.
 worker:
-  provider: ornith
-  cwd: /workspace
-  profile: full
-  settings:
-    base_url: https://aubincorinaldiecooper--clipit-ornith-brain-v2-ornith-server-v2.modal.run
-    model: ornith
-    api_key_env: ORNITH_API_KEY
-    timeout_sec: 120
-    temperature: 0.2
-    max_tokens: 1536
+  provider: none

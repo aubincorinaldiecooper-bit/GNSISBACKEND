@@ -710,3 +710,14 @@ def test_end_says_stop_rather_than_dropping_the_socket(harness):
     # Bounded: a server that never answers must not strand a live camera.
     stop_block = source.split("type: 'stop'")[0]
     assert "setTimeout(resolve" in stop_block
+
+
+def test_gnsis_live_mvp_has_no_external_worker_dependency():
+    """The deployable MVP is Gander perception itself, not the Ornith action layer."""
+
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "gnsis-live.yaml"
+    document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert document["worker"] == {"provider": "none"}
+    assert document["duplex"]["allow_client_video"] is True
+    assert document["duplex"]["media_mode"] == "omni"
+    assert set(document["duplex"]["client_video_sources"]) == {"camera", "screen"}
