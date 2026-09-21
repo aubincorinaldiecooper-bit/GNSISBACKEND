@@ -2,7 +2,7 @@
 
 A build/deploy-time tool, not a service. The URL is stable, so the code only
 has to be made when it changes, and nothing needs to carry a QR dependency
-into the serving image: `pip install gander-runtime[qr]` where you generate it.
+into the serving image: `pip install gnsis-live-runtime[qr]` where you generate it.
 
 The one piece of judgement here is `public_live_url`. A QR code is a thing
 people print, photograph and pass around, and whatever is inside it is
@@ -164,7 +164,7 @@ def render(url: str, out: Path, *, size: int = 1024) -> Path:
         import segno
     except ModuleNotFoundError as missing:  # pragma: no cover - depends on env
         raise SystemExit(
-            "QR generation needs segno: pip install 'gander-runtime[qr]'"
+            "QR generation needs segno: pip install 'gnsis-live-runtime[qr]'"
         ) from missing
 
     out.parent.mkdir(parents=True, exist_ok=True)

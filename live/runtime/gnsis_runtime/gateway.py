@@ -246,7 +246,7 @@ class WorkerControl:
 
     def __init__(
         self,
-        gateway: GanderGateway,
+        gateway: GNSISGateway,
         task_id: str,
         run_id: str,
         capabilities: BackendCapabilities,
@@ -845,7 +845,7 @@ class WorkerRunChannel:
             metadata={"worker_message": True},
         )
 
-class GanderGateway:
+class GNSISGateway:
     """Persistent Coordinator, ledger, supervision, and project scheduler."""
 
     def __init__(
@@ -1171,7 +1171,7 @@ class GanderGateway:
             return
         job = asyncio.create_task(
             self._run_coordination(owner_id),
-            name=f"gander-coordination-{owner_id}",
+            name=f"gnsis-coordination-{owner_id}",
         )
         self._coordination_jobs[owner_id] = job
         self._auxiliary_jobs.add(job)
@@ -3799,7 +3799,7 @@ class GanderGateway:
             return
         job = asyncio.create_task(
             self._dispatch(task_id, run),
-            name=f"gander-task-{task_id}",
+            name=f"gnsis-task-{task_id}",
         )
         self._task_jobs[task_id] = job
 
@@ -4238,7 +4238,7 @@ class GanderGateway:
 
         job = asyncio.create_task(
             wait_and_flush(),
-            name=f"gander-aggregate-{aggregate.aggregate_id}",
+            name=f"gnsis-aggregate-{aggregate.aggregate_id}",
         )
         self._aggregate_jobs[aggregate.aggregate_id] = job
         self._auxiliary_jobs.add(job)
