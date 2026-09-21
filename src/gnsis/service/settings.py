@@ -55,23 +55,23 @@ class Settings:
     openrouter_api_key: Optional[str] = None
 
     # Modal compute is owned by the Railway worker. These are the same workspace
-    # credentials Clipit's worker used: GNSIS holds them at runtime and uses
+    # credentials GNSIS's worker used: GNSIS holds them at runtime and uses
     # Modal as an execution provider rather than making GitHub Actions the
     # production credential holder.
     modal_token_id: Optional[str] = None
     modal_token_secret: Optional[str] = None
     modal_environment: str = "main"
-    gander_modal_app_name: str = "gnsis-live"
-    gander_modal_function_name: str = "gander_server"
-    gander_models_volume: str = "clipit-gander-weights"
-    # One secret, both sides of the same call: the runtime reads ORNITH_API_KEY
-    # from it to reach Ornith, and Ornith reads the same value to require it.
-    gander_secret_name: str = "clipit-gander-ornith"
-    # Ornith is the brain the live runtime asks for tasks. It deploys under a
+    live_modal_app_name: str = "gnsis-live"
+    live_modal_function_name: str = "gnsis_live_server"
+    live_models_volume: str = "gnsis-models"
+    # Reserved for the optional Ornith action layer; the live perception MVP
+    # does not receive or require this secret.
+    ornith_secret_name: str = "gnsis-ornith-auth"
+    # Ornith is the optional action layer. It deploys under a
     # name of its own so a deploy from here never replaces the service that is
     # already running; see modal/ornith.py and docs/live_runtime.md.
     ornith_modal_app_name: str = "gnsis-ornith"
-    ornith_cache_volume: str = "clipit-ornith-cache"
+    ornith_cache_volume: str = "gnsis-ornith-cache"
 
     # GitHub App — the platform-owned credentials. The App id + private key are
     # used to mint short-lived installation tokens per run. The global
@@ -448,12 +448,12 @@ class Settings:
             modal_token_id=os.environ.get("MODAL_TOKEN_ID"),
             modal_token_secret=os.environ.get("MODAL_TOKEN_SECRET"),
             modal_environment=os.environ.get("MODAL_ENVIRONMENT", "main"),
-            gander_modal_app_name=os.environ.get("GANDER_MODAL_APP_NAME", "gnsis-live"),
-            gander_modal_function_name=os.environ.get("GANDER_MODAL_FUNCTION_NAME", "gander_server"),
-            gander_models_volume=os.environ.get("GANDER_MODELS_VOLUME", "clipit-gander-weights"),
-            gander_secret_name=os.environ.get("GANDER_SECRET_NAME", "clipit-gander-ornith"),
+            live_modal_app_name=os.environ.get("GNSIS_LIVE_MODAL_APP_NAME", "gnsis-live"),
+            live_modal_function_name=os.environ.get("GNSIS_LIVE_MODAL_FUNCTION_NAME", "gnsis_live_server"),
+            live_models_volume=os.environ.get("GNSIS_LIVE_MODELS_VOLUME", "gnsis-models"),
+            ornith_secret_name=os.environ.get("ORNITH_SECRET_NAME", "gnsis-ornith-auth"),
             ornith_modal_app_name=os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith"),
-            ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "clipit-ornith-cache"),
+            ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "gnsis-ornith-cache"),
             github_app_id=os.environ.get("GITHUB_APP_ID"),
             github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY"),
             github_app_installation_id=os.environ.get("GITHUB_APP_INSTALLATION_ID"),

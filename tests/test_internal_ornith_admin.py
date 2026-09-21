@@ -1,6 +1,6 @@
 """The internal routes that publish and locate Ornith, the live runtime's brain.
 
-Same boundary as the Gander routes: the API holds no Modal credentials, it only
+Same boundary as the GNSIS routes: the API holds no Modal credentials, it only
 puts work on the worker's queue, and publishing needs the app named back.
 """
 

@@ -1,0 +1,723 @@
+"""The /live phone surface, and what a server needs in order to boot.
+
+A note on what half of these prove. The config tests run the real
+`preflight_config` and `load_config`, so they hold actual behaviour. The client
+tests read `live.js` as text and assert on what is in it, because this suite
+has no browser: they will catch the protocol mistakes coming back, which is
+what they are for, but they cannot tell you the page works. Only driving it in
+a browser does that, and a real device does it properly.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+from starlette.testclient import TestClient
+
+from starlette.websockets import WebSocketDisconnect
+
+from test_duplex_lifecycle import _drain_until, _jpeg, _settle, connect
+from test_live_camera_privacy import _camera_header
+
+
+def test_live_page_is_served(harness):
+    h = harness()
+    with TestClient(h.app) as client:
+        page = client.get("/live")
+        assert page.status_code == 200
+        assert "text/html" in page.headers["content-type"]
+        body = page.text
+        # The statement, in the guideline's words.
+        assert "Let it see what you see." in body
+        # The page must not promise a working session before the server has
+        # confirmed a frame: "Session ready" lives in the script, not the page.
+        assert "Session ready" not in body
+
+
+def test_both_doors_are_in_the_page(harness):
+    """A QR is useless on the device you would scan it with.
+
+    Which one is shown is a CSS decision about pointer type, so both have to be
+    present in the markup; the test that they are is the only part a server
+    test can hold.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        body = client.get("/live").text
+    assert "Scan with your phone" in body
+    assert 'id="start"' in body
+    # And neither door is locked: a desktop with a webcam can still opt in.
+    assert 'id="useThis"' in body
+
+
+def test_permission_is_asked_in_our_own_words_first(harness):
+    """The sheet exists so the native prompt is never the first thing seen."""
+
+    h = harness()
+    with TestClient(h.app) as client:
+        body = client.get("/live").text
+        source = client.get("/assets/live.js").text
+    assert 'id="permission"' in body
+    assert "Allow camera and microphone" in body
+    # Refusing must stay cheap, which means a way out that is not the browser's.
+    assert 'id="cancel"' in body
+    # Start must not reach for the camera itself: the native prompt belongs to
+    # Allow, or the sheet is decoration over a prompt that already fired.
+    start_handler = source.split("ui.start.addEventListener")[1].split("\n")[0]
+    assert "ask" in start_handler
+    assert "getUserMedia" not in start_handler
+
+
+def test_the_view_is_blurred_while_permission_is_still_being_asked(harness):
+    """Nothing behind the question stays sharp until the question is answered.
+
+    Asserted on the stylesheet rather than on a render, because this suite has
+    no browser. What it can hold is the part that silently rots: the plain
+    property alone does nothing in Safari, which is most of the phones this
+    page is for, so the prefix is the half that has to be here.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        sheet = client.get("/assets/live.css").text.split(".sheet {")[1].split("}")[0]
+    # Matched per declaration, not as a substring of the block: the prefixed
+    # property contains the plain one, so `"backdrop-filter: blur(" in sheet`
+    # passes with the plain property deleted. It did.
+    declared = {
+        line.strip().split(":")[0].strip()
+        for line in sheet.splitlines()
+        if ":" in line and not line.strip().startswith(("/*", "*"))
+    }
+    assert "backdrop-filter" in declared
+    assert "-webkit-backdrop-filter" in declared
+
+
+def test_the_headline_arrives_word_by_word_and_is_still_a_sentence(harness):
+    """Spell UI's WordsStagger, ported: each word from faded, 10px low and
+    blurred to rest over 0.5s, 0.1s apart. The values are the upstream ones.
+
+    Text assertions, because this suite has no browser. What they hold is the
+    part that would rot quietly: the sentence must stay in the markup (a page
+    whose script never ran still says it), the words must be separated by real
+    spaces rather than glued into flex items (so it reads and wraps as one
+    sentence), and reduced motion must switch the whole thing off.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        body = client.get("/live").text
+        css = client.get("/assets/live.css").text
+        source = client.get("/assets/live.js").text
+    # The words live in the markup, not the script.
+    assert "Let it see what you see." in body
+    assert "Let it see what you see." not in source
+    # Upstream's recipe, verbatim.
+    keyframes = css.split("@keyframes word-in")[1].split("}\n}")[0]
+    assert "opacity: 0" in keyframes
+    assert "translateY(10px)" in keyframes
+    assert "blur(10px)" in keyframes
+    rule = css.split(".headline.stagger .word {")[1].split("}")[0]
+    assert "0.5s ease-out" in rule
+    assert "--word-stagger: 0.1s" in rule
+    # A real space between words, so the sentence stays one sentence.
+    assert "heading.append(' ')" in source
+    # Reduced motion turns it off rather than merely speeding it up.
+    # Up to the block's own closing brace, not the first rule's.
+    reduced = css.split("prefers-reduced-motion: reduce")[1].split("\n}")[0]
+    assert ".headline.stagger .word { animation: none; }" in reduced
+
+
+def test_the_qr_encodes_this_server_not_a_caller_supplied_url(harness):
+    """A QR generator that draws any URL you hand it is a phishing tool.
+
+    Served from your domain, pointing wherever the requester liked. The address
+    is derived from the request instead, so the query string cannot steer it.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        hijack = client.get(
+            "/live/qr.svg?url=https://evil.example/steal",
+            headers={"host": "genesis.example", "x-forwarded-proto": "https"},
+        )
+    assert hijack.status_code in {200, 501}
+    if hijack.status_code == 200:
+        assert b"evil.example" not in hijack.content
+        # The code names its own address, and it is this server's.
+        assert b'aria-label="QR code for https://genesis.example/live"' in hijack.content
+        # Spell UI's treatment: dots, not squares.
+        assert b"<circle " in hijack.content
+
+
+def test_the_qr_refuses_an_origin_where_the_camera_cannot_work(harness):
+    """Plain http off localhost: browsers refuse getUserMedia there.
+
+    A poster pointing at such an address sends people to a page that cannot
+    even ask for the camera, so it is better to render nothing than that.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        answer = client.get(
+            "/live/qr.svg",
+            headers={"host": "genesis.example", "x-forwarded-proto": "http"},
+        )
+    assert answer.status_code == 409
+    assert "insecure" in answer.text.lower()
+
+
+@pytest.mark.parametrize(
+    "path,kind",
+    [
+        ("/assets/live.js", "javascript"),
+        ("/assets/live.css", "css"),
+        # Reused as-is rather than reimplemented for the phone.
+        ("/assets/mic-worklet.js", "javascript"),
+    ],
+)
+def test_live_assets_are_served(harness, path, kind):
+    h = harness()
+    with TestClient(h.app) as client:
+        asset = client.get(path)
+        assert asset.status_code == 200
+        assert kind in asset.headers["content-type"]
+
+
+@pytest.mark.parametrize(
+    "name,kind",
+    [
+        ("Roboto.woff2", "font/woff2"),
+        ("RobotoCondensed-800.woff2", "font/woff2"),
+        ("gnsis-flat.svg", "image/svg+xml"),
+        ("gnsis-mark.svg", "image/svg+xml"),
+        ("gnsis-mark-white.svg", "image/svg+xml"),
+        ("orbit.svg", "image/svg+xml"),
+        # The two vendored libraries, as modules, with their licences.
+        ("web-haptics.mjs", "text/javascript"),
+        ("web-haptics-core.mjs", "text/javascript"),
+        ("torph.mjs", "text/javascript"),
+        # Every licence travels with what it covers.
+        ("OFL-Roboto.txt", "text/plain"),
+        ("OFL-RobotoCondensed.txt", "text/plain"),
+        ("LICENSE-web-haptics.txt", "text/plain"),
+        ("LICENSE-torph.txt", "text/plain"),
+    ],
+)
+def test_the_brands_files_are_served(harness, name, kind):
+    h = harness()
+    with TestClient(h.app) as client:
+        asset = client.get(f"/assets/live/{name}")
+        assert asset.status_code == 200
+        assert kind in asset.headers["content-type"]
+        assert len(asset.content) > 100
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/assets/live/nope.svg",            # not there
+        "/assets/live/live.css",            # there, but not in this folder
+        "/assets/live/..",                  # not a file name
+        "/assets/live/.hidden",             # hidden
+        "/assets/live/..%2Flive.html",      # a slash, however it is spelled
+    ],
+)
+def test_the_brand_route_serves_only_that_folder(harness, path):
+    h = harness()
+    with TestClient(h.app) as client:
+        assert client.get(path).status_code == 404
+
+
+def test_the_brands_files_ship_with_the_package():
+    """A folder the wheel leaves behind is a page with no fonts and no mark."""
+
+    from mcpmft.infer.web import STATIC_DIR
+
+    static = Path(STATIC_DIR)
+    pyproject = static.parents[2] / "pyproject.toml"
+    assert '"static/live/*"' in pyproject.read_text()
+    assert (static / "live" / "gnsis-flat.svg").is_file()
+
+
+def test_haptics_and_the_morph_are_optional_and_the_switch_is_real(harness):
+    """Two vendored libraries, neither of which the page may depend on.
+
+    Both are loaded with a dynamic import inside a try, so a missing or broken
+    file leaves the page working and merely silent to the hand. The switch is
+    a real input the person can turn off, and off means nothing is triggered.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        body = client.get("/live").text
+        source = client.get("/assets/live.js").text
+    assert "import('/assets/live/web-haptics.mjs')" in source
+    assert "import('/assets/live/torph.mjs')" in source
+    # No static import: the page must not fail to load over a helper.
+    assert not [line for line in source.splitlines() if line.startswith("import ")]
+    assert 'id="haptics"' in body
+    assert "if (!this.engine || !this.enabled) return;" in source
+
+
+def test_gnsis_has_a_bounded_semantic_haptic_output_tool():
+    """The model chooses meaning; it never gets access to raw vibration timing."""
+
+    from gnsis_runtime.online_duplex import (
+        MODEL_HAPTIC_CUES,
+        _model_tool_schemas,
+        _split_model_haptics,
+    )
+
+    runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=()))
+    schemas = _model_tool_schemas(runtime)
+    haptic = next(schema for schema in schemas if schema["name"] == "haptic")
+    assert tuple(haptic["parameters"]["properties"]["cue"]["enum"]) == MODEL_HAPTIC_CUES
+    assert haptic["parameters"]["additionalProperties"] is False
+    assert not any(
+        name in haptic["parameters"]["properties"]
+        for name in ("duration", "frequency", "pattern", "intensity")
+    )
+
+    event = SimpleNamespace(
+        is_tool_call=True,
+        tool_error=None,
+        tool_calls=[{"name": "haptic", "arguments": {"cue": "confirmation"}}],
+    )
+    split = _split_model_haptics(event)
+    assert split.cues == (
+        {"type": "haptic.cue", "cue": "confirmation", "source": "model"},
+    )
+    assert split.remainder is None and split.rejected is None
+
+
+def test_haptic_is_reserved_for_the_runtime():
+    """A deployment cannot replace the safe semantic haptic contract."""
+
+    from gnsis_runtime.online_duplex import _model_tool_schemas
+
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(
+            tool_schemas=(
+                {
+                    "name": "haptic",
+                    "description": "unsafe replacement",
+                    "parameters": {"type": "object"},
+                },
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="reserved"):
+        _model_tool_schemas(runtime)
+
+
+def test_the_built_in_tool_does_not_consume_the_configured_schema_budget():
+    """Three business tools beside the three task tools filled the budget of six.
+
+    Appending `haptic` made seven, and a deployment that had always started
+    refused to (an earlier regression). The runtime's own tools now sit outside
+    the configured budget: one slot each, and exactly the tokens their schemas
+    render to, measured the way the model core measures them.
+    """
+
+    from dataclasses import dataclass
+
+    from mcpmft.tool_protocol import (
+        ToolProtocolError,
+        compact_json,
+        ensure_lean_task_tools,
+        normalize_tool_schema,
+        validate_realtime_tool_context,
+    )
+
+    from gnsis_runtime.online_duplex import (
+        MODEL_HAPTIC_TOOL_SCHEMA,
+        _model_tool_schemas,
+        _reserve_built_in_tools,
+    )
+
+    class Tokenizer:
+        def encode(self, text, add_special_tokens=False):
+            return list(text)
+
+    @dataclass
+    class Params:
+        max_tool_schemas: int = 6
+        max_tool_schema_tokens: int = 0
+
+    business = [
+        {"name": f"tool_{n}", "description": "d", "parameters": {"type": "object"}}
+        for n in range(3)
+    ]
+    # A deployment exactly at the old limit: six tools, and a token budget
+    # that fits them and not one character more.
+    six = ensure_lean_task_tools(business)
+    budget = len("\n".join(compact_json(tool) for tool in six))
+    tokenizer = Tokenizer()
+    validate_realtime_tool_context(six, tokenizer, max_tools=6, max_schema_tokens=budget)
+
+    runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=tuple(business)))
+    seven = _model_tool_schemas(runtime)
+    assert [tool["name"] for tool in seven] == [
+        "tool_0", "tool_1", "tool_2", "haptic", "task_start", "task_send", "task_resolve",
+    ]
+    with pytest.raises(ToolProtocolError, match="exposes 7 tools; maximum is 6"):
+        validate_realtime_tool_context(seven, tokenizer, max_tools=6, max_schema_tokens=budget)
+
+    reserved = _reserve_built_in_tools(
+        Params(max_tool_schema_tokens=budget), SimpleNamespace(tokenizer=tokenizer)
+    )
+    haptic = compact_json(normalize_tool_schema(MODEL_HAPTIC_TOOL_SCHEMA))
+    assert reserved.max_tool_schemas == 7
+    assert reserved.max_tool_schema_tokens == budget + len(haptic) + 1
+    validate_realtime_tool_context(
+        seven,
+        tokenizer,
+        max_tools=reserved.max_tool_schemas,
+        max_schema_tokens=reserved.max_tool_schema_tokens,
+    )
+
+    # A bundle with no tokenizer cannot check tokens, so only the slot is reserved;
+    # a params stub without the fields is left alone.
+    count_only = _reserve_built_in_tools(Params(max_tool_schema_tokens=budget), SimpleNamespace())
+    assert (count_only.max_tool_schemas, count_only.max_tool_schema_tokens) == (7, budget)
+    stub = SimpleNamespace(chunk_ms=1000)
+    assert _reserve_built_in_tools(stub, SimpleNamespace()) is stub
+
+
+def test_the_app_reserves_its_built_in_tools_when_it_is_built(harness, monkeypatch):
+    """The reservation is worthless unless the app applies it to the params it runs on."""
+
+    from gnsis_runtime import online_duplex
+
+    seen = []
+    real = online_duplex._reserve_built_in_tools
+
+    def spy(params, bundle):
+        seen.append((params, bundle))
+        return real(params, bundle)
+
+    monkeypatch.setattr(online_duplex, "_reserve_built_in_tools", spy)
+    harness()
+    assert len(seen) == 1
+
+
+def test_a_haptic_beside_another_call_is_lifted_out_and_the_rest_goes_on():
+    """The model may put touch beside a task call in one unit.
+
+    Taken whole, the coordinator refused that batch as mixed, so the cue was
+    never felt and the other call was thrown away with it (Codex on GNSIS
+    #159). Now the cue goes to the phone and the other call goes on alone.
+    """
+
+    from gnsis_runtime.online_duplex import _split_model_haptics
+
+    task = {"name": "task_send", "arguments": {"task_id": "t1", "text": "look left"}}
+    event = SimpleNamespace(
+        index=7,
+        is_tool_call=True,
+        tool_error=None,
+        tool_calls=[{"name": "haptic", "arguments": {"cue": "attention"}}, task],
+        metrics={},
+    )
+    split = _split_model_haptics(event)
+    assert split.cues == ({"type": "haptic.cue", "cue": "attention", "source": "model"},)
+    assert split.rejected is None
+    assert split.remainder is not event
+    assert split.remainder.tool_calls == [task]
+    assert split.remainder.index == 7 and split.remainder.is_tool_call
+    # The original event is not touched.
+    assert len(event.tool_calls) == 2
+
+
+def test_a_unit_without_touch_passes_through_untouched():
+    from gnsis_runtime.online_duplex import _split_model_haptics
+
+    plain = SimpleNamespace(is_tool_call=False, tool_error=None, tool_calls=[], text="hi")
+    assert _split_model_haptics(plain).remainder is plain
+    other = SimpleNamespace(
+        is_tool_call=True, tool_error=None, tool_calls=[{"name": "task_send", "arguments": {}}]
+    )
+    split = _split_model_haptics(other)
+    assert split.remainder is other and split.cues == () and split.rejected is None
+    errored = SimpleNamespace(
+        is_tool_call=True,
+        tool_error="a previous tool call is still awaiting its response",
+        tool_calls=[],
+    )
+    assert _split_model_haptics(errored).remainder is errored
+
+
+def test_a_malformed_haptic_call_is_refused_not_forwarded():
+    """A call named haptic that names no cue must never travel on as an external tool."""
+
+    from gnsis_runtime.online_duplex import _split_model_haptics
+
+    event = SimpleNamespace(
+        is_tool_call=True,
+        tool_error=None,
+        tool_calls=[
+            {"name": "haptic", "arguments": {"cue": "buzz"}},
+            {"name": "task_send", "arguments": {}},
+        ],
+    )
+    split = _split_model_haptics(event)
+    assert split.remainder is None and split.cues == ()
+    assert split.rejected.startswith("haptic cue must be one of ")
+
+
+def test_the_phone_renders_model_haptics_as_device_presets(harness):
+    """The websocket carries semantics and the browser owns the physical feel."""
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+
+    assert "case 'haptic.cue':" in source
+    assert "attention: 'medium'" in source
+    assert "proximity: 'selection'" in source
+    assert "confirmation: 'success'" in source
+    assert "warning: 'warning'" in source
+    assert "lastModelHapticAt" in source
+    assert "performance.now() - live.lastModelHapticAt < 750" in source
+
+
+def test_a_long_status_wraps_instead_of_leaving_the_screen(harness):
+    """torph keeps a morph on one line with a rule it injects after ours.
+
+    On a 320px phone the busy message then runs to x=371 and the page's
+    overflow: hidden cuts off the half that says what to do. Caught by Codex
+    on #158, reproduced in a browser. The pill wraps instead, and it has to
+    be `!important`: the library's rule arrives later and keys on its own
+    attribute name, so specificity alone is a bet on that name.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        css = client.get("/assets/live.css").text
+    pill = css.split(".status {")[1].split("}")[0]
+    assert "white-space: normal !important" in pill
+    assert "max-width: 100%" in pill
+
+
+def test_the_phone_client_asks_for_the_rear_camera(harness):
+    """Someone pointing a phone at a thing wants the lens on the far side."""
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+    assert "facingMode: { ideal: 'environment' }" in source
+    # `ideal`, not `exact`: a laptop with only a front camera must still work,
+    # and `exact` makes the browser throw rather than fall back.
+    assert "exact:" not in source
+
+
+def _config(tmp_path, provider: str, name: str, **duplex) -> str:
+    """A release config whose worker, if it has one, cannot be satisfied."""
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(exist_ok=True)
+    checkpoint = tmp_path / "duplex.pt"
+    checkpoint.write_bytes(b"")
+    document = {
+        "model": {"model_name_or_path": str(model_dir)},
+        "duplex": {"checkpoint": str(checkpoint), **duplex},
+        "server": {"mode": "lean"},
+        "worker": {
+            "provider": provider,
+            "cwd": str(tmp_path / "nowhere"),
+            "settings": {"codex_bin": str(tmp_path / "no-such-codex")},
+        },
+    }
+    path = tmp_path / f"{name}.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return str(path)
+
+
+def test_a_server_with_no_action_layer_boots_without_codex(tmp_path):
+    """`worker.provider: none` is how a deployment says it has no action layer.
+
+    The direct camera experience does not dispatch work, and a stock config
+    names Codex, so it refused to boot over a binary it would never call.
+    """
+
+    from gnsis_runtime.cli import load_config, preflight_config
+
+    preflight_config(load_config(_config(tmp_path, "none", "none")))
+
+
+def test_a_configured_worker_is_still_demanded(tmp_path):
+    """Naming a provider still means it has to be there.
+
+    This is the correction to the first attempt, which keyed off `server.mode`
+    on the theory that lean mode never dispatches. It does: `task_start`,
+    `task_send` and `task_resolve` are native tools the model can call, and
+    `gateway.task_start` resolves a provider itself. An empty registry would
+    have refused every one of them with `no_eligible_worker`. Caught by Codex.
+    """
+
+    from gnsis_runtime.cli import load_config, preflight_config
+
+    with pytest.raises(Exception) as raised:
+        preflight_config(load_config(_config(tmp_path, "codex", "codex")))
+    assert "worker" in str(raised.value).lower()
+
+
+def test_the_camera_opt_in_can_actually_be_set(tmp_path):
+    """An opt-in no deployment can reach is not an opt-in.
+
+    `persist_camera_frames` lived only on the Python settings object; unknown
+    YAML keys are rejected and nothing forwarded a value, so every real
+    `gnsis-live-serve` was stuck at false whatever its operator wanted. Caught by
+    Codex.
+    """
+
+    from gnsis_runtime.cli import _duplex_settings, load_config
+
+    config = load_config(
+        _config(tmp_path, "none", "optin", persist_camera_frames=True)
+    )
+    assert config.duplex.persist_camera_frames is True
+    # And off unless asked, which is the half that matters for a public QR.
+    assert load_config(
+        _config(tmp_path, "none", "default")
+    ).duplex.persist_camera_frames is False
+
+    # Parsing the key is only half of reachable. The value has to survive the
+    # trip into the runtime's own settings, and `build_app` loads a model, so
+    # that mapping is tested through the function split out of it. Without
+    # this the forwarding line could be deleted and every test still passed —
+    # which is exactly what happened, and what the commit message claimed had
+    # been ruled out.
+    assert _duplex_settings(config).persist_camera_frames is True
+    assert (
+        _duplex_settings(
+            load_config(_config(tmp_path, "none", "default2"))
+        ).persist_camera_frames
+        is False
+    )
+
+
+def test_the_client_negotiates_camera_mode_before_opening_the_screen(harness):
+    """A session starts in voice mode and refuses every frame while it is.
+
+    Opening /ws/screen first looks like it works and then waits for a frame
+    that will never be accepted. Caught by Codex.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+    assert "'media.mode'" in source
+    assert "media.mode.done" in source
+    # The screen socket is attached from the mode acknowledgement, not from
+    # `ready`. If `attachScreen` moves back under `ready`, this fails.
+    after_ready = source.split("case 'ready':")[1].split("case 'media.mode.done'")[0]
+    assert "attachScreen" not in after_ready
+
+
+def _answer(ws, wanted: str) -> dict:
+    """`_drain_until`, except a fatal `error` fails now rather than never."""
+
+    for _ in range(20):
+        message = ws.receive_json()
+        if message.get("type") == wanted:
+            return message
+        if message.get("type") == "error" and message.get("fatal"):
+            raise AssertionError(f"fatal error before {wanted!r}: {message.get('message')}")
+    raise AssertionError(f"never received {wanted!r}")
+
+
+def test_a_voice_session_takes_camera_frames_only_after_media_mode(harness):
+    """The server side of the phone client's handshake, which nothing tested.
+
+    A session starts in voice mode, and a screen channel attached while it is
+    in voice mode is refused and closed. The client therefore asks for video
+    with `media.mode`, waits for `media.mode.done`, and only then attaches
+    (the fix Codex asked for). This pins the server that fix was written
+    against, in that order.
+
+    It also pins the harness. Driving the real page in a browser against this
+    suite's stubs, the `media.mode` request was answered with a fatal error
+    naming a params field the stub did not have. Every test was green because
+    none of them made the request. This one does, so the stub has to be whole.
+    """
+
+    # The public-QR shape: lean, voice to begin with, client video allowed.
+    h = harness(allow_client_video=True, provider_name=None)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            ready = _settle(ws)
+            screen = ready["screen"]
+            assert screen["enabled"] is True
+            attach = f"/ws/screen?session_id={ready['session_id']}&token={screen['token']}"
+
+            # Attached too early: told why, and closed. This is the behaviour
+            # that makes negotiating first necessary rather than polite.
+            with connect(client, attach) as early:
+                refused = early.receive_json()
+                assert refused["type"] == "error"
+                assert "voice" in refused["message"]
+                with pytest.raises(WebSocketDisconnect):
+                    early.receive_json()
+
+            ws.send_json({"type": "media.mode", "video": True, "source": "camera"})
+            done = _answer(ws, "media.mode.done")
+            assert done["video"] is True
+            assert done["source"] == "camera"
+
+            # Attached after: ready, and a camera frame is seen.
+            with connect(client, attach) as screen_ws:
+                _drain_until(screen_ws, "screen.ready")
+                screen_ws.send_text(json.dumps(_camera_header("f1")))
+                screen_ws.send_bytes(_jpeg())
+                accepted = _drain_until(screen_ws, "screen.frame.accepted")
+                assert accepted["frame_id"] == "f1"
+    # And, lean, nothing kept.
+    written = [p for p in h.media_dir.rglob("*") if p.is_file()] if h.media_dir.exists() else []
+    assert written == []
+
+
+def test_the_client_renders_model_chunks(harness):
+    """`turn.final.accepted` carries no text; `chunk` does.
+
+    Reading the wrong one left the page silent whenever speech was off.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+    assert "case 'chunk':" in source
+    assert "case 'turn.final.accepted':" not in source
+
+
+def test_end_says_stop_rather_than_dropping_the_socket(harness):
+    """An explicit stop is never parked; a dropped socket is.
+
+    Closing outright holds the single model slot for the whole reconnect
+    grace, so ending a session and scanning again told the next person Genesis
+    was busy — because of the session they had just ended. Caught by Codex.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+    assert "type: 'stop'" in source
+    assert "session.done" in source
+    # Bounded: a server that never answers must not strand a live camera.
+    stop_block = source.split("type: 'stop'")[0]
+    assert "setTimeout(resolve" in stop_block
+
+
+def test_gnsis_live_mvp_has_no_external_worker_dependency():
+    """The deployable MVP is GNSIS perception itself, not the Ornith action layer."""
+
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "gnsis-live.yaml"
+    document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert document["worker"] == {"provider": "none"}
+    assert document["duplex"]["allow_client_video"] is True
+    assert document["duplex"]["media_mode"] == "omni"
+    assert set(document["duplex"]["client_video_sources"]) == {"camera", "screen"}

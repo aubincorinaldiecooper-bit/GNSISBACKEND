@@ -324,22 +324,22 @@ def observe_customer_ci() -> str:
     return f"ci-observed:{observed}"
 
 
-@celery_app.task(name="gnsis.modal_gander_status")
-def modal_gander_status(smoke: bool = False) -> dict:
-    """Return the live Gander endpoint and optionally cold-start /health."""
+@celery_app.task(name="gnsis.modal_live_status")
+def modal_live_status(smoke: bool = False) -> dict:
+    """Return the live GNSIS endpoint and optionally cold-start /health."""
     from .modal_compute import from_settings
 
     compute = from_settings(get_settings())
-    url = compute.gander_web_url()
+    url = compute.live_web_url()
     result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
     if smoke:
-        result["health"] = compute.gander_health()
+        result["health"] = compute.live_health()
     return result
 
 
 @celery_app.task(name="gnsis.ornith_status")
 def ornith_status() -> dict:
-    """Return the deployed address of the brain the live runtime calls.
+    """Return the deployed address of the optional Ornith action layer.
 
     No smoke option: asking Ornith anything needs the API key, and that key
     lives in the Modal secret the GPU container receives, not on this worker.
@@ -356,7 +356,7 @@ def ornith_status() -> dict:
 
 @celery_app.task(name="gnsis.deploy_ornith_brain")
 def deploy_ornith_brain() -> dict:
-    """Explicitly publish Ornith from the GNSIS worker, then report its address.
+    """Explicitly publish the optional Ornith action layer, then report its address.
 
     Like the runtime's own, never wired to startup or a schedule. It does not
     repoint the runtime: that is a configuration change plus a redeploy of the
@@ -368,7 +368,7 @@ def deploy_ornith_brain() -> dict:
     compute = from_settings(s)
     compute.deploy_ornith(
         cache_volume=s.ornith_cache_volume,
-        secret_name=s.gander_secret_name,
+        secret_name=s.ornith_secret_name,
     )
     return {
         "url": compute.ornith_web_url(),
@@ -379,7 +379,7 @@ def deploy_ornith_brain() -> dict:
 
 @celery_app.task(name="gnsis.deploy_live_runtime")
 def deploy_live_runtime(smoke: bool = False) -> dict:
-    """Explicitly deploy Gander from the GNSIS worker, then verify it.
+    """Explicitly deploy GNSIS from the GNSIS worker, then verify it.
 
     This is intentionally not wired to worker startup or a periodic schedule.
     Production infrastructure changes only when this task is deliberately run.
@@ -388,12 +388,11 @@ def deploy_live_runtime(smoke: bool = False) -> dict:
 
     s = get_settings()
     compute = from_settings(s)
-    compute.deploy_gander(
-        models_volume=s.gander_models_volume,
-        secret_name=s.gander_secret_name,
+    compute.deploy_live(
+        models_volume=s.live_models_volume,
     )
-    url = compute.gander_web_url()
+    url = compute.live_web_url()
     result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
     if smoke:
-        result["health"] = compute.gander_health()
+        result["health"] = compute.live_health()
     return result

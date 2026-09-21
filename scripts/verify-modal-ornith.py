@@ -67,7 +67,7 @@ def main() -> int:
     url = url.rstrip("/")
     print(f"OK: {APP_NAME}/{FUNCTION_NAME} in {ENVIRONMENT} is served at {url}")
     print(
-        "Put this address in gander/configs/gnsis-live.yaml under worker.settings.base_url "
+        "Put this address in live/configs/gnsis-live.yaml under worker.settings.base_url "
         "and redeploy the live runtime to switch it over."
     )
 

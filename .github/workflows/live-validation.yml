@@ -1,0 +1,66 @@
+name: Live runtime validation
+
+# The runtime under live/ is a separate component from the GNSIS service: it
+# needs Python 3.10+, FastAPI and, in production, torch, none of which the
+# standard-library-only core wants. So it gets its own job, run only when it
+# changes, with the model stubbed exactly as the runtime's tests expect.
+
+on:
+  pull_request:
+    paths:
+      - 'live/**'
+      - 'modal/live.py'
+      - 'modal/ornith.py'
+      - 'scripts/verify-modal-live.py'
+      - 'scripts/verify-modal-ornith.py'
+      - '.github/workflows/live-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'live/**'
+      - 'modal/live.py'
+      - 'modal/ornith.py'
+      - 'scripts/verify-modal-live.py'
+      - 'scripts/verify-modal-ornith.py'
+      - '.github/workflows/live-validation.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce native repository naming
+        run: python scripts/check-native-naming.py
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install lightweight test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio fastapi httpx pillow pyyaml websockets "modal==1.5.0"
+          python -m pip install --no-deps -e ./live/minicpm_ft
+          python -m pip install --no-deps -e ./live/runtime
+
+      - name: Compile the vendored runtime
+        run: python -m compileall -q live/runtime/gnsis_runtime live/minicpm_ft/mcpmft
+
+      - name: Run the live runtime tests
+        run: pytest -q live/runtime/tests
+
+      # Importing the definition builds the app object without talking to
+      # Modal, so a wrong resource name, a renamed function or an API that
+      # this Modal version no longer has fails here, not on deploy day.
+      - name: Import the Modal definitions and compile the deploy checks
+        env:
+          GNSIS_LIVE_MODELS_VOLUME: placeholder-existing-volume
+        run: |
+          python -c "import runpy; m = runpy.run_path('modal/live.py'); assert m['app'].name == 'gnsis-live', m['app'].name; assert 'gnsis_live_server' in m"
+          python -m py_compile scripts/verify-modal-live.py
+          # The brain, under its own name. The assertion is what keeps a
+          # publish from this repository off the running legacy-ornith-service.
+          python -c "import runpy; m = runpy.run_path('modal/ornith.py'); assert m['app'].name == 'gnsis-ornith', m['app'].name; assert 'ornith_server_v2' in m"
+          python -m py_compile scripts/verify-modal-ornith.py
