@@ -319,7 +319,7 @@ class ClaimRequest(BaseModel):
     installation_id: int
 
 
-class GanderDeployRequest(BaseModel):
+class GNSISDeployRequest(BaseModel):
     # Deployment is destructive infrastructure mutation, so require an explicit
     # confirmation value instead of letting a stray POST trigger production.
     confirm: str
@@ -1259,47 +1259,47 @@ def _compute_task_response(task_id: str) -> dict:
 
 
 @app.post(
-    "/internal/compute/gander/status",
+    "/internal/compute/gnsis/status",
     status_code=202,
     dependencies=[Depends(require_internal_key)],
 )
-def internal_gander_status(smoke: bool = False) -> dict:
-    """Queue a worker-owned Modal/Gander status check.
+def internal_gnsis_status(smoke: bool = False) -> dict:
+    """Queue a worker-owned Modal/GNSIS status check.
 
     smoke=false resolves only the deployed web address and does not cold-start
     the GPU. smoke=true also opens /health and can take several minutes.
     """
-    from .tasks import modal_gander_status
+    from .tasks import modal_gnsis_status
 
-    queued = modal_gander_status.delay(smoke=smoke)
+    queued = modal_gnsis_status.delay(smoke=smoke)
     return {
         "task_id": queued.id,
-        "operation": "gander_status",
+        "operation": "gnsis_status",
         "smoke": smoke,
         "state": "queued",
     }
 
 
 @app.post(
-    "/internal/compute/gander/deploy",
+    "/internal/compute/gnsis/deploy",
     status_code=202,
     dependencies=[Depends(require_internal_key)],
 )
-def internal_gander_deploy(req: GanderDeployRequest) -> dict:
-    """Explicitly queue a production Gander deploy from GNSISWORKER."""
+def internal_gnsis_deploy(req: GNSISDeployRequest) -> dict:
+    """Explicitly queue a production GNSIS deploy from GNSISWORKER."""
     settings = get_settings()
-    if req.confirm != settings.gander_modal_app_name:
+    if req.confirm != settings.gnsis_modal_app_name:
         raise HTTPException(
             status_code=409,
-            detail=f"confirm must equal '{settings.gander_modal_app_name}'",
+            detail=f"confirm must equal '{settings.gnsis_modal_app_name}'",
         )
     from .tasks import deploy_live_runtime
 
     queued = deploy_live_runtime.delay(smoke=req.smoke)
     return {
         "task_id": queued.id,
-        "operation": "gander_deploy",
-        "app": settings.gander_modal_app_name,
+        "operation": "gnsis_deploy",
+        "app": settings.gnsis_modal_app_name,
         "smoke": req.smoke,
         "state": "queued",
     }

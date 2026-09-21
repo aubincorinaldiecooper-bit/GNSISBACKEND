@@ -1,18 +1,8 @@
-"""Modal definition for Ornith, the brain the live runtime asks for tasks.
+"""Optional GNSIS action-layer model service.
 
-The live runtime under ``gander/`` watches and listens; when it needs a task
-carried out it calls a second model over an OpenAI-compatible HTTP API. That
-model is Ornith-1.5-9B, served by vLLM on one GPU. The runtime reaches it at
-the address in ``gander/configs/gnsis-live.yaml``.
-
-Until now that service existed only as a notebook deployment: it was running
-in production and no repository described it, so it could not be rebuilt. This
-file is that description, brought over from CLIPIT #134, which recorded the
-deployment before the live runtime moved here.
-
-It deploys under a GNSIS-owned name of its own, beside the existing service
-rather than over it. Pointing the runtime at the new one is a deliberate
-cutover step, written down in docs/live_runtime.md.
+The realtime MVP does not depend on this service. It is retained as an explicit
+future deployment option for delegated task execution through an
+OpenAI-compatible endpoint.
 """
 
 from __future__ import annotations
@@ -24,7 +14,7 @@ import modal
 
 # A name of its own, so a deploy from this repository can never replace the
 # running service by accident. Set ORNITH_MODAL_APP_NAME to the existing app
-# (clipit-ornith-brain-v2) to adopt it in place instead; the function keeps the
+# (previous-ornith-service) to adopt it in place instead; the function keeps the
 # name that deployment uses, so adopting it updates the same function and the
 # address callers already hold does not change.
 APP_NAME = os.environ.get("ORNITH_MODAL_APP_NAME") or "gnsis-ornith"
@@ -36,8 +26,8 @@ SERVED_MODEL_NAME = "ornith"
 # exist: a name that does not is a failed deploy, never a new resource. A
 # cache created empty by mistake would look fine and re-download 9B of weights
 # on every cold start.
-CACHE_VOLUME_NAME = os.environ.get("ORNITH_CACHE_VOLUME") or "clipit-ornith-cache"
-SECRET_NAME = os.environ.get("ORNITH_SECRET_NAME") or "clipit-gander-ornith"
+CACHE_VOLUME_NAME = os.environ.get("ORNITH_CACHE_VOLUME") or "gnsis-ornith-cache"
+SECRET_NAME = os.environ.get("ORNITH_SECRET_NAME") or "gnsis-ornith-key"
 
 # The historical notebook deployment used vLLM's `latest` tag, and this mirrors
 # it for parity with what is running. `latest` moves, and a vLLM release that
