@@ -1,0 +1,83 @@
+name: Live runtime validation
+
+# The realtime stack under runtime/ is isolated from the standard service
+# dependency surface. This job validates that stack independently with the
+# production model stubbed exactly as the runtime tests expect.
+
+on:
+  pull_request:
+    paths:
+      - 'runtime/**'
+      - 'modal/gnsis.py'
+      - 'modal/ornith.py'
+      - 'scripts/verify-modal-gnsis.py'
+      - 'scripts/verify-modal-ornith.py'
+      - '.github/workflows/gnsis-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'runtime/**'
+      - 'modal/gnsis.py'
+      - 'modal/ornith.py'
+      - 'scripts/verify-modal-gnsis.py'
+      - 'scripts/verify-modal-ornith.py'
+      - '.github/workflows/gnsis-validation.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce GNSIS-only source naming
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The retired names are written with a one-character class so the
+          # patterns do not contain the words they ban. Spelled plainly, this
+          # step matched its own source and failed on a clean tree. Broken this
+          # way it still scans every tracked file, this one included, rather
+          # than exempting itself and going blind to the file most likely to
+          # mention the old names.
+          RETIRED='(g[a]nder|cl[i]pit)'
+          if git ls-files | grep -iE "$RETIRED"; then
+            echo "Retired product naming found in a tracked path." >&2
+            exit 1
+          fi
+          if git grep -nIiE "$RETIRED" -- .; then
+            echo "Retired product naming found in tracked source content." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install lightweight test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio fastapi httpx pillow pyyaml websockets "modal==1.5.0"
+          python -m pip install --no-deps -e ./runtime/minicpm_ft
+          python -m pip install --no-deps -e ./runtime/gnsis_runtime
+
+      - name: Compile the vendored runtime
+        run: python -m compileall -q runtime/gnsis_runtime/gnsis_runtime runtime/minicpm_ft/mcpmft
+
+      - name: Run the runtime's lifecycle, live-page and Ornith provider tests
+        run: pytest -q runtime/gnsis_runtime/tests
+
+      # Importing the definition builds the app object without talking to
+      # Modal, so a wrong resource name, a renamed function or an API that
+      # this Modal version no longer has fails here, not on deploy day.
+      - name: Import the Modal definitions and compile the deploy checks
+        env:
+          GNSIS_MODELS_VOLUME: placeholder-existing-volume
+          GNSIS_SECRET_NAME: placeholder-existing-secret
+        run: |
+          python -c "import runpy; m = runpy.run_path('modal/gnsis.py'); assert m['app'].name == 'gnsis-live', m['app'].name; assert 'gnsis_server' in m"
+          python -m py_compile scripts/verify-modal-gnsis.py
+          # The brain, under its own name. The assertion is what keeps a
+          # publish from this repository off the running previous-ornith-service.
+          python -c "import runpy; m = runpy.run_path('modal/ornith.py'); assert m['app'].name == 'gnsis-ornith', m['app'].name; assert 'ornith_server_v2' in m"
+          python -m py_compile scripts/verify-modal-ornith.py

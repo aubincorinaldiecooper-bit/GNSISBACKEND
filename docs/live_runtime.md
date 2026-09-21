@@ -1,110 +1,93 @@
-# The live runtime: the phone page and the model behind it
+# GNSIS realtime runtime
 
-The live runtime is the part of GNSIS a phone talks to. Scan the QR code on a computer, or tap Start on a phone, allow the camera and the microphone, and point the phone at something: the model watches and listens in real time and answers out loud, in text, and through the phone's haptics.
+The realtime runtime is the part of GNSIS a phone or browser talks to. Open `/live`, allow camera and microphone access, and GNSIS watches and listens in real time while returning text and haptic feedback.
 
-It is a separate component from the GNSIS service. The service is a FastAPI API and a Celery worker on Railway, with a standard-library core tested on Python 3.9. The live runtime is a GPU program on Modal: MiniCPM-o 4.5 with the Gander Thinker checkpoint, Python 3.10+, FastAPI, torch. They share this repository and nothing else; neither imports the other.
+It is deployed as a GPU service on Modal and lives in this repository under `runtime/`.
 
-## Where things are
+## Layout
 
-| path | what |
+| path | purpose |
 | --- | --- |
-| `gander/gander_runtime/` | The runtime: the duplex websocket (`/ws/duplex`), the screen socket (`/ws/screen`), the phone page (`/live`) and its QR (`/live/qr.svg`), the built-in tools, and the Ornith worker provider. |
-| `gander/minicpm_ft/` | The MiniCPM-o 4.5 inference core (`mcpmft`) and the page's static files, including the brand assets under `mcpmft/infer/static/live/`. |
-| `gander/configs/gnsis-live.yaml` | The MVP deployment configuration: model paths, realtime duplex/vision settings, and `worker.provider: none`. |
-| `modal/gander.py` | The Modal definition: app `gnsis-live`, function `gander_server`, an L40S GPU, the model volume and the secret. |
-| `modal/ornith.py` | The brain the runtime calls for tasks: app `gnsis-ornith`, Ornith-1.5-9B served by vLLM on an L40S. See below. |
-| `scripts/verify-modal-gander.py` | After a deploy: finds the app and prints its address; with `GANDER_SMOKE=1` it also opens `/health`. |
-| `scripts/verify-modal-ornith.py` | The same for the brain; with `ORNITH_SMOKE=1` it asks what the server serves. |
-| `gander/UPSTREAM.md` | Provenance: upstream, the time in CLIPIT, the move here. |
+| `runtime/gnsis_runtime/` | Realtime server, duplex websocket, screen/camera transport, native tools, and tests. |
+| `runtime/minicpm_ft/` | MiniCPM-o inference core plus the live web surface and brand assets. |
+| `runtime/configs/gnsis-live.yaml` | Production realtime configuration. |
+| `modal/gnsis.py` | Modal definition for app `gnsis-live` and function `gnsis_server`. |
+| `scripts/verify-modal-gnsis.py` | Deployment/address verification and optional health smoke test. |
+| `runtime/PROVENANCE.md` | Runtime source and licensing provenance. |
 
-## Tests
+## MVP contract
 
-The runtime's tests stub the model, so they run without a GPU, torch or a checkpoint:
+The MVP is perception-first and intentionally has no external action worker:
+
+```yaml
+worker:
+  provider: none
+```
+
+The live configuration enables realtime vision for both camera and screen input. Ornith remains optional future action-layer infrastructure and is not required for the MVP session.
+
+## Modal resources
+
+The realtime deployment expects the GNSIS-owned model volume `gnsis-model-weights`, mounted at `/models`.
+
+The production configuration expects:
+
+```text
+/models/MiniCPM-o-4_5
+/models/GNSIS/thinker
+```
+
+The Railway worker owns the Modal workspace credentials. GitHub Actions performs validation only.
+
+Required worker configuration:
+
+| variable | purpose |
+| --- | --- |
+| `MODAL_TOKEN_ID` | Modal workspace token id. |
+| `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
+| `MODAL_ENVIRONMENT` | Optional Modal environment; defaults to `main`. |
+| `GNSIS_MODELS_VOLUME` | Optional model-volume override; defaults to `gnsis-model-weights`. |
+| `GNSIS_MODAL_APP_NAME` | Optional app override; defaults to `gnsis-live`. |
+| `GNSIS_MODAL_FUNCTION_NAME` | Optional function override; defaults to `gnsis_server`. |
+
+## Migrating an existing deployment to this layout
+
+A deployment that predates this naming has the checkpoint under a different
+directory inside the volume, and its volume carries a different name. Both are
+addressable without copying the weights.
+
+**The volume name does not need to change.** It is an override, so point the
+deploy at whatever volume already holds the weights by setting
+`GNSIS_MODELS_VOLUME` on the Railway worker to that name. Renaming the volume
+itself means creating a new one and copying tens of gigabytes; it buys nothing
+the override does not, and can be done later or never.
+
+**The checkpoint directory does need to move,** because the runtime loads it by
+path. That is a rename inside one volume, not a copy, so it takes seconds:
+
+```bash
+GNSIS_MODELS_VOLUME=<the existing volume> \
+GNSIS_THINKER_SOURCE=/models/<previous directory>/thinker \
+modal run scripts/migrate-thinker-checkpoint.py
+```
+
+It refuses to run without both values, never deletes anything, never writes
+over an existing destination, and can be run twice safely. `MiniCPM-o-4_5` is
+unaffected; its path is unchanged.
+
+Order matters. Do the rename and set the variable **before** the first
+`deploy_live_runtime` from this branch. Merging is safe on its own: nothing
+deploys the runtime automatically, and `cache_gnsis_models` fails loudly with
+the missing path if a deploy runs against a volume that has not been migrated.
+
+## Validation
 
 ```bash
 python -m pip install pytest pytest-asyncio fastapi httpx pillow pyyaml websockets "modal==1.5.0"
-python -m pip install --no-deps -e ./gander/minicpm_ft -e ./gander/gander_runtime
-pytest -q gander/gander_runtime/tests
+python -m pip install --no-deps -e ./runtime/minicpm_ft -e ./runtime/gnsis_runtime
+pytest -q runtime/gnsis_runtime/tests
 ```
 
-CI runs exactly this in `.github/workflows/gander-validation.yml`, only when files under `gander/`, the Modal definition or the verify script change. The main `ci.yml` never sees the runtime: it lives outside `src/` and `tests/`, and the Railway image leaves it out through `.dockerignore`.
+After deployment, use `scripts/verify-modal-gnsis.py` to resolve the public address. Set `GNSIS_SMOKE=1` to call `/health`; that cold-starts the GPU.
 
-## Deploying
-
-The production Modal credentials live on **Railway → GNSISWORKER**, not in
-GitHub Actions. The worker owns the Modal workspace relationship in the same
-shape Clipit's worker used.
-
-Required on GNSISWORKER:
-
-| kind | name | value |
-| --- | --- | --- |
-| secret | `MODAL_TOKEN_ID` | Modal workspace token id. |
-| secret | `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
-| variable | `MODAL_ENVIRONMENT` | Optional; defaults to `main`. |
-| variable | `GANDER_MODELS_VOLUME` | Optional; defaults to `clipit-gander-weights`. |
-
-The worker image includes `gander/` and `modal/` and installs `modal==1.5.0`.
-Deployment is explicit, not a startup side effect:
-
-```python
-from gnsis.service.tasks import deploy_live_runtime
-result = deploy_live_runtime.run(smoke=False)
-```
-
-To inspect the current deployment without redeploying:
-
-```python
-from gnsis.service.tasks import modal_gander_status
-result = modal_gander_status.run(smoke=False)
-```
-
-Setting `smoke=True` opens `/health`, which cold-starts the GPU and may take
-several minutes. GitHub Actions validates code but does not hold the production
-Modal token or deploy the live runtime.
-
-## Ornith is parked for the MVP
-
-The current MVP deliberately runs Gander with `worker.provider: none`. Realtime vision and duplex interaction do not depend on Ornith, and the `gnsis-live` Modal app no longer requires the historical Ornith secret. The Ornith provider and deployment definition remain in the repository for a later action-layer phase, but they are not part of MVP testing.
-
-That service was deployed from a notebook and no repository described it, so it could not be rebuilt. `modal/ornith.py` is that description, brought over from CLIPIT #134. Two things follow from how it is written:
-
-- **It publishes under `gnsis-ornith`, not over the running service.** The live one is `clipit-ornith-brain-v2`, deployed from the notebook, and the runtime is still pointed at it. A publish from this repository creates or updates the GNSIS-owned app beside it and cannot replace it by accident. Setting `ORNITH_MODAL_APP_NAME` to the old name adopts it in place instead; the function keeps the name that deployment uses, so the address callers hold does not change.
-- **The cache volume and the secret must already exist.** `clipit-ornith-cache` and `clipit-gander-ornith` by default, overridable with `ORNITH_CACHE_VOLUME` and `GANDER_SECRET_NAME`. A name that does not exist fails the publish rather than creating an empty cache that re-downloads the weights on every cold start.
-
-Publishing works like the runtime's own, from the worker that holds the token:
-
-```python
-from gnsis.service.tasks import deploy_ornith_brain, ornith_status
-deploy_ornith_brain.run()   # publishes, then returns the address
-ornith_status.run()         # just the address, nothing started
-```
-
-Or through the internal API, which only enqueues onto the worker:
-
-```sh
-POST /internal/compute/ornith/deploy   {"confirm":"gnsis-ornith"}
-POST /internal/compute/ornith/status
-```
-
-If the action layer is re-enabled later, add an explicit worker configuration and point it at the verified Ornith deployment. Do not make that cutover part of the current MVP.
-
-The vLLM image is `vllm/vllm-openai:latest`, mirroring the notebook for parity. `latest` moves, and a vLLM release that renames a serving flag would break a publish that changed nothing else. Pin the resolved digest in `ORNITH_VLLM_IMAGE` once parity with the running service is proven.
-
-## Cutover from `clipit-gander-thinker`
-
-The same runtime ran from CLIPIT as the Modal app `clipit-gander-thinker`. The new app uses the same volume and the same secret, so the two can run side by side.
-
-1. Deploy `gnsis-live` (above). Keep `clipit-gander-thinker` running.
-2. Verify the new app. `GANDER_SMOKE=1 python scripts/verify-modal-gander.py` opens `/health`, checks the status and the tool list, and prints the settings the runtime reports about itself; that starts a GPU container, and a cold start takes several minutes. Then open the printed address with `/live` on a computer and scan the QR with a phone. A session that reaches *Session ready.* is the real check.
-3. Compare the settings with the app being replaced: `GANDER_HEALTH_URL=https://<the old app's address> python scripts/verify-modal-gander.py` prints the same lines for it, with no Modal token. Each line is named by the key that sets it in `gander/configs/gnsis-live.yaml`, because the file is where a difference has to go and its loader refuses any key it does not know; `/health` itself calls the slate setting `task_slate_visible_to_model`, while the file's key is `duplex.expose_task_slate_to_model`, and its `client_video` and `asr_enabled` fields are derived from `duplex.allow_client_video`, `client_video_mode`, `client_video_sources` and `asr.mode`. CLIPIT #134 said the live app's duplex settings differed from the checked-in configuration in nine values, of which the comparison shows four: `sliding_window_mode`, `context_max_units`, `context_previous_max_tokens` and `expose_task_slate_to_model`. If the old app reports different values, put them into the file under those keys and redeploy before switching. The other five (`trailing_silence_sec`, `turn_bind_grace_sec`, `speak_text_tokens_per_unit`, `max_new_speak_tokens_per_chunk`, and the two tool token limits) are only visible in the old app's own configuration.
-4. Point whatever used the old address at the new one.
-5. Stop the old app: `modal app stop clipit-gander-thinker` in the same environment.
-
-The model artifacts on the existing volume are not touched by any of this.
-
-## What the move did not verify
-
-The move was checked by the runtime's test suite and by rendering the page from the real app with the model stubbed. No deployment was made from this repository and no phone was used. The first `gnsis-live` deploy, the `/health` smoke and a live session on a phone are the cutover's own steps above.
-
-`modal/ornith.py` has never been published. It remains future action-layer infrastructure only; the MVP runtime does not call it.
+The final MVP check is a real `/live` session: camera permission succeeds, the session reaches `Session ready.`, the model receives frames, and GNSIS answers.
