@@ -116,17 +116,9 @@ class ModalComputeTests(unittest.TestCase):
         # The image tag is only forced when a caller pins one.
         self.assertNotIn("ORNITH_VLLM_IMAGE", kwargs["env"])
 
-    def test_the_default_ornith_app_is_not_the_running_one(self):
-        """The live brain was deployed from a notebook as legacy-ornith-service.
-
-        Defaulting to that name would let any publish from this repository
-        replace a running production service, so the default is a name of its
-        own and adopting the existing app has to be asked for.
-        """
-
+    def test_the_default_ornith_app_is_gnsis_owned(self):
         compute = ModalCompute(token_id="id-test", token_secret="secret-test")
         self.assertEqual(compute.ornith_ref.app_name, "gnsis-ornith")
-        self.assertNotEqual(compute.ornith_ref.app_name, "legacy-ornith-service")
 
     def test_settings_carry_the_ornith_app_but_never_its_function_name(self):
         """The app is a setting; the function name cannot be one.
@@ -135,7 +127,7 @@ class ModalComputeTests(unittest.TestCase):
         publishes ornith_server_v2. A configurable lookup name would let a
         publish succeed and the very next lookup fail, so even a settings
         object that carries one must not change where the provider looks
-        (Codex on #58).
+        .
         """
 
         settings = SimpleNamespace(
