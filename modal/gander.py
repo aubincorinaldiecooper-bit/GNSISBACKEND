@@ -1,11 +1,13 @@
 """Modal definition for the GNSIS live runtime: the phone page and the model behind it.
 
 The runtime is vendored under ``gander/``. This app is the GNSIS-owned
-successor of CLIPIT's ``clipit-gander-thinker``: the same runtime, the same
-model volume and the same secret, under a new name so the two can run side by
-side until the new one is verified and the old one is shut down
-(docs/live_runtime.md). Model weights and secrets remain external runtime
-prerequisites.
+successor of CLIPIT's ``clipit-gander-thinker``: the same realtime Gander
+runtime and model volume, under a new name so the two can run side by side
+until the new one is verified and the old one is shut down
+(docs/live_runtime.md).
+
+The MVP is perception-only. It does not load an external worker provider and
+therefore does not require the historical Ornith secret.
 """
 
 from __future__ import annotations
@@ -19,16 +21,11 @@ APP_NAME = "gnsis-live"
 PORT = 7975
 CONFIG_PATH = "/workspace/gander/configs/gnsis-live.yaml"
 
-# The Volume that holds the weights and the Secret that holds ORNITH_API_KEY.
-# The names default to the existing resources CLIPIT #134 recorded from the
-# live deployment; a deploy can override either through the environment.
-# Neither call creates anything: a name that does not exist fails the deploy,
-# so a wrong name cannot make a second production resource by accident.
+# The existing model volume holds MiniCPM-o and the Gander Thinker checkpoint.
+# A wrong name fails the deploy rather than creating a fresh empty volume.
 MODELS_VOLUME_NAME = os.environ.get("GANDER_MODELS_VOLUME") or "clipit-gander-weights"
-SECRET_NAME = os.environ.get("GANDER_SECRET_NAME") or "clipit-gander-ornith"
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
-ornith_secret = modal.Secret.from_name(SECRET_NAME)
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -87,7 +84,6 @@ def cache_gander_models() -> dict[str, str]:
 @app.function(
     gpu="L40S",
     volumes={"/models": models},
-    secrets=[ornith_secret],
     timeout=24 * 60 * 60,
     scaledown_window=60,
 )
