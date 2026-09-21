@@ -368,7 +368,7 @@ def deploy_ornith_brain() -> dict:
     compute = from_settings(s)
     compute.deploy_ornith(
         cache_volume=s.ornith_cache_volume,
-        secret_name=s.gnsis_secret_name,
+        secret_name=s.ornith_secret_name,
     )
     return {
         "url": compute.ornith_web_url(),
@@ -390,7 +390,6 @@ def deploy_live_runtime(smoke: bool = False) -> dict:
     compute = from_settings(s)
     compute.deploy_gnsis(
         models_volume=s.gnsis_models_volume,
-        secret_name=s.gnsis_secret_name,
     )
     url = compute.gnsis_web_url()
     result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
