@@ -1,6 +1,6 @@
 name: Live runtime validation
 
-# The runtime under gnsis/ is a separate component from the GNSIS service: it
+# The runtime under live/ is a separate component from the GNSIS service: it
 # needs Python 3.10+, FastAPI and, in production, torch, none of which the
 # standard-library-only core wants. So it gets its own job, run only when it
 # changes, with the model stubbed exactly as the runtime's tests expect.
@@ -30,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enforce native repository naming
+        run: python scripts/check-native-naming.py
 
       - uses: actions/setup-python@v5
         with:
