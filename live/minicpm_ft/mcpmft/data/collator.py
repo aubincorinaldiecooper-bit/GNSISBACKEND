@@ -26,7 +26,7 @@ from mcpmft.data.tool_augmentation import (
 from mcpmft.data.serialize_omniflow import serialize_omniflow_sample
 from mcpmft.data.serialize_turn import SerializedSample, serialize_turn_sample
 from mcpmft.frontbrain.serialize import serialize_frontbrain_sample
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 
 
 LOGGER = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class OmniCollator:
     duplex_speech_tokens_per_unit: int = 25
     idle_gap_augmentation: bool = False
     include_duplex_system_prompt: bool = True
-    duplex_system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT
+    duplex_system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT
     seed: int = 42
     _sample_rng: random.Random | None = field(default=None, init=False, repr=False)
     _sample_rng_identity: tuple[int, int, int] | None = field(default=None, init=False, repr=False)
