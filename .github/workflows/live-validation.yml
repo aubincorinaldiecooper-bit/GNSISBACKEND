@@ -8,7 +8,7 @@ name: Live runtime validation
 on:
   pull_request:
     paths:
-      - 'gnsis/**'
+      - 'live/**'
       - 'modal/live.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-live.py'
@@ -18,7 +18,7 @@ on:
     branches:
       - main
     paths:
-      - 'gnsis/**'
+      - 'live/**'
       - 'modal/live.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-live.py'
@@ -45,7 +45,7 @@ jobs:
       - name: Compile the vendored runtime
         run: python -m compileall -q live/runtime/gnsis_runtime live/minicpm_ft/mcpmft
 
-      - name: Run the runtime's lifecycle, live-page and Ornith provider tests
+      - name: Run the live runtime tests
         run: pytest -q live/runtime/tests
 
       # Importing the definition builds the app object without talking to
@@ -54,7 +54,6 @@ jobs:
       - name: Import the Modal definitions and compile the deploy checks
         env:
           GNSIS_MODELS_VOLUME: placeholder-existing-volume
-          GNSIS_SECRET_NAME: placeholder-existing-secret
         run: |
           python -c "import runpy; m = runpy.run_path('modal/live.py'); assert m['app'].name == 'gnsis-live', m['app'].name; assert 'gnsis_live_server' in m"
           python -m py_compile scripts/verify-modal-live.py
