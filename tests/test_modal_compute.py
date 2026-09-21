@@ -37,7 +37,7 @@ class ModalComputeTests(unittest.TestCase):
                 token_secret="secret-test",
                 modal_module=_FakeModal,
             )
-            self.assertEqual(compute.gnsis_web_url(), "https://gnsis-live.example")
+            self.assertEqual(compute.live_web_url(), "https://gnsis-live.example")
             self.assertNotIn("MODAL_TOKEN_ID", os.environ)
             self.assertNotIn("MODAL_TOKEN_SECRET", os.environ)
         finally:
@@ -49,7 +49,7 @@ class ModalComputeTests(unittest.TestCase):
     def test_deploy_is_explicit_and_uses_worker_credentials(self):
         compute = ModalCompute(token_id="id-test", token_secret="secret-test")
         with patch("gnsis.service.modal_compute.subprocess.run") as run:
-            compute.deploy_gnsis(
+            compute.deploy_live(
                 repo_root="/repo",
                 models_volume="weights",
             )
@@ -59,7 +59,7 @@ class ModalComputeTests(unittest.TestCase):
         self.assertTrue(kwargs["check"])
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_ID"], "id-test")
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_SECRET"], "secret-test")
-        self.assertEqual(kwargs["env"]["GNSIS_MODELS_VOLUME"], "weights")
+        self.assertEqual(kwargs["env"]["GNSIS_LIVE_MODELS_VOLUME"], "weights")
         self.assertNotIn("ORNITH_SECRET_NAME", kwargs["env"])
 
     def test_ornith_is_looked_up_as_its_own_app(self):
@@ -142,8 +142,8 @@ class ModalComputeTests(unittest.TestCase):
             modal_token_id="id",
             modal_token_secret="secret",
             modal_environment="main",
-            gnsis_modal_app_name="gnsis-live",
-            gnsis_modal_function_name="gnsis_live_server",
+            live_modal_app_name="gnsis-live",
+            live_modal_function_name="gnsis_live_server",
             ornith_modal_app_name="adopted-app",
             ornith_modal_function_name="not_a_real_function",
         )
@@ -175,8 +175,8 @@ class ModalComputeTests(unittest.TestCase):
             modal_token_id=None,
             modal_token_secret=None,
             modal_environment="main",
-            gnsis_modal_app_name="gnsis-live",
-            gnsis_modal_function_name="gnsis_live_server",
+            live_modal_app_name="gnsis-live",
+            live_modal_function_name="gnsis_live_server",
         )
         with self.assertRaisesRegex(RuntimeError, "missing Modal credentials"):
             from_settings(settings)
