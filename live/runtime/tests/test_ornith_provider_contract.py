@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from gander_runtime.providers.ornith import (
+from gnsis_runtime.providers.ornith import (
     ORNITH_CAPABILITIES,
     OrnithProviderSettings,
     OrnithWorkerProvider,

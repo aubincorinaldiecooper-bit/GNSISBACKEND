@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from gander_runtime.live_qr import UnsafeQRTarget, _num, public_live_url, styled_svg
+from gnsis_runtime.live_qr import UnsafeQRTarget, _num, public_live_url, styled_svg
 
 
 def test_a_plain_https_live_url_is_fine():

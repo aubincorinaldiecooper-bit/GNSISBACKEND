@@ -10,7 +10,7 @@ from typing import Any, Iterable, Literal
 
 import yaml
 
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.utils.io import atomic_write_text
 
 
@@ -322,14 +322,14 @@ class DataArguments:
     duplex_speech_tokens_per_unit: int = 25
     idle_gap_augmentation: bool = False
     include_duplex_system_prompt: bool = True
-    duplex_system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT
+    duplex_system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT
     seed: int = 42
 
 
 @dataclass
 class TrainArguments:
     mode: Literal["thinker", "talker", "joint", "custom"] = "custom"
-    output_dir: str = "outputs/gander"
+    output_dir: str = "outputs/gnsis"
     deepspeed: str | None = None
     per_device_train_batch_size: int = 1
     gradient_accumulation_steps: int = 1
@@ -382,7 +382,7 @@ class LaunchArguments:
     python: str = "python"
     project_dir: str = ""
     log_dir: str = "outputs/launcher"
-    local_cache_dir: str = "/tmp/gander"
+    local_cache_dir: str = "/tmp/gnsis"
     nccl_socket_ifname: str | None = None
     nccl_ib_disable: bool = False
     omp_num_threads: int = 8

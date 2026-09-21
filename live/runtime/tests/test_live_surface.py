@@ -263,10 +263,10 @@ def test_haptics_and_the_morph_are_optional_and_the_switch_is_real(harness):
     assert "if (!this.engine || !this.enabled) return;" in source
 
 
-def test_gander_has_a_bounded_semantic_haptic_output_tool():
+def test_gnsis_has_a_bounded_semantic_haptic_output_tool():
     """The model chooses meaning; it never gets access to raw vibration timing."""
 
-    from gander_runtime.online_duplex import (
+    from gnsis_runtime.online_duplex import (
         MODEL_HAPTIC_CUES,
         _model_tool_schemas,
         _split_model_haptics,
@@ -297,7 +297,7 @@ def test_gander_has_a_bounded_semantic_haptic_output_tool():
 def test_haptic_is_reserved_for_the_runtime():
     """A deployment cannot replace the safe semantic haptic contract."""
 
-    from gander_runtime.online_duplex import _model_tool_schemas
+    from gnsis_runtime.online_duplex import _model_tool_schemas
 
     runtime = SimpleNamespace(
         settings=SimpleNamespace(
@@ -318,7 +318,7 @@ def test_the_built_in_tool_does_not_consume_the_configured_schema_budget():
     """Three business tools beside the three task tools filled the budget of six.
 
     Appending `haptic` made seven, and a deployment that had always started
-    refused to (Codex on CLIPIT #159). The runtime's own tools now sit outside
+    refused to (an earlier regression). The runtime's own tools now sit outside
     the configured budget: one slot each, and exactly the tokens their schemas
     render to, measured the way the model core measures them.
     """
@@ -333,7 +333,7 @@ def test_the_built_in_tool_does_not_consume_the_configured_schema_budget():
         validate_realtime_tool_context,
     )
 
-    from gander_runtime.online_duplex import (
+    from gnsis_runtime.online_duplex import (
         MODEL_HAPTIC_TOOL_SCHEMA,
         _model_tool_schemas,
         _reserve_built_in_tools,
@@ -391,7 +391,7 @@ def test_the_built_in_tool_does_not_consume_the_configured_schema_budget():
 def test_the_app_reserves_its_built_in_tools_when_it_is_built(harness, monkeypatch):
     """The reservation is worthless unless the app applies it to the params it runs on."""
 
-    from gander_runtime import online_duplex
+    from gnsis_runtime import online_duplex
 
     seen = []
     real = online_duplex._reserve_built_in_tools
@@ -409,11 +409,11 @@ def test_a_haptic_beside_another_call_is_lifted_out_and_the_rest_goes_on():
     """The model may put touch beside a task call in one unit.
 
     Taken whole, the coordinator refused that batch as mixed, so the cue was
-    never felt and the other call was thrown away with it (Codex on CLIPIT
+    never felt and the other call was thrown away with it (Codex on GNSIS
     #159). Now the cue goes to the phone and the other call goes on alone.
     """
 
-    from gander_runtime.online_duplex import _split_model_haptics
+    from gnsis_runtime.online_duplex import _split_model_haptics
 
     task = {"name": "task_send", "arguments": {"task_id": "t1", "text": "look left"}}
     event = SimpleNamespace(
@@ -434,7 +434,7 @@ def test_a_haptic_beside_another_call_is_lifted_out_and_the_rest_goes_on():
 
 
 def test_a_unit_without_touch_passes_through_untouched():
-    from gander_runtime.online_duplex import _split_model_haptics
+    from gnsis_runtime.online_duplex import _split_model_haptics
 
     plain = SimpleNamespace(is_tool_call=False, tool_error=None, tool_calls=[], text="hi")
     assert _split_model_haptics(plain).remainder is plain
@@ -454,7 +454,7 @@ def test_a_unit_without_touch_passes_through_untouched():
 def test_a_malformed_haptic_call_is_refused_not_forwarded():
     """A call named haptic that names no cue must never travel on as an external tool."""
 
-    from gander_runtime.online_duplex import _split_model_haptics
+    from gnsis_runtime.online_duplex import _split_model_haptics
 
     event = SimpleNamespace(
         is_tool_call=True,
@@ -544,7 +544,7 @@ def test_a_server_with_no_action_layer_boots_without_codex(tmp_path):
     names Codex, so it refused to boot over a binary it would never call.
     """
 
-    from gander_runtime.cli import load_config, preflight_config
+    from gnsis_runtime.cli import load_config, preflight_config
 
     preflight_config(load_config(_config(tmp_path, "none", "none")))
 
@@ -559,7 +559,7 @@ def test_a_configured_worker_is_still_demanded(tmp_path):
     have refused every one of them with `no_eligible_worker`. Caught by Codex.
     """
 
-    from gander_runtime.cli import load_config, preflight_config
+    from gnsis_runtime.cli import load_config, preflight_config
 
     with pytest.raises(Exception) as raised:
         preflight_config(load_config(_config(tmp_path, "codex", "codex")))
@@ -571,11 +571,11 @@ def test_the_camera_opt_in_can_actually_be_set(tmp_path):
 
     `persist_camera_frames` lived only on the Python settings object; unknown
     YAML keys are rejected and nothing forwarded a value, so every real
-    `gander-serve` was stuck at false whatever its operator wanted. Caught by
+    `gnsis-live-serve` was stuck at false whatever its operator wanted. Caught by
     Codex.
     """
 
-    from gander_runtime.cli import _duplex_settings, load_config
+    from gnsis_runtime.cli import _duplex_settings, load_config
 
     config = load_config(
         _config(tmp_path, "none", "optin", persist_camera_frames=True)
@@ -713,7 +713,7 @@ def test_end_says_stop_rather_than_dropping_the_socket(harness):
 
 
 def test_gnsis_live_mvp_has_no_external_worker_dependency():
-    """The deployable MVP is Gander perception itself, not the Ornith action layer."""
+    """The deployable MVP is GNSIS perception itself, not the Ornith action layer."""
 
     config_path = Path(__file__).resolve().parents[2] / "configs" / "gnsis-live.yaml"
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
