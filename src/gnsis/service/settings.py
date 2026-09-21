@@ -54,14 +54,17 @@ class Settings:
     anthropic_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
 
-    # Modal compute is owned by the Railway worker. GitHub Actions remains CI-only.\n    modal_token_id: Optional[str] = None
+    # Modal compute is owned by the Railway worker. GitHub Actions remains CI-only.
+    modal_token_id: Optional[str] = None
     modal_token_secret: Optional[str] = None
     modal_environment: str = "main"
     gnsis_modal_app_name: str = "gnsis-live"
     gnsis_modal_function_name: str = "gnsis_server"
     gnsis_models_volume: str = "gnsis-model-weights"
-    # Optional action-layer secret used only when the Ornith service is deployed.\n    gnsis_secret_name: str = "gnsis-ornith-key"
-    # Optional delegated-task service, outside the realtime MVP critical path.\n    ornith_modal_app_name: str = "gnsis-ornith"
+    # Optional action-layer secret used only when the Ornith service is deployed.
+    gnsis_secret_name: str = "gnsis-ornith-key"
+    # Optional delegated-task service, outside the realtime MVP critical path.
+    ornith_modal_app_name: str = "gnsis-ornith"
     ornith_cache_volume: str = "gnsis-ornith-cache"
 
     # GitHub App — the platform-owned credentials. The App id + private key are

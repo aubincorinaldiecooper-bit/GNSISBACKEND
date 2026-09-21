@@ -1,6 +1,6 @@
 """Modal definition for the GNSIS live runtime: the phone page and the model behind it.
 
-The runtime is vendored under ``gnsis/``. This app is the GNSIS-owned
+The runtime is vendored under ``runtime/``. This app is the GNSIS-owned
 successor of the prior project's ``previous-live-runtime``: the same realtime GNSIS
 runtime and model volume, under a new name so the two can run side by side
 until the new one is verified and the old one is shut down
@@ -14,12 +14,26 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import modal
 
 APP_NAME = "gnsis-live"
 PORT = 7975
 CONFIG_PATH = "/workspace/runtime/configs/gnsis-live.yaml"
+
+# The directory this repository keeps the realtime source in, relative to its
+# root. Modal resolves it lazily, at deploy time and not at import, so a wrong
+# name here used to build a perfectly valid image with no source in it and fail
+# only once someone deployed. Checked on import instead, so the CI import of
+# this file catches a move of the source tree the way it caught nothing before.
+SOURCE_DIR = "runtime"
+_source = Path(__file__).resolve().parent.parent / SOURCE_DIR
+if not _source.is_dir():
+    raise RuntimeError(
+        f"{SOURCE_DIR}/ is missing from the repository root ({_source}); "
+        "the realtime source tree has moved and this definition would package nothing"
+    )
 
 # The existing model volume holds MiniCPM-o and the GNSIS Thinker checkpoint.
 # A wrong name fails the deploy rather than creating a fresh empty volume.
@@ -56,7 +70,9 @@ image = (
         "uvicorn[standard]>=0.29",
         "websockets>=12",
     )
-    .add_local_dir("gnsis", remote_path="/workspace/runtime", copy=True)
+    # The realtime source tree, which lives at runtime/ in this repository and
+    # is served from /workspace/runtime inside the image.
+    .add_local_dir(SOURCE_DIR, remote_path="/workspace/runtime", copy=True)
     .run_commands(
         "python -m pip install --no-deps /workspace/runtime/minicpm_ft",
         "python -m pip install --no-deps /workspace/runtime/gnsis_runtime",

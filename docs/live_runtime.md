@@ -50,6 +50,36 @@ Required worker configuration:
 | `GNSIS_MODAL_APP_NAME` | Optional app override; defaults to `gnsis-live`. |
 | `GNSIS_MODAL_FUNCTION_NAME` | Optional function override; defaults to `gnsis_server`. |
 
+## Migrating an existing deployment to this layout
+
+A deployment that predates this naming has the checkpoint under a different
+directory inside the volume, and its volume carries a different name. Both are
+addressable without copying the weights.
+
+**The volume name does not need to change.** It is an override, so point the
+deploy at whatever volume already holds the weights by setting
+`GNSIS_MODELS_VOLUME` on the Railway worker to that name. Renaming the volume
+itself means creating a new one and copying tens of gigabytes; it buys nothing
+the override does not, and can be done later or never.
+
+**The checkpoint directory does need to move,** because the runtime loads it by
+path. That is a rename inside one volume, not a copy, so it takes seconds:
+
+```bash
+GNSIS_MODELS_VOLUME=<the existing volume> \
+GNSIS_THINKER_SOURCE=/models/<previous directory>/thinker \
+modal run scripts/migrate-thinker-checkpoint.py
+```
+
+It refuses to run without both values, never deletes anything, never writes
+over an existing destination, and can be run twice safely. `MiniCPM-o-4_5` is
+unaffected; its path is unchanged.
+
+Order matters. Do the rename and set the variable **before** the first
+`deploy_live_runtime` from this branch. Merging is safe on its own: nothing
+deploys the runtime automatically, and `cache_gnsis_models` fails loudly with
+the missing path if a deploy runs against a volume that has not been migrated.
+
 ## Validation
 
 ```bash
