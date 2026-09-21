@@ -1,10 +1,8 @@
 """Modal definition for the GNSIS live runtime: the phone page and the model behind it.
 
-The runtime is vendored under ``gnsis/``. This app is the GNSIS-owned
-successor of GNSIS's ``legacy-live-service``: the same realtime GNSIS
-runtime and model volume, under a new name so the two can run side by side
-until the new one is verified and the old one is shut down
-(docs/live_runtime.md).
+The live perception runtime is owned and deployed directly by GNSIS.
+Its model artifacts remain on the external GNSIS Modal volume described in
+docs/live_runtime.md.
 
 The MVP is perception-only. It does not load an external worker provider and
 therefore does not require the historical Ornith secret.
@@ -56,7 +54,7 @@ image = (
         "uvicorn[standard]>=0.29",
         "websockets>=12",
     )
-    .add_local_dir("gnsis", remote_path="/workspace/live", copy=True)
+    .add_local_dir("live", remote_path="/workspace/live", copy=True)
     .run_commands(
         "python -m pip install --no-deps /workspace/live/minicpm_ft",
         "python -m pip install --no-deps /workspace/live/runtime",
@@ -89,7 +87,7 @@ def cache_gnsis_models() -> dict[str, str]:
 )
 @modal.web_server(PORT, startup_timeout=1800)
 def gnsis_live_server() -> None:
-    """Serve the live runtime from the vendored source under gnsis/."""
+    """Serve the GNSIS live runtime."""
     env = os.environ.copy()
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     subprocess.Popen(
