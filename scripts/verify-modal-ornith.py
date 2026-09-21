@@ -27,7 +27,9 @@ import modal
 
 BASE_URL = os.environ.get("ORNITH_BASE_URL", "").strip()
 APP_NAME = os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith")
-FUNCTION_NAME = os.environ.get("ORNITH_MODAL_FUNCTION_NAME", "ornith_server_v2")
+# Fixed, not configurable: a Modal function is named by its `def`, and
+# modal/ornith.py always publishes this one.
+FUNCTION_NAME = "ornith_server_v2"
 ENVIRONMENT = os.environ.get("MODAL_ENVIRONMENT", "main")
 SMOKE = os.environ.get("ORNITH_SMOKE", "").strip().lower() not in {"", "0", "false", "no"}
 # A cold start pulls the weights onto the GPU before vLLM answers.
