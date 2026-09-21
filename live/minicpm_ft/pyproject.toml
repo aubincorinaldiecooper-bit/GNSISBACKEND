@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcpmft"
 version = "1.0.0"
-description = "MiniCPM-o 4.5 full-duplex training and inference core for Gander."
+description = "MiniCPM-o 4.5 full-duplex training and inference core for GNSIS."
 requires-python = ">=3.10"
 dependencies = [
   "accelerate>=1.10,<2",

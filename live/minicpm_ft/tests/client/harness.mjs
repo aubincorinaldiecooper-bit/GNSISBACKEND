@@ -205,7 +205,7 @@ export function createPage() {
   };
 
   return {
-    video: sandbox.window.GanderVideo,
+    video: sandbox.window.GNSISVideo,
     nodes,
     select,
     source,
