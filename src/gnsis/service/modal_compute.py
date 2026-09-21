@@ -1,11 +1,11 @@
 """Modal compute boundary owned by the GNSIS worker.
 
-The Railway worker holds the Modal workspace token, exactly like Clipit's worker
+The Railway worker holds the Modal workspace token, exactly like GNSIS's worker
 did.  GitHub Actions is CI only; it is not the production credential holder.
 
 This module keeps the Modal SDK behind one small boundary so the rest of GNSIS
 does not depend on Modal-specific APIs.  Runtime callers can discover the live
-Gander web address and check its health, and the same for Ornith, the brain it
+GNSIS web address and check its health, and the same for Ornith, the brain it
 calls for tasks.  Deployment is an explicit operator action run by the worker,
 never an automatic side effect of worker startup.
 """
@@ -37,8 +37,8 @@ class ModalCompute:
         token_id: str,
         token_secret: str,
         environment: str = "main",
-        gander_app_name: str = "gnsis-live",
-        gander_function_name: str = "gander_server",
+        gnsis_app_name: str = "gnsis-live",
+        gnsis_function_name: str = "gnsis_live_server",
         ornith_app_name: str = "gnsis-ornith",
         ornith_function_name: str = "ornith_server_v2",
         modal_module: Optional[Any] = None,
@@ -48,8 +48,8 @@ class ModalCompute:
         self.token_id = token_id
         self.token_secret = token_secret
         self.ref = ModalRuntimeRef(
-            app_name=gander_app_name,
-            function_name=gander_function_name,
+            app_name=gnsis_app_name,
+            function_name=gnsis_function_name,
             environment=environment,
         )
         # The brain the runtime calls for tasks, deployed as its own app.
@@ -104,8 +104,8 @@ class ModalCompute:
             raise RuntimeError(f"{ref.app_name}/{ref.function_name} has no web address")
         return str(url).rstrip("/")
 
-    def gander_web_url(self) -> str:
-        """Return the deployed Gander web-server URL without starting a GPU."""
+    def gnsis_web_url(self) -> str:
+        """Return the deployed GNSIS web-server URL without starting a GPU."""
         return self._web_url(self.ref)
 
     def ornith_web_url(self) -> str:
@@ -117,26 +117,26 @@ class ModalCompute:
         """
         return self._web_url(self.ornith_ref)
 
-    def gander_health(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
+    def gnsis_health(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
         """Cold-start the live runtime and return its /health document."""
-        url = self.gander_web_url()
+        url = self.gnsis_web_url()
         try:
             with urllib.request.urlopen(
                 f"{url}/health", timeout=timeout_seconds
             ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise RuntimeError(f"Gander health check failed: {exc}") from exc
+            raise RuntimeError(f"GNSIS health check failed: {exc}") from exc
         if not isinstance(payload, dict) or payload.get("status") != "ok":
-            raise RuntimeError(f"Gander reported unhealthy status: {payload!r}")
+            raise RuntimeError(f"GNSIS reported unhealthy status: {payload!r}")
         return payload
 
-    def deploy_gander(
+    def deploy_gnsis(
         self,
         *,
         repo_root: str = "/app",
-        models_volume: str = "clipit-gander-weights",
-        secret_name: str = "clipit-gander-ornith",
+        models_volume: str = "gnsis-models",
+        secret_name: str = "gnsis-ornith-auth",
     ) -> None:
         """Deploy the checked-in live runtime from the worker image.
 
@@ -144,15 +144,15 @@ class ModalCompute:
         not mutate production infrastructure merely because it restarted.
         """
         env = self._credential_env()
-        env["GANDER_MODELS_VOLUME"] = models_volume
-        env["GANDER_SECRET_NAME"] = secret_name
+        env["GNSIS_MODELS_VOLUME"] = models_volume
+        env["GNSIS_SECRET_NAME"] = secret_name
         subprocess.run(
             [
                 "modal",
                 "deploy",
                 "-e",
                 self.ref.environment,
-                "modal/gander.py",
+                "modal/live.py",
             ],
             cwd=repo_root,
             env=env,
@@ -163,8 +163,8 @@ class ModalCompute:
         self,
         *,
         repo_root: str = "/app",
-        cache_volume: str = "clipit-ornith-cache",
-        secret_name: str = "clipit-gander-ornith",
+        cache_volume: str = "gnsis-ornith-cache",
+        secret_name: str = "gnsis-ornith-auth",
         image: Optional[str] = None,
     ) -> None:
         """Deploy the brain the live runtime calls for tasks.
@@ -203,8 +203,8 @@ def from_settings(settings) -> ModalCompute:
         token_id=settings.modal_token_id,
         token_secret=settings.modal_token_secret,
         environment=settings.modal_environment,
-        gander_app_name=settings.gander_modal_app_name,
-        gander_function_name=settings.gander_modal_function_name,
+        gnsis_app_name=settings.gnsis_modal_app_name,
+        gnsis_function_name=settings.gnsis_modal_function_name,
         # No function-name setting on purpose: a Modal function is named by its
         # `def`, so modal/ornith.py always publishes ornith_server_v2 and a
         # configurable lookup name could only ever point at nothing.
