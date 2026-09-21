@@ -239,7 +239,7 @@ function setSessionState(state) {
   startBtn.disabled = state !== 'idle';
   stopBtn.disabled = !['starting', 'active'].includes(state);
   resetBtn.disabled = state !== 'active';
-  window.GanderVideo?.setSessionState(state);
+  window.GNSISVideo?.setSessionState(state);
 }
 
 function clearControlTimers() {
@@ -505,7 +505,7 @@ function appendArchivedMessage(parent, message) {
   const meta = document.createElement('div');
   meta.className = 'message-meta';
   const label = document.createElement('span');
-  label.textContent = message.role === 'user' ? 'User' : 'Gander';
+  label.textContent = message.role === 'user' ? 'User' : 'GNSIS';
   const timing = document.createElement('time');
   timing.textContent = message.timing || '--';
   meta.append(label, timing);
@@ -662,7 +662,7 @@ function createMessage(role, start, end, pending = false) {
   const meta = document.createElement('div');
   meta.className = 'message-meta';
   const label = document.createElement('span');
-  label.textContent = role === 'user' ? 'User' : 'Gander';
+  label.textContent = role === 'user' ? 'User' : 'GNSIS';
   const timing = document.createElement('time');
   timing.textContent = `${formatTime(start, true)} - ${formatTime(end, true)}`;
   meta.append(label, timing);
@@ -888,7 +888,7 @@ async function submitToolResponse(content) {
   throw new Error('No active duplex session for tool response');
 }
 
-window.GanderDuplexTools = Object.freeze({ respond: submitToolResponse });
+window.GNSISDuplexTools = Object.freeze({ respond: submitToolResponse });
 
 function submitFinalTurn(text, start, end) {
   if (taskProtocol !== 'task_tools_v1') return Promise.resolve(null);
@@ -933,15 +933,15 @@ async function checkRuntime({ retries = RUNTIME_RETRY_DELAYS_MS.length } = {}) {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const runtime = await requestJson('health', { timeoutMs: 5000 });
-      window.GanderVideo?.applyRuntimeCapabilities(runtime.client_video);
+      window.GNSISVideo?.applyRuntimeCapabilities(runtime.client_video);
       contextMaxUnits = Number(runtime.context_max_units) || contextMaxUnits;
       contextStateEl.textContent = `0 / ${contextMaxUnits}`;
       return runtime;
     } catch (error) {
       lastError = error;
       if (attempt === retries) break;
-      setStatus('Waking Gander');
-      addEvent(`Gander has not answered yet; retrying (${attempt + 1}/${retries})`);
+      setStatus('Waking GNSIS');
+      addEvent(`GNSIS has not answered yet; retrying (${attempt + 1}/${retries})`);
       await new Promise((resolve) => window.setTimeout(
         resolve,
         RUNTIME_RETRY_DELAYS_MS[Math.min(attempt, RUNTIME_RETRY_DELAYS_MS.length - 1)]
@@ -953,7 +953,7 @@ async function checkRuntime({ retries = RUNTIME_RETRY_DELAYS_MS.length } = {}) {
 
 function handleServerEvent(message) {
   // Video handles its own control replies.
-  if (window.GanderVideo?.handleServerEvent(message)) return;
+  if (window.GNSISVideo?.handleServerEvent(message)) return;
   if (message.type === 'ready') {
     duplexSessionId = message.session_id || duplexSessionId;
     duplexResumeToken = message.resume_token || null;
@@ -965,7 +965,7 @@ function handleServerEvent(message) {
     taskProtocol = message.task_protocol || null;
     audioInputProtocol = message.audio_input?.protocol || null;
     contextStateEl.textContent = `0 / ${contextMaxUnits}`;
-    window.GanderVideo?.applyCapabilities(message);
+    window.GNSISVideo?.applyCapabilities(message);
     updatePipelineTiming();
     setStatus('Listening', 'active');
     setModelState('Listening');
@@ -1030,7 +1030,7 @@ function handleServerEvent(message) {
     setStatus('Working', 'active');
     setModelState('Tool');
     addEvent(`Tool call: ${names.join(', ') || 'unknown'}`);
-    window.dispatchEvent(new CustomEvent('gander:tool-call', { detail: message }));
+    window.dispatchEvent(new CustomEvent('gnsis:tool-call', { detail: message }));
     return;
   }
   if (message.type === 'tool.error') {
@@ -1113,12 +1113,12 @@ function handleServerEvent(message) {
   if (message.type === 'task_status') {
     const count = Array.isArray(message.task?.tasks) ? message.task.tasks.length : 0;
     addEvent(`Background tasks: ${count}`);
-    window.dispatchEvent(new CustomEvent('gander:task-status', { detail: message.task }));
+    window.dispatchEvent(new CustomEvent('gnsis:task-status', { detail: message.task }));
     return;
   }
   if (message.type === 'memory.summary_needed') {
     addEvent('Runtime requested a memory summary');
-    window.dispatchEvent(new CustomEvent('gander:memory-summary-needed', { detail: message }));
+    window.dispatchEvent(new CustomEvent('gnsis:memory-summary-needed', { detail: message }));
     return;
   }
   if (['memory.episode.done', 'break.done', 'clear_break.done', 'pong'].includes(message.type)) {
@@ -1607,9 +1607,9 @@ async function start() {
 
   try {
     // Request screen sharing within the Start gesture.
-    await window.GanderVideo?.preacquireIfNeeded();
+    await window.GNSISVideo?.preacquireIfNeeded();
     if (sessionState !== 'starting' || stopping) {
-      await window.GanderVideo?.stop();
+      await window.GNSISVideo?.stop();
       return;
     }
     await checkRuntime();
@@ -1618,7 +1618,7 @@ async function start() {
     await startMic();
     if (sessionState !== 'starting') {
       await stopMic();
-      await window.GanderVideo?.stop();
+      await window.GNSISVideo?.stop();
       return;
     }
     setStatus('Connecting');
@@ -1636,9 +1636,9 @@ async function start() {
     if (sessionState !== 'active' && sessionState !== 'starting') return;
     startSessionTimer();
     setSessionState('active');
-    await window.GanderVideo?.attach({ sendControl: sendControlEvent, addEvent });
+    await window.GNSISVideo?.attach({ sendControl: sendControlEvent, addEvent });
     if (sessionState !== 'active' || stopping) {
-      await window.GanderVideo?.stop();
+      await window.GNSISVideo?.stop();
       return;
     }
     capturePaused = false;
@@ -1657,7 +1657,7 @@ async function stop() {
   setModelState('Finishing');
   abandonPendingAsr();
   void stopMic();
-  void window.GanderVideo?.stop();
+  void window.GNSISVideo?.stop();
 
   if (transport === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
     const activeSocket = ws;
@@ -1753,7 +1753,7 @@ async function reconnectDuplex(deadSocket) {
         capturePaused = false;
         addEvent('Duplex reconnected');
         // The share never stopped; only its channel has to be rebuilt.
-        await window.GanderVideo?.resumeTransport();
+        await window.GNSISVideo?.resumeTransport();
         return;
       } catch (error) {
         addEvent(`Reconnect attempt ${attempt + 1} failed: ${error.message || error}`);
@@ -1795,7 +1795,7 @@ async function cleanupAfterClose(forceClose, expectedWs = null, finalStatus = 'I
     // calls it once it has given up - so the share ends with it. The capture
     // is held across a drop by the reconnect loop itself, which does not run
     // this until it is finished.
-    await window.GanderVideo?.stop();
+    await window.GNSISVideo?.stop();
     if (oldWs) await waitForRuntimeRelease();
 
     archiveCurrentConversation();

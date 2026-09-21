@@ -779,7 +779,7 @@ class OnlineRunner:
         return token_ids, hidden.to(device="cpu", copy=True)
 
     def _configure_control_tokens(self) -> None:
-        """Install Gander's native action and tool grammar on MiniCPM-o 4.5."""
+        """Install GNSIS's native action and tool grammar on MiniCPM-o 4.5."""
 
         tokenizer = self.bundle.tokenizer
         unk_id = tokenizer.unk_token_id
