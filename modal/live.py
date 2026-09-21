@@ -21,7 +21,7 @@ CONFIG_PATH = "/workspace/live/configs/gnsis-live.yaml"
 
 # The existing model volume holds MiniCPM-o and the GNSIS Thinker checkpoint.
 # A wrong name fails the deploy rather than creating a fresh empty volume.
-MODELS_VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME") or "gnsis-models"
+MODELS_VOLUME_NAME = os.environ.get("GNSIS_LIVE_MODELS_VOLUME") or "gnsis-models"
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 
