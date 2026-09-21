@@ -1,7 +1,7 @@
 """Modal definition for the GNSIS live runtime: the phone page and the model behind it.
 
-The runtime is vendored under ``gander/``. This app is the GNSIS-owned
-successor of CLIPIT's ``clipit-gander-thinker``: the same realtime Gander
+The runtime is vendored under ``gnsis/``. This app is the GNSIS-owned
+successor of GNSIS's ``legacy-live-service``: the same realtime GNSIS
 runtime and model volume, under a new name so the two can run side by side
 until the new one is verified and the old one is shut down
 (docs/live_runtime.md).
@@ -19,11 +19,11 @@ import modal
 
 APP_NAME = "gnsis-live"
 PORT = 7975
-CONFIG_PATH = "/workspace/gander/configs/gnsis-live.yaml"
+CONFIG_PATH = "/workspace/live/configs/gnsis-live.yaml"
 
-# The existing model volume holds MiniCPM-o and the Gander Thinker checkpoint.
+# The existing model volume holds MiniCPM-o and the GNSIS Thinker checkpoint.
 # A wrong name fails the deploy rather than creating a fresh empty volume.
-MODELS_VOLUME_NAME = os.environ.get("GANDER_MODELS_VOLUME") or "clipit-gander-weights"
+MODELS_VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME") or "gnsis-models"
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 
@@ -56,11 +56,11 @@ image = (
         "uvicorn[standard]>=0.29",
         "websockets>=12",
     )
-    .add_local_dir("gander", remote_path="/workspace/gander", copy=True)
+    .add_local_dir("gnsis", remote_path="/workspace/live", copy=True)
     .run_commands(
-        "python -m pip install --no-deps /workspace/gander/minicpm_ft",
-        "python -m pip install --no-deps /workspace/gander/gander_runtime",
-        "mkdir -p /workspace /var/gander /var/gander/ledger",
+        "python -m pip install --no-deps /workspace/live/minicpm_ft",
+        "python -m pip install --no-deps /workspace/live/runtime",
+        "mkdir -p /workspace /var/gnsis /var/gnsis/ledger",
     )
 )
 
@@ -68,16 +68,16 @@ app = modal.App(APP_NAME, image=image, include_source=False)
 
 
 @app.function(volumes={"/models": models}, timeout=600)
-def cache_gander_models() -> dict[str, str]:
+def cache_gnsis_models() -> dict[str, str]:
     """Validate that the externally supplied model volume is populated."""
     from pathlib import Path
 
     model_dir = Path("/models/MiniCPM-o-4_5")
-    thinker_checkpoint = Path("/models/Gander/thinker")
+    thinker_checkpoint = Path("/models/GNSIS/thinker")
     if not model_dir.is_dir():
         raise FileNotFoundError(f"MiniCPM model directory not found: {model_dir}")
     if not thinker_checkpoint.exists():
-        raise FileNotFoundError(f"Gander Thinker checkpoint not found: {thinker_checkpoint}")
+        raise FileNotFoundError(f"GNSIS Thinker checkpoint not found: {thinker_checkpoint}")
     return {"model": str(model_dir), "thinker": str(thinker_checkpoint)}
 
 
@@ -88,12 +88,12 @@ def cache_gander_models() -> dict[str, str]:
     scaledown_window=60,
 )
 @modal.web_server(PORT, startup_timeout=1800)
-def gander_server() -> None:
-    """Serve the live runtime from the vendored source under gander/."""
+def gnsis_live_server() -> None:
+    """Serve the live runtime from the vendored source under gnsis/."""
     env = os.environ.copy()
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     subprocess.Popen(
-        ["gander-serve", "--config", CONFIG_PATH],
+        ["gnsis-live-serve", "--config", CONFIG_PATH],
         cwd="/workspace",
         env=env,
     )

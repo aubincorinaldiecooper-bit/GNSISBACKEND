@@ -243,25 +243,25 @@ Required variables for `GNSISBEAT`:
 - `MODAL_TOKEN_ID`
 - `MODAL_TOKEN_SECRET`
 - `MODAL_ENVIRONMENT=main` (optional; defaults to `main`)
-- `GANDER_MODAL_APP_NAME=gnsis-live` (optional)
-- `GANDER_MODAL_FUNCTION_NAME=gander_server` (optional)
-- `GANDER_MODELS_VOLUME=clipit-gander-weights` (optional override)
-- `GANDER_SECRET_NAME=clipit-gander-ornith` (optional override)
+- `GNSIS_MODAL_APP_NAME=gnsis-live` (optional)
+- `GNSIS_MODAL_FUNCTION_NAME=gnsis_live_server` (optional)
+- `GNSIS_MODELS_VOLUME=gnsis-models` (optional override)
+- `GNSIS_SECRET_NAME=gnsis-ornith-auth` (optional override)
 
 `GNSISWORKER` owns the Modal workspace relationship. It can discover the live
-Gander URL, smoke `/health`, and explicitly deploy the checked-in runtime through
-the `gnsis.modal_gander_status` and `gnsis.deploy_live_runtime` Celery tasks.
+GNSIS URL, smoke `/health`, and explicitly deploy the checked-in runtime through
+the `gnsis.modal_gnsis_status` and `gnsis.deploy_live_runtime` Celery tasks.
 Neither task runs automatically on worker startup; GitHub Actions is CI only.
 
-### Internal Gander compute admin API
+### Internal GNSIS compute admin API
 
 The API service never receives Modal credentials. Operator requests are authenticated by
 `GNSIS_API_KEY` and only enqueue work onto `GNSISWORKER`, which owns the Modal
 workspace token:
 
 ```sh
-POST /internal/compute/gander/status?smoke=false
-POST /internal/compute/gander/deploy
+POST /internal/compute/live/status?smoke=false
+POST /internal/compute/live/deploy
 POST /internal/compute/ornith/status
 POST /internal/compute/ornith/deploy
 GET  /internal/compute/tasks/<task_id>
