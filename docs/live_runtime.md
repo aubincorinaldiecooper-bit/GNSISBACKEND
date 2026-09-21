@@ -12,7 +12,9 @@ It is a separate component from the GNSIS service. The service is a FastAPI API 
 | `gander/minicpm_ft/` | The MiniCPM-o 4.5 inference core (`mcpmft`) and the page's static files, including the brand assets under `mcpmft/infer/static/live/`. |
 | `gander/configs/gnsis-live.yaml` | The deployment configuration: model paths on the volume, duplex settings, the Ornith worker. |
 | `modal/gander.py` | The Modal definition: app `gnsis-live`, function `gander_server`, an L40S GPU, the model volume and the secret. |
+| `modal/ornith.py` | The brain the runtime calls for tasks: app `gnsis-ornith`, Ornith-1.5-9B served by vLLM on an L40S. See below. |
 | `scripts/verify-modal-gander.py` | After a deploy: finds the app and prints its address; with `GANDER_SMOKE=1` it also opens `/health`. |
+| `scripts/verify-modal-ornith.py` | The same for the brain; with `ORNITH_SMOKE=1` it asks what the server serves. |
 | `gander/UPSTREAM.md` | Provenance: upstream, the time in CLIPIT, the move here. |
 
 ## Tests
@@ -62,6 +64,34 @@ Setting `smoke=True` opens `/health`, which cold-starts the GPU and may take
 several minutes. GitHub Actions validates code but does not hold the production
 Modal token or deploy the live runtime.
 
+## Ornith, the brain the runtime calls
+
+The runtime watches and listens. When it needs a task carried out it calls a second model over an OpenAI-compatible HTTP API: Ornith-1.5-9B, served by vLLM on one GPU. The address it calls is `worker.settings.base_url` in `gander/configs/gnsis-live.yaml`, and the key is `ORNITH_API_KEY` from the same Modal secret the runtime already receives.
+
+That service was deployed from a notebook and no repository described it, so it could not be rebuilt. `modal/ornith.py` is that description, brought over from CLIPIT #134. Two things follow from how it is written:
+
+- **It publishes under `gnsis-ornith`, not over the running service.** The live one is `clipit-ornith-brain-v2`, deployed from the notebook, and the runtime is still pointed at it. A publish from this repository creates or updates the GNSIS-owned app beside it and cannot replace it by accident. Setting `ORNITH_MODAL_APP_NAME` to the old name adopts it in place instead; the function keeps the name that deployment uses, so the address callers hold does not change.
+- **The cache volume and the secret must already exist.** `clipit-ornith-cache` and `clipit-gander-ornith` by default, overridable with `ORNITH_CACHE_VOLUME` and `GANDER_SECRET_NAME`. A name that does not exist fails the publish rather than creating an empty cache that re-downloads the weights on every cold start.
+
+Publishing works like the runtime's own, from the worker that holds the token:
+
+```python
+from gnsis.service.tasks import deploy_ornith_brain, ornith_status
+deploy_ornith_brain.run()   # publishes, then returns the address
+ornith_status.run()         # just the address, nothing started
+```
+
+Or through the internal API, which only enqueues onto the worker:
+
+```sh
+POST /internal/compute/ornith/deploy   {"confirm":"gnsis-ornith"}
+POST /internal/compute/ornith/status
+```
+
+Then point the runtime at it: put the printed address in `gander/configs/gnsis-live.yaml` under `worker.settings.base_url`, commit it, and redeploy the runtime. There is no environment override for that address on purpose, so what the runtime calls is always what the file says.
+
+The vLLM image is `vllm/vllm-openai:latest`, mirroring the notebook for parity. `latest` moves, and a vLLM release that renames a serving flag would break a publish that changed nothing else. Pin the resolved digest in `ORNITH_VLLM_IMAGE` once parity with the running service is proven.
+
 ## Cutover from `clipit-gander-thinker`
 
 The same runtime ran from CLIPIT as the Modal app `clipit-gander-thinker`. The new app uses the same volume and the same secret, so the two can run side by side.
@@ -77,3 +107,5 @@ The model artifacts on the volume and the secret are not touched by any of this.
 ## What the move did not verify
 
 The move was checked by the runtime's test suite and by rendering the page from the real app with the model stubbed. No deployment was made from this repository and no phone was used. The first `gnsis-live` deploy, the `/health` smoke and a live session on a phone are the cutover's own steps above.
+
+`modal/ornith.py` has never been published. It reproduces a notebook deployment from what CLIPIT #134 recorded of it, and nothing has compared the two: the vLLM version behind `latest` has moved since, and the cache volume and secret names are that record rather than something read back from Modal. Until it is published and compared against the running service, treat it as the description of the brain, not as proof that publishing it yields the same one. The live runtime still calls `clipit-ornith-brain-v2`.

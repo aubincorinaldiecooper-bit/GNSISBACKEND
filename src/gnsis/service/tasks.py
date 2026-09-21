@@ -337,6 +337,46 @@ def modal_gander_status(smoke: bool = False) -> dict:
     return result
 
 
+@celery_app.task(name="gnsis.ornith_status")
+def ornith_status() -> dict:
+    """Return the deployed address of the brain the live runtime calls.
+
+    No smoke option: asking Ornith anything needs the API key, and that key
+    lives in the Modal secret the GPU container receives, not on this worker.
+    """
+    from .modal_compute import from_settings
+
+    compute = from_settings(get_settings())
+    return {
+        "url": compute.ornith_web_url(),
+        "app": compute.ornith_ref.app_name,
+        "environment": compute.ornith_ref.environment,
+    }
+
+
+@celery_app.task(name="gnsis.deploy_ornith_brain")
+def deploy_ornith_brain() -> dict:
+    """Explicitly publish Ornith from the GNSIS worker, then report its address.
+
+    Like the runtime's own, never wired to startup or a schedule. It does not
+    repoint the runtime: that is a configuration change plus a redeploy of the
+    runtime, described in docs/live_runtime.md.
+    """
+    from .modal_compute import from_settings
+
+    s = get_settings()
+    compute = from_settings(s)
+    compute.deploy_ornith(
+        cache_volume=s.ornith_cache_volume,
+        secret_name=s.gander_secret_name,
+    )
+    return {
+        "url": compute.ornith_web_url(),
+        "app": compute.ornith_ref.app_name,
+        "environment": compute.ornith_ref.environment,
+    }
+
+
 @celery_app.task(name="gnsis.deploy_live_runtime")
 def deploy_live_runtime(smoke: bool = False) -> dict:
     """Explicitly deploy Gander from the GNSIS worker, then verify it.
