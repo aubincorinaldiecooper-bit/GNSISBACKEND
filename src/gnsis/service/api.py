@@ -1269,9 +1269,9 @@ def internal_gnsis_status(smoke: bool = False) -> dict:
     smoke=false resolves only the deployed web address and does not cold-start
     the GPU. smoke=true also opens /health and can take several minutes.
     """
-    from .tasks import modal_gnsis_status
+    from .tasks import modal_live_status
 
-    queued = modal_gnsis_status.delay(smoke=smoke)
+    queued = modal_live_status.delay(smoke=smoke)
     return {
         "task_id": queued.id,
         "operation": "gnsis_status",
@@ -1288,10 +1288,10 @@ def internal_gnsis_status(smoke: bool = False) -> dict:
 def internal_gnsis_deploy(req: GNSISDeployRequest) -> dict:
     """Explicitly queue a production GNSIS deploy from GNSISWORKER."""
     settings = get_settings()
-    if req.confirm != settings.gnsis_modal_app_name:
+    if req.confirm != settings.live_modal_app_name:
         raise HTTPException(
             status_code=409,
-            detail=f"confirm must equal '{settings.gnsis_modal_app_name}'",
+            detail=f"confirm must equal '{settings.live_modal_app_name}'",
         )
     from .tasks import deploy_live_runtime
 
@@ -1299,7 +1299,7 @@ def internal_gnsis_deploy(req: GNSISDeployRequest) -> dict:
     return {
         "task_id": queued.id,
         "operation": "gnsis_deploy",
-        "app": settings.gnsis_modal_app_name,
+        "app": settings.live_modal_app_name,
         "smoke": req.smoke,
         "state": "queued",
     }
