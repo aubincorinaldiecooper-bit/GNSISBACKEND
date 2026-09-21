@@ -63,6 +63,87 @@ class ModalComputeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["GANDER_MODELS_VOLUME"], "weights")
         self.assertEqual(kwargs["env"]["GANDER_SECRET_NAME"], "ornith")
 
+    def test_ornith_is_looked_up_as_its_own_app(self):
+        """The brain is a separate app, so it must not resolve through Gander's ref."""
+
+        seen = {}
+
+        class _Fn:
+            @classmethod
+            def from_name(cls, app_name, function_name, environment_name=None):
+                seen.update(
+                    app=app_name, function=function_name, environment=environment_name
+                )
+                return cls()
+
+            def hydrate(self):
+                return None
+
+            def get_web_url(self):
+                return "https://gnsis-ornith.example/"
+
+        compute = ModalCompute(
+            token_id="id-test",
+            token_secret="secret-test",
+            modal_module=SimpleNamespace(Function=_Fn),
+        )
+        self.assertEqual(compute.ornith_web_url(), "https://gnsis-ornith.example")
+        self.assertEqual(seen["app"], "gnsis-ornith")
+        self.assertEqual(seen["function"], "ornith_server_v2")
+        self.assertEqual(seen["environment"], "main")
+
+    def test_publishing_ornith_names_its_own_app_and_resources(self):
+        """A publish must land on the app the status call reads, never elsewhere."""
+
+        compute = ModalCompute(
+            token_id="id-test",
+            token_secret="secret-test",
+            ornith_app_name="gnsis-ornith-test",
+        )
+        with patch("gnsis.service.modal_compute.subprocess.run") as run:
+            compute.deploy_ornith(
+                repo_root="/repo",
+                cache_volume="cache",
+                secret_name="ornith",
+            )
+        args, kwargs = run.call_args
+        self.assertEqual(args[0][-1], "modal/ornith.py")
+        self.assertEqual(kwargs["cwd"], "/repo")
+        self.assertTrue(kwargs["check"])
+        self.assertEqual(kwargs["env"]["MODAL_TOKEN_ID"], "id-test")
+        self.assertEqual(kwargs["env"]["ORNITH_MODAL_APP_NAME"], "gnsis-ornith-test")
+        self.assertEqual(kwargs["env"]["ORNITH_CACHE_VOLUME"], "cache")
+        self.assertEqual(kwargs["env"]["ORNITH_SECRET_NAME"], "ornith")
+        # The image tag is only forced when a caller pins one.
+        self.assertNotIn("ORNITH_VLLM_IMAGE", kwargs["env"])
+
+    def test_the_default_ornith_app_is_not_the_running_one(self):
+        """The live brain was deployed from a notebook as clipit-ornith-brain-v2.
+
+        Defaulting to that name would let any publish from this repository
+        replace a running production service, so the default is a name of its
+        own and adopting the existing app has to be asked for.
+        """
+
+        compute = ModalCompute(token_id="id-test", token_secret="secret-test")
+        self.assertEqual(compute.ornith_ref.app_name, "gnsis-ornith")
+        self.assertNotEqual(compute.ornith_ref.app_name, "clipit-ornith-brain-v2")
+
+    def test_settings_carry_the_ornith_names(self):
+        settings = SimpleNamespace(
+            modal_token_id="id",
+            modal_token_secret="secret",
+            modal_environment="main",
+            gander_modal_app_name="gnsis-live",
+            gander_modal_function_name="gander_server",
+            ornith_modal_app_name="gnsis-ornith",
+            ornith_modal_function_name="ornith_server_v2",
+        )
+        compute = from_settings(settings)
+        self.assertEqual(compute.ornith_ref.app_name, "gnsis-ornith")
+        self.assertEqual(compute.ornith_ref.function_name, "ornith_server_v2")
+        self.assertEqual(compute.ref.app_name, "gnsis-live")
+
     def test_settings_boundary_requires_both_modal_values(self):
         settings = SimpleNamespace(
             modal_token_id=None,

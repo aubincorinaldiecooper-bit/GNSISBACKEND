@@ -64,7 +64,15 @@ class Settings:
     gander_modal_app_name: str = "gnsis-live"
     gander_modal_function_name: str = "gander_server"
     gander_models_volume: str = "clipit-gander-weights"
+    # One secret, both sides of the same call: the runtime reads ORNITH_API_KEY
+    # from it to reach Ornith, and Ornith reads the same value to require it.
     gander_secret_name: str = "clipit-gander-ornith"
+    # Ornith is the brain the live runtime asks for tasks. It deploys under a
+    # name of its own so a deploy from here never replaces the service that is
+    # already running; see modal/ornith.py and docs/live_runtime.md.
+    ornith_modal_app_name: str = "gnsis-ornith"
+    ornith_modal_function_name: str = "ornith_server_v2"
+    ornith_cache_volume: str = "clipit-ornith-cache"
 
     # GitHub App — the platform-owned credentials. The App id + private key are
     # used to mint short-lived installation tokens per run. The global
@@ -445,6 +453,9 @@ class Settings:
             gander_modal_function_name=os.environ.get("GANDER_MODAL_FUNCTION_NAME", "gander_server"),
             gander_models_volume=os.environ.get("GANDER_MODELS_VOLUME", "clipit-gander-weights"),
             gander_secret_name=os.environ.get("GANDER_SECRET_NAME", "clipit-gander-ornith"),
+            ornith_modal_app_name=os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith"),
+            ornith_modal_function_name=os.environ.get("ORNITH_MODAL_FUNCTION_NAME", "ornith_server_v2"),
+            ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "clipit-ornith-cache"),
             github_app_id=os.environ.get("GITHUB_APP_ID"),
             github_app_private_key=os.environ.get("GITHUB_APP_PRIVATE_KEY"),
             github_app_installation_id=os.environ.get("GITHUB_APP_INSTALLATION_ID"),

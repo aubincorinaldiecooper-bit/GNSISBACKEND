@@ -326,6 +326,11 @@ class GanderDeployRequest(BaseModel):
     smoke: bool = False
 
 
+class OrnithDeployRequest(BaseModel):
+    # Same rule for the brain the live runtime calls: name the app to publish it.
+    confirm: str
+
+
 # -- health / meta ------------------------------------------------------------
 
 
@@ -1296,6 +1301,52 @@ def internal_gander_deploy(req: GanderDeployRequest) -> dict:
         "operation": "gander_deploy",
         "app": settings.gander_modal_app_name,
         "smoke": req.smoke,
+        "state": "queued",
+    }
+
+
+@app.post(
+    "/internal/compute/ornith/status",
+    status_code=202,
+    dependencies=[Depends(require_internal_key)],
+)
+def internal_ornith_status() -> dict:
+    """Queue a worker-owned lookup of Ornith's address.
+
+    Resolving an address does not start a GPU. There is no smoke option: the
+    key that would authenticate a request to Ornith lives in its Modal secret,
+    not on the worker.
+    """
+    from .tasks import ornith_status
+
+    queued = ornith_status.delay()
+    return {
+        "task_id": queued.id,
+        "operation": "ornith_status",
+        "state": "queued",
+    }
+
+
+@app.post(
+    "/internal/compute/ornith/deploy",
+    status_code=202,
+    dependencies=[Depends(require_internal_key)],
+)
+def internal_ornith_deploy(req: OrnithDeployRequest) -> dict:
+    """Explicitly queue publication of the Ornith brain from GNSISWORKER."""
+    settings = get_settings()
+    if req.confirm != settings.ornith_modal_app_name:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirm must equal '{settings.ornith_modal_app_name}'",
+        )
+    from .tasks import deploy_ornith_brain
+
+    queued = deploy_ornith_brain.delay()
+    return {
+        "task_id": queued.id,
+        "operation": "ornith_deploy",
+        "app": settings.ornith_modal_app_name,
         "state": "queued",
     }
 

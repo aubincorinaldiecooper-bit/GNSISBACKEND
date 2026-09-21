@@ -262,13 +262,20 @@ workspace token:
 ```sh
 POST /internal/compute/gander/status?smoke=false
 POST /internal/compute/gander/deploy
+POST /internal/compute/ornith/status
+POST /internal/compute/ornith/deploy
 GET  /internal/compute/tasks/<task_id>
 ```
 
-All three require `Authorization: Bearer <GNSIS_API_KEY>`. Deploy also requires the
-JSON body `{"confirm":"gnsis-live","smoke":false}`; the explicit confirmation prevents
-an accidental POST from mutating production infrastructure. The API only returns a
-bounded task result (app, environment, URL and optional health document) and never
-returns provider exception text or secret values.
+All of them require `Authorization: Bearer <GNSIS_API_KEY>`. Each deploy also requires
+a JSON body naming the app it will publish, `{"confirm":"gnsis-live","smoke":false}` and
+`{"confirm":"gnsis-ornith"}`; the explicit confirmation prevents an accidental POST from
+mutating production infrastructure. The API only returns a bounded task result (app,
+environment, URL and optional health document) and never returns provider exception text
+or secret values.
+
+The Ornith routes cover the brain the live runtime calls for tasks (`modal/ornith.py`,
+docs/live_runtime.md). Its status has no smoke option: the key that would authenticate a
+request to Ornith is in its Modal secret, not on the worker.
 
 Remove API-only variables from `GNSISWORKER`: `OPENROUTER_API_KEY`, `GITHUB_WEBHOOK_SECRET`, Better Auth secret material, and `GNSIS_AUTH_INTERNAL_SECRET`.
