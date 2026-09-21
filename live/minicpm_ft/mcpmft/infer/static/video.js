@@ -626,7 +626,7 @@
     releaseStream();
   });
 
-  window.GanderVideo = {
+  window.GNSISVideo = {
     // Health capabilities allow screen permission within the Start gesture.
     applyRuntimeCapabilities(clientVideo) {
       runtimeCapabilities = clientVideo ? { ...clientVideo } : null;
