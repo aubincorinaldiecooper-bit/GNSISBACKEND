@@ -1,9 +1,8 @@
 name: Live runtime validation
 
-# The runtime under gnsis/ is a separate component from the GNSIS service: it
-# needs Python 3.10+, FastAPI and, in production, torch, none of which the
-# standard-library-only core wants. So it gets its own job, run only when it
-# changes, with the model stubbed exactly as the runtime's tests expect.
+# The realtime stack under runtime/ is isolated from the standard service
+# dependency surface. This job validates that stack independently with the
+# production model stubbed exactly as the runtime tests expect.
 
 on:
   pull_request:
@@ -30,6 +29,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enforce GNSIS-only source naming
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -iE '(gander|clipit)'; then
+            echo "Retired product naming found in a tracked path." >&2
+            exit 1
+          fi
+          if git grep -nIiE '(gander|clipit)' -- .; then
+            echo "Retired product naming found in tracked source content." >&2
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         with:
