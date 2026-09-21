@@ -136,7 +136,6 @@ class ModalCompute:
         *,
         repo_root: str = "/app",
         models_volume: str = "gnsis-models",
-        secret_name: str = "gnsis-ornith-auth",
     ) -> None:
         """Deploy the checked-in live runtime from the worker image.
 
@@ -145,7 +144,6 @@ class ModalCompute:
         """
         env = self._credential_env()
         env["GNSIS_MODELS_VOLUME"] = models_volume
-        env["GNSIS_SECRET_NAME"] = secret_name
         subprocess.run(
             [
                 "modal",
