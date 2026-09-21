@@ -22,9 +22,15 @@ CONFIG_PATH = "/workspace/runtime/configs/gnsis-live.yaml"
 # name here used to build a perfectly valid image with no source in it and fail
 # only once someone deployed. Checked on import instead, so the CI import of
 # this file catches a move of the source tree the way it caught nothing before.
+#
+# Only checked where the repository exists. Modal imports this same file a
+# second time, inside the container, to find gnsis_server — and there it sits
+# alone at /root with no repository around it; the source is already baked into
+# the image at /workspace/runtime. Run there, this check would fail every
+# container start.
 SOURCE_DIR = "runtime"
 _source = Path(__file__).resolve().parent.parent / SOURCE_DIR
-if not _source.is_dir():
+if modal.is_local() and not _source.is_dir():
     raise RuntimeError(
         f"{SOURCE_DIR}/ is missing from the repository root ({_source}); "
         "the realtime source tree has moved and this definition would package nothing"
@@ -75,7 +81,12 @@ image = (
     )
 )
 
-app = modal.App(APP_NAME, image=image, include_source=False)
+# include_source=True: Modal ships this file into the container and imports it
+# there to find gnsis_server. With it off, every container died at that import
+# with "ModuleNotFoundError: No module named 'gnsis'" — before gnsis-serve, the
+# config or the checkpoint were ever touched. modal/ is a bare directory, not a
+# package, so the only thing shipped is this file.
+app = modal.App(APP_NAME, image=image, include_source=True)
 
 
 @app.function(volumes={"/models": models}, timeout=600)
