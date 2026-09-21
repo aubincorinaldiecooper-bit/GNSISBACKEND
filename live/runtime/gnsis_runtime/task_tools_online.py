@@ -147,7 +147,7 @@ class TaskToolsRealtimeCoordinator:
         await self._sync_slate(force=True)
         self._delivery_task = asyncio.create_task(
             self._delivery_loop(),
-            name=f"gander-task-tools-delivery-{self.session_id}",
+            name=f"gnsis-task-tools-delivery-{self.session_id}",
         )
         self._delivery_task.add_done_callback(self._log_job_failure)
 
@@ -940,7 +940,7 @@ class TaskToolsRealtimeCoordinator:
     def _spawn(self, coroutine: Any, suffix: str) -> None:
         task = asyncio.create_task(
             coroutine,
-            name=f"gander-task-tools-{suffix}-{self.session_id}",
+            name=f"gnsis-task-tools-{suffix}-{self.session_id}",
         )
         self._jobs.add(task)
         task.add_done_callback(self._jobs.discard)

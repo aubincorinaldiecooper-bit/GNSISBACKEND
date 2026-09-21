@@ -66,7 +66,7 @@ class WorkerToolRouter:
     async def start(self) -> None:
         if self._server is not None:
             return
-        stem = f"gander-worker-tools-{os.getpid()}-{uuid.uuid4().hex[:12]}"
+        stem = f"gnsis-worker-tools-{os.getpid()}-{uuid.uuid4().hex[:12]}"
         self.route_path = Path(tempfile.gettempdir()) / f"{stem}.route.json"
         self._token = secrets.token_urlsafe(32)
         self._server = await asyncio.start_server(
