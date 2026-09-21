@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Lifecycle tests stub the Thinker and the worker gateway, so they run without
-# torch or a model: `pip install -e ./gnsis_runtime[test] && pytest gnsis_runtime/tests`
+# torch or a model: `pip install -e ./live/runtime[test] && pytest live/runtime/tests`
 test = [
   "pytest>=8",
   "httpx>=0.27",
