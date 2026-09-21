@@ -16,8 +16,8 @@ model:
 server:
   host: 127.0.0.1
   port: 8000
-  runtime_dir: var/gander
-  ledger_dir: /tmp/gander/gateway
+  runtime_dir: var/gnsis
+  ledger_dir: /tmp/live/gateway
   mode: lean
   log_level: info
   cuda_visible_devices: "0,1"
@@ -36,8 +36,8 @@ asr:
   request_timeout_sec: 120.0
 
 duplex:
-  checkpoint: /path/to/gander-thinker-checkpoint
-  talker_checkpoint: /path/to/gander-talker-checkpoint
+  checkpoint: /path/to/gnsis-thinker-checkpoint
+  talker_checkpoint: /path/to/gnsis-talker-checkpoint
   detached_talker_device: cuda:1
   talker_emit_speech_tokens: 25
   generate_audio: true

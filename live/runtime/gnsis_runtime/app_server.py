@@ -61,7 +61,7 @@ class CodexAppServer:
                 self.request(
                     "initialize",
                     {
-                        "clientInfo": {"name": "gander-runtime", "version": "1.0.0"},
+                        "clientInfo": {"name": "gnsis-live-runtime", "version": "1.0.0"},
                         "capabilities": {"experimentalApi": True},
                     },
                 ),

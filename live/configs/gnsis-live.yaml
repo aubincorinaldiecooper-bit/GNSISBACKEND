@@ -1,5 +1,5 @@
-# GNSIS live MVP: MiniCPM-o 4.5 with the Gander Thinker checkpoint on the
-# model volume. This release is deliberately perception-only: Gander handles
+# GNSIS live MVP: MiniCPM-o 4.5 with the GNSIS Thinker checkpoint on the
+# model volume. This release is deliberately perception-only: GNSIS handles
 # realtime vision/duplex directly and has no external action/worker provider.
 # Ornith remains available in the repository for a later action-layer phase,
 # but it is not a dependency of this MVP. See docs/live_runtime.md.
@@ -19,8 +19,8 @@ model:
 server:
   host: 0.0.0.0
   port: 7975
-  runtime_dir: /var/gander
-  ledger_dir: /var/gander/ledger
+  runtime_dir: /var/gnsis
+  ledger_dir: /var/gnsis/ledger
   mode: lean
   log_level: info
   cuda_visible_devices: "0"
@@ -29,7 +29,7 @@ asr:
   mode: disabled
 
 duplex:
-  checkpoint: /models/Gander/thinker
+  checkpoint: /models/GNSIS/thinker
   generate_audio: false
   decode_mode: sampling
   media_mode: omni
