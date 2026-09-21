@@ -37,8 +37,8 @@ class ModalCompute:
         token_id: str,
         token_secret: str,
         environment: str = "main",
-        gnsis_app_name: str = "gnsis-live",
-        gnsis_function_name: str = "gnsis_live_server",
+        live_app_name: str = "gnsis-live",
+        live_function_name: str = "gnsis_live_server",
         ornith_app_name: str = "gnsis-ornith",
         ornith_function_name: str = "ornith_server_v2",
         modal_module: Optional[Any] = None,
@@ -48,8 +48,8 @@ class ModalCompute:
         self.token_id = token_id
         self.token_secret = token_secret
         self.ref = ModalRuntimeRef(
-            app_name=gnsis_app_name,
-            function_name=gnsis_function_name,
+            app_name=live_app_name,
+            function_name=live_function_name,
             environment=environment,
         )
         # The brain the runtime calls for tasks, deployed as its own app.
@@ -104,7 +104,7 @@ class ModalCompute:
             raise RuntimeError(f"{ref.app_name}/{ref.function_name} has no web address")
         return str(url).rstrip("/")
 
-    def gnsis_web_url(self) -> str:
+    def live_web_url(self) -> str:
         """Return the deployed GNSIS web-server URL without starting a GPU."""
         return self._web_url(self.ref)
 
@@ -117,9 +117,9 @@ class ModalCompute:
         """
         return self._web_url(self.ornith_ref)
 
-    def gnsis_health(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
+    def live_health(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
         """Cold-start the live runtime and return its /health document."""
-        url = self.gnsis_web_url()
+        url = self.live_web_url()
         try:
             with urllib.request.urlopen(
                 f"{url}/health", timeout=timeout_seconds
@@ -131,7 +131,7 @@ class ModalCompute:
             raise RuntimeError(f"GNSIS reported unhealthy status: {payload!r}")
         return payload
 
-    def deploy_gnsis(
+    def deploy_live(
         self,
         *,
         repo_root: str = "/app",
@@ -143,7 +143,7 @@ class ModalCompute:
         not mutate production infrastructure merely because it restarted.
         """
         env = self._credential_env()
-        env["GNSIS_MODELS_VOLUME"] = models_volume
+        env["GNSIS_LIVE_MODELS_VOLUME"] = models_volume
         subprocess.run(
             [
                 "modal",
@@ -201,8 +201,8 @@ def from_settings(settings) -> ModalCompute:
         token_id=settings.modal_token_id,
         token_secret=settings.modal_token_secret,
         environment=settings.modal_environment,
-        gnsis_app_name=settings.gnsis_modal_app_name,
-        gnsis_function_name=settings.gnsis_modal_function_name,
+        live_app_name=settings.live_modal_app_name,
+        live_function_name=settings.live_modal_function_name,
         # No function-name setting on purpose: a Modal function is named by its
         # `def`, so modal/ornith.py always publishes ornith_server_v2 and a
         # configurable lookup name could only ever point at nothing.
