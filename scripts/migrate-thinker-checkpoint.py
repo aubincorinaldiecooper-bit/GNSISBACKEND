@@ -1,24 +1,19 @@
-"""Move the Thinker checkpoint to the path this branch expects, inside one volume.
+"""Move the Thinker checkpoint to the GNSIS path inside the model volume.
 
-The realtime runtime loads two things from the model volume: the MiniCPM-o
-directory, whose path is unchanged, and the Thinker checkpoint, which this
-branch expects at ``/models/GNSIS/thinker``. On an existing volume the
-checkpoint still sits under its previous directory name.
+The realtime runtime loads MiniCPM-o plus the Thinker checkpoint from one Modal
+Volume. The runtime expects the Thinker checkpoint at
+``/models/GNSIS/thinker``.
 
-This does not copy the weights. It renames one directory inside the volume,
-which is a metadata operation, so it costs seconds rather than the hours a
-volume-to-volume copy of the checkpoints would take. The volume name itself
-does not have to change: ``GNSIS_MODELS_VOLUME`` points the deploy at whatever
-volume already exists.
+Run this once before deploying the live runtime:
 
-Run it once, before deploying this branch:
-
-    GNSIS_MODELS_VOLUME=<the existing volume> \\
-    GNSIS_THINKER_SOURCE=/models/<previous directory>/thinker \\
+    GNSIS_MODELS_VOLUME=<existing volume> \
+    GNSIS_THINKER_SOURCE=/models/<previous directory>/thinker \
     modal run scripts/migrate-thinker-checkpoint.py
 
-It is safe to run twice. It never deletes anything, never writes over an
-existing destination, and reports what it found either way.
+The source path is passed as a function argument rather than read by the remote
+container at import time. That matters because environment variables provided
+to the local Modal CLI are not automatically present while Modal imports this
+module remotely.
 """
 
 from __future__ import annotations
@@ -27,15 +22,7 @@ import os
 
 import modal
 
-VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME", "").strip()
-if not VOLUME_NAME:
-    raise RuntimeError(
-        "Set GNSIS_MODELS_VOLUME to the existing model volume. There is no "
-        "default: guessing a volume name here could touch the wrong one."
-    )
-
-# Where the checkpoint is today. No default, so this file carries no assumption
-# about the previous naming and cannot move something it was not pointed at.
+VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME", "gnsis-model-weights").strip()
 SOURCE = os.environ.get("GNSIS_THINKER_SOURCE", "").strip()
 if not SOURCE:
     raise RuntimeError(
@@ -43,20 +30,18 @@ if not SOURCE:
         "inside the volume, for example /models/<previous directory>/thinker"
     )
 
-# Where modal/gnsis.py and runtime/configs/gnsis-live.yaml expect it.
 DESTINATION = "/models/GNSIS/thinker"
 
 models = modal.Volume.from_name(VOLUME_NAME, create_if_missing=False)
-
 app = modal.App("gnsis-thinker-checkpoint-migration")
 
 
 @app.function(volumes={"/models": models}, timeout=900)
-def migrate() -> dict[str, str]:
+def migrate(source_path: str) -> dict[str, str]:
     """Rename the checkpoint directory, or report that nothing needs doing."""
     from pathlib import Path
 
-    source = Path(SOURCE)
+    source = Path(source_path)
     destination = Path(DESTINATION)
 
     if destination.exists() and not source.exists():
@@ -64,10 +49,9 @@ def migrate() -> dict[str, str]:
             "status": "already migrated",
             "checkpoint": str(destination),
             "entries": str(len(list(destination.iterdir()))),
+            "minicpm_present": str(Path("/models/MiniCPM-o-4_5").is_dir()),
         }
     if destination.exists() and source.exists():
-        # Both present means someone has already made a destination, and
-        # picking one would risk discarding the real checkpoint.
         raise RuntimeError(
             f"both {source} and {destination} exist; refusing to choose between "
             "them. Inspect the volume and remove whichever is not the checkpoint."
@@ -83,7 +67,6 @@ def migrate() -> dict[str, str]:
     source.rename(destination)
     models.commit()
 
-    # Read the volume back rather than trusting the rename silently.
     if not destination.is_dir():
         raise RuntimeError(f"{destination} is missing after the rename")
     moved = len(list(destination.iterdir()))
@@ -104,7 +87,7 @@ def migrate() -> dict[str, str]:
 
 @app.local_entrypoint()
 def main() -> None:
-    result = migrate.remote()
+    result = migrate.remote(SOURCE)
     for key, value in result.items():
         print(f"{key}: {value}")
     if result.get("minicpm_present") == "False":
