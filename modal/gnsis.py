@@ -1,13 +1,8 @@
-"""Modal definition for the GNSIS live runtime: the phone page and the model behind it.
+"""Modal definition for the GNSIS realtime multimodal runtime.
 
-The runtime is vendored under ``runtime/``. This app is the GNSIS-owned
-successor of the prior project's ``previous-live-runtime``: the same realtime GNSIS
-runtime and model volume, under a new name so the two can run side by side
-until the new one is verified and the old one is shut down
-(docs/live_runtime.md).
-
-The MVP is perception-only. It does not load an external worker provider and
-therefore does not require the historical Ornith secret.
+This app serves the GNSIS live surface and realtime model from the source under
+`runtime/`. Model artifacts are supplied through the configured Modal volume;
+the MVP itself has no external action-worker dependency.
 """
 
 from __future__ import annotations
@@ -105,7 +100,7 @@ def cache_gnsis_models() -> dict[str, str]:
 )
 @modal.web_server(PORT, startup_timeout=1800)
 def gnsis_server() -> None:
-    """Serve the live runtime from the vendored source under gnsis/."""
+    """Serve the GNSIS realtime runtime from the source under runtime/."""
     env = os.environ.copy()
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     subprocess.Popen(
