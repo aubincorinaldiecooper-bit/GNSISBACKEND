@@ -324,16 +324,16 @@ def observe_customer_ci() -> str:
     return f"ci-observed:{observed}"
 
 
-@celery_app.task(name="gnsis.modal_gnsis_status")
-def modal_gnsis_status(smoke: bool = False) -> dict:
+@celery_app.task(name="gnsis.modal_live_status")
+def modal_live_status(smoke: bool = False) -> dict:
     """Return the live GNSIS endpoint and optionally cold-start /health."""
     from .modal_compute import from_settings
 
     compute = from_settings(get_settings())
-    url = compute.gnsis_web_url()
+    url = compute.live_web_url()
     result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
     if smoke:
-        result["health"] = compute.gnsis_health()
+        result["health"] = compute.live_health()
     return result
 
 
@@ -388,11 +388,11 @@ def deploy_live_runtime(smoke: bool = False) -> dict:
 
     s = get_settings()
     compute = from_settings(s)
-    compute.deploy_gnsis(
-        models_volume=s.gnsis_models_volume,
+    compute.deploy_live(
+        models_volume=s.live_models_volume,
     )
-    url = compute.gnsis_web_url()
+    url = compute.live_web_url()
     result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}
     if smoke:
-        result["health"] = compute.gnsis_health()
+        result["health"] = compute.live_health()
     return result
