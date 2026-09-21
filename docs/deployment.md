@@ -243,14 +243,14 @@ Required variables for `GNSISBEAT`:
 - `MODAL_TOKEN_ID`
 - `MODAL_TOKEN_SECRET`
 - `MODAL_ENVIRONMENT=main` (optional; defaults to `main`)
-- `GNSIS_MODAL_APP_NAME=gnsis-live` (optional)
-- `GNSIS_MODAL_FUNCTION_NAME=gnsis_live_server` (optional)
-- `GNSIS_MODELS_VOLUME=gnsis-models` (optional override)
+- `GNSIS_LIVE_MODAL_APP_NAME=gnsis-live` (optional)
+- `GNSIS_LIVE_MODAL_FUNCTION_NAME=gnsis_live_server` (optional)
+- `GNSIS_LIVE_MODELS_VOLUME=gnsis-models` (optional override)
 - `ORNITH_SECRET_NAME=gnsis-ornith-auth` (optional; action layer only)
 
 `GNSISWORKER` owns the Modal workspace relationship. It can discover the live
 GNSIS URL, smoke `/health`, and explicitly deploy the checked-in runtime through
-the `gnsis.modal_gnsis_status` and `gnsis.deploy_live_runtime` Celery tasks.
+the `gnsis.modal_live_status` and `gnsis.deploy_live_runtime` Celery tasks.
 Neither task runs automatically on worker startup; GitHub Actions is CI only.
 
 ### Internal GNSIS compute admin API
