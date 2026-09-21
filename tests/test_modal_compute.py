@@ -52,7 +52,6 @@ class ModalComputeTests(unittest.TestCase):
             compute.deploy_gnsis(
                 repo_root="/repo",
                 models_volume="weights",
-                secret_name="ornith",
             )
         args, kwargs = run.call_args
         self.assertEqual(args[0][-1], "modal/live.py")
@@ -61,7 +60,7 @@ class ModalComputeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_ID"], "id-test")
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_SECRET"], "secret-test")
         self.assertEqual(kwargs["env"]["GNSIS_MODELS_VOLUME"], "weights")
-        self.assertEqual(kwargs["env"]["GNSIS_SECRET_NAME"], "ornith")
+        self.assertNotIn("ORNITH_SECRET_NAME", kwargs["env"])
 
     def test_ornith_is_looked_up_as_its_own_app(self):
         """The brain is a separate app, so it must not resolve through GNSIS's ref."""
