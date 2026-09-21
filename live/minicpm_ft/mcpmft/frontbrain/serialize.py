@@ -3,7 +3,7 @@ from __future__ import annotations
 from mcpmft.data.feature import AudioGeometry
 from mcpmft.data.sample import OmniSample
 from mcpmft.data.serialize_turn import SerializedSample
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 
 
 def serialize_frontbrain_sample(
@@ -19,7 +19,7 @@ def serialize_frontbrain_sample(
     codes_per_text_token: int = 6,
     speech_tokens_per_unit: int = 25,
     include_system_prompt: bool = True,
-    system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT,
+    system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT,
     pinned_context: str | None = None,
 ) -> SerializedSample:
     """Serialize the realtime front brain with MiniCPM's native tool protocol.
