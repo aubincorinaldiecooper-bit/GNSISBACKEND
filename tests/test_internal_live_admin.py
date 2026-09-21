@@ -22,7 +22,7 @@ def _prepare():
     init_db()
 
 
-class InternalGanderAdminTests(unittest.TestCase):
+class InternalGNSISAdminTests(unittest.TestCase):
     def setUp(self):
         _prepare()
         from fastapi.testclient import TestClient
@@ -33,14 +33,14 @@ class InternalGanderAdminTests(unittest.TestCase):
         self.auth = {"Authorization": "Bearer secret-key"}
 
     def test_status_requires_internal_key(self):
-        r = self.client.post("/internal/compute/gander/status")
+        r = self.client.post("/internal/compute/live/status")
         self.assertEqual(r.status_code, 401)
 
     def test_status_queues_worker_task(self):
         queued = SimpleNamespace(id="task-status")
-        with patch("gnsis.service.tasks.modal_gander_status.delay", return_value=queued) as delay:
+        with patch("gnsis.service.tasks.modal_gnsis_status.delay", return_value=queued) as delay:
             r = self.client.post(
-                "/internal/compute/gander/status?smoke=false",
+                "/internal/compute/live/status?smoke=false",
                 headers=self.auth,
             )
         self.assertEqual(r.status_code, 202, r.text)
@@ -50,7 +50,7 @@ class InternalGanderAdminTests(unittest.TestCase):
     def test_deploy_requires_exact_confirmation(self):
         with patch("gnsis.service.tasks.deploy_live_runtime.delay") as delay:
             r = self.client.post(
-                "/internal/compute/gander/deploy",
+                "/internal/compute/live/deploy",
                 headers=self.auth,
                 json={"confirm": "wrong", "smoke": False},
             )
@@ -61,7 +61,7 @@ class InternalGanderAdminTests(unittest.TestCase):
         queued = SimpleNamespace(id="task-deploy")
         with patch("gnsis.service.tasks.deploy_live_runtime.delay", return_value=queued) as delay:
             r = self.client.post(
-                "/internal/compute/gander/deploy",
+                "/internal/compute/live/deploy",
                 headers=self.auth,
                 json={"confirm": "gnsis-live", "smoke": True},
             )

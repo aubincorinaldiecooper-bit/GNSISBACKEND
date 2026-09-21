@@ -1,2 +1,2 @@
 # GNSISWORKER owns Modal compute, including explicit live-runtime deploys.
-# Keep gander/ and modal/ in the image; weights stay on the external Modal Volume.
+# Keep gnsis/ and modal/ in the image; weights stay on the external Modal Volume.

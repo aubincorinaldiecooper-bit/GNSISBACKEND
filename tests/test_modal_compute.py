@@ -12,7 +12,7 @@ class _FakeFunction:
     @classmethod
     def from_name(cls, app_name, function_name, environment_name=None):
         assert app_name == "gnsis-live"
-        assert function_name == "gander_server"
+        assert function_name == "gnsis_live_server"
         assert environment_name == "main"
         return cls()
 
@@ -28,7 +28,7 @@ class _FakeModal:
 
 
 class ModalComputeTests(unittest.TestCase):
-    def test_discovers_gander_without_leaking_credentials_into_process(self):
+    def test_discovers_gnsis_without_leaking_credentials_into_process(self):
         old_id = os.environ.pop("MODAL_TOKEN_ID", None)
         old_secret = os.environ.pop("MODAL_TOKEN_SECRET", None)
         try:
@@ -37,7 +37,7 @@ class ModalComputeTests(unittest.TestCase):
                 token_secret="secret-test",
                 modal_module=_FakeModal,
             )
-            self.assertEqual(compute.gander_web_url(), "https://gnsis-live.example")
+            self.assertEqual(compute.gnsis_web_url(), "https://gnsis-live.example")
             self.assertNotIn("MODAL_TOKEN_ID", os.environ)
             self.assertNotIn("MODAL_TOKEN_SECRET", os.environ)
         finally:
@@ -49,22 +49,22 @@ class ModalComputeTests(unittest.TestCase):
     def test_deploy_is_explicit_and_uses_worker_credentials(self):
         compute = ModalCompute(token_id="id-test", token_secret="secret-test")
         with patch("gnsis.service.modal_compute.subprocess.run") as run:
-            compute.deploy_gander(
+            compute.deploy_gnsis(
                 repo_root="/repo",
                 models_volume="weights",
                 secret_name="ornith",
             )
         args, kwargs = run.call_args
-        self.assertEqual(args[0][-1], "modal/gander.py")
+        self.assertEqual(args[0][-1], "modal/live.py")
         self.assertEqual(kwargs["cwd"], "/repo")
         self.assertTrue(kwargs["check"])
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_ID"], "id-test")
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_SECRET"], "secret-test")
-        self.assertEqual(kwargs["env"]["GANDER_MODELS_VOLUME"], "weights")
-        self.assertEqual(kwargs["env"]["GANDER_SECRET_NAME"], "ornith")
+        self.assertEqual(kwargs["env"]["GNSIS_MODELS_VOLUME"], "weights")
+        self.assertEqual(kwargs["env"]["GNSIS_SECRET_NAME"], "ornith")
 
     def test_ornith_is_looked_up_as_its_own_app(self):
-        """The brain is a separate app, so it must not resolve through Gander's ref."""
+        """The brain is a separate app, so it must not resolve through GNSIS's ref."""
 
         seen = {}
 
@@ -118,7 +118,7 @@ class ModalComputeTests(unittest.TestCase):
         self.assertNotIn("ORNITH_VLLM_IMAGE", kwargs["env"])
 
     def test_the_default_ornith_app_is_not_the_running_one(self):
-        """The live brain was deployed from a notebook as clipit-ornith-brain-v2.
+        """The live brain was deployed from a notebook as legacy-ornith-service.
 
         Defaulting to that name would let any publish from this repository
         replace a running production service, so the default is a name of its
@@ -127,7 +127,7 @@ class ModalComputeTests(unittest.TestCase):
 
         compute = ModalCompute(token_id="id-test", token_secret="secret-test")
         self.assertEqual(compute.ornith_ref.app_name, "gnsis-ornith")
-        self.assertNotEqual(compute.ornith_ref.app_name, "clipit-ornith-brain-v2")
+        self.assertNotEqual(compute.ornith_ref.app_name, "legacy-ornith-service")
 
     def test_settings_carry_the_ornith_app_but_never_its_function_name(self):
         """The app is a setting; the function name cannot be one.
@@ -143,8 +143,8 @@ class ModalComputeTests(unittest.TestCase):
             modal_token_id="id",
             modal_token_secret="secret",
             modal_environment="main",
-            gander_modal_app_name="gnsis-live",
-            gander_modal_function_name="gander_server",
+            gnsis_modal_app_name="gnsis-live",
+            gnsis_modal_function_name="gnsis_live_server",
             ornith_modal_app_name="adopted-app",
             ornith_modal_function_name="not_a_real_function",
         )
@@ -176,8 +176,8 @@ class ModalComputeTests(unittest.TestCase):
             modal_token_id=None,
             modal_token_secret=None,
             modal_environment="main",
-            gander_modal_app_name="gnsis-live",
-            gander_modal_function_name="gander_server",
+            gnsis_modal_app_name="gnsis-live",
+            gnsis_modal_function_name="gnsis_live_server",
         )
         with self.assertRaisesRegex(RuntimeError, "missing Modal credentials"):
             from_settings(settings)
