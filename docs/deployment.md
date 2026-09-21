@@ -246,7 +246,7 @@ Required variables for `GNSISBEAT`:
 - `GNSIS_MODAL_APP_NAME=gnsis-live` (optional)
 - `GNSIS_MODAL_FUNCTION_NAME=gnsis_live_server` (optional)
 - `GNSIS_MODELS_VOLUME=gnsis-models` (optional override)
-- `GNSIS_SECRET_NAME=gnsis-ornith-auth` (optional override)
+- `ORNITH_SECRET_NAME=gnsis-ornith-auth` (optional; action layer only)
 
 `GNSISWORKER` owns the Modal workspace relationship. It can discover the live
 GNSIS URL, smoke `/health`, and explicitly deploy the checked-in runtime through
@@ -274,8 +274,8 @@ mutating production infrastructure. The API only returns a bounded task result (
 environment, URL and optional health document) and never returns provider exception text
 or secret values.
 
-The Ornith routes cover the brain the live runtime calls for tasks (`modal/ornith.py`,
-docs/live_runtime.md). Its status has no smoke option: the key that would authenticate a
-request to Ornith is in its Modal secret, not on the worker.
+The Ornith routes are optional action-layer infrastructure (`modal/ornith.py`).
+They are not required to run or test the live perception MVP. Ornith status has
+no smoke option because its API key stays inside the Modal secret.
 
 Remove API-only variables from `GNSISWORKER`: `OPENROUTER_API_KEY`, `GITHUB_WEBHOOK_SECRET`, Better Auth secret material, and `GNSIS_AUTH_INTERNAL_SECRET`.
