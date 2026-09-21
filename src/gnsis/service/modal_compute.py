@@ -5,8 +5,7 @@ did.  GitHub Actions is CI only; it is not the production credential holder.
 
 This module keeps the Modal SDK behind one small boundary so the rest of GNSIS
 does not depend on Modal-specific APIs.  Runtime callers can discover the live
-GNSIS web address and check its health, and the same for Ornith, the brain it
-calls for tasks.  Deployment is an explicit operator action run by the worker,
+GNSIS web address and check its health, and the same for the optional Ornith action layer.  Deployment is an explicit operator action run by the worker,
 never an automatic side effect of worker startup.
 """
 
@@ -52,7 +51,7 @@ class ModalCompute:
             function_name=live_function_name,
             environment=environment,
         )
-        # The brain the runtime calls for tasks, deployed as its own app.
+        # Optional action layer, deployed independently from live perception.
         self.ornith_ref = ModalRuntimeRef(
             app_name=ornith_app_name,
             function_name=ornith_function_name,
@@ -111,7 +110,7 @@ class ModalCompute:
     def ornith_web_url(self) -> str:
         """Return the deployed Ornith URL without starting a GPU.
 
-        This is the address the live runtime's worker configuration needs.
+        This is the address an explicitly enabled worker configuration would use.
         Nothing here asks Ornith anything: the key that would authenticate such
         a request lives in the Modal secret, not on this worker.
         """
@@ -165,7 +164,7 @@ class ModalCompute:
         secret_name: str = "gnsis-ornith-auth",
         image: Optional[str] = None,
     ) -> None:
-        """Deploy the brain the live runtime calls for tasks.
+        """Deploy the optional Ornith action layer.
 
         Explicit, like the runtime's own deploy. The app name comes from this
         provider's Ornith reference, so a deploy goes where the status call
