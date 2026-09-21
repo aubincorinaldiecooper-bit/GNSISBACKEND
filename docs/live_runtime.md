@@ -45,7 +45,7 @@ The expected paths are:
 /models/GNSIS/thinker
 ```
 
-Override the volume name with `GNSIS_MODELS_VOLUME` when required.
+Override the volume name with `GNSIS_LIVE_MODELS_VOLUME` when required.
 
 ## Tests
 
@@ -68,7 +68,7 @@ Production Modal credentials belong only on `GNSISWORKER`:
 | `MODAL_TOKEN_ID` | required |
 | `MODAL_TOKEN_SECRET` | required |
 | `MODAL_ENVIRONMENT` | optional; defaults to `main` |
-| `GNSIS_MODELS_VOLUME` | optional; defaults to `gnsis-models` |
+| `GNSIS_LIVE_MODELS_VOLUME` | optional; defaults to `gnsis-models` |
 
 Deployment is explicit:
 
@@ -80,8 +80,8 @@ result = deploy_live_runtime.run(smoke=False)
 Status without a GPU cold start:
 
 ```python
-from gnsis.service.tasks import modal_gnsis_status
-result = modal_gnsis_status.run(smoke=False)
+from gnsis.service.tasks import modal_live_status
+result = modal_live_status.run(smoke=False)
 ```
 
 With `smoke=True`, GNSIS opens `/health`, which starts the GPU container and
