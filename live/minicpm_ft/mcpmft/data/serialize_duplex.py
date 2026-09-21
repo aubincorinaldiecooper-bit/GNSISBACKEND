@@ -43,7 +43,7 @@ from mcpmft.data.serialize_turn import (
     _shift_complete_speech_segments,
     _unk_id,
 )
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tool_protocol import (
     format_tool_calls,
     format_tool_response,
@@ -119,7 +119,7 @@ def serialize_duplex_sample(
     codes_per_text_token: int = 6,
     speech_tokens_per_unit: int = 25,
     include_system_prompt: bool = True,
-    system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT,
+    system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT,
     pinned_context: str = "",
 ) -> SerializedSample:
     geometry = audio_geometry or AudioGeometry()

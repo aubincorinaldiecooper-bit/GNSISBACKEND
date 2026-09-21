@@ -10,7 +10,7 @@ from mcpmft.data.serialize_omniflow import (
     unit_ids_from_boundaries,
 )
 from mcpmft.data.serialize_turn import SerializedSample, SpeechSegment
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tokenizer_tools import (
     AUDIO_END,
     AUDIO_START,
@@ -39,7 +39,7 @@ def build_sampled_context_window(
     context_max_units: int,
     context_previous_max_tokens: int = 500,
     max_seq_length: int | None = None,
-    system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT,
+    system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT,
     previous_marker: str = "\n\nprevious: ",
 ) -> SerializedSample:
     """Materialize a target-consistent context-mode training view.

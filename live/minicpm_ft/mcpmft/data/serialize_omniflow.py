@@ -3,7 +3,7 @@ from __future__ import annotations
 from mcpmft.data.feature import AudioGeometry
 from mcpmft.data.sample import OmniSample
 from mcpmft.data.serialize_turn import SerializedSample
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tokenizer_tools import INTERRUPT, LISTEN, SPEAK
 
 
@@ -50,7 +50,7 @@ def serialize_omniflow_sample(
     codes_per_text_token: int = 6,
     speech_tokens_per_unit: int = 25,
     include_system_prompt: bool = True,
-    system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT,
+    system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT,
 ) -> SerializedSample:
     """Serialize single-model full-duplex interaction with an always-on microphone.
 
