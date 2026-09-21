@@ -1,8 +1,8 @@
-"""Working Gander WorkerProvider adapter for the Ornith OpenAI-compatible server.
+"""Working GNSIS WorkerProvider adapter for the Ornith OpenAI-compatible server.
 
-Copy this file into `gander_runtime/gander_runtime/providers/ornith.py` in the
-pinned Gander checkout. This is the provider version validated with the current
-Gander + Ornith Modal runtime.
+Copy this file into `gnsis_runtime/gnsis_runtime/providers/ornith.py` in the
+pinned GNSIS checkout. This is the provider version validated with the current
+GNSIS + Ornith Modal runtime.
 """
 
 from __future__ import annotations
@@ -103,9 +103,9 @@ class OrnithRun:
 
     def _build_prompt(self) -> str:
         pieces = [
-            "You are the long-horizon Brain inside Gander.",
+            "You are the long-horizon Brain inside GNSIS.",
             "",
-            "Gander's realtime Cerebellum handles live audio-visual perception and interaction timing.",
+            "GNSIS's realtime Cerebellum handles live audio-visual perception and interaction timing.",
             "",
             "Your job is reasoning, planning, and deciding what the agent should do with the task.",
             "",
@@ -114,7 +114,7 @@ class OrnithRun:
 
         brief = getattr(self.request.context_plan, "brief", "")
         if brief:
-            pieces.extend(["", "GANDER CONTEXT:", brief])
+            pieces.extend(["", "GNSIS CONTEXT:", brief])
 
         source_turn = self.request.source_turn
         if source_turn is not None:
@@ -141,8 +141,8 @@ class OrnithRun:
                 {
                     "role": "system",
                     "content": (
-                        "You are Gander's back Brain. "
-                        "Gander's Cerebellum owns realtime audio-visual perception. "
+                        "You are GNSIS's back Brain. "
+                        "GNSIS's Cerebellum owns realtime audio-visual perception. "
                         "You own longer-horizon reasoning."
                     ),
                 },
@@ -168,7 +168,7 @@ class OrnithRun:
             await self._publish(
                 UpdatePayload(
                     kind="activity",
-                    summary="Ornith Brain accepted the Gander task.",
+                    summary="Ornith Brain accepted the GNSIS task.",
                     next_step="Reasoning about the task.",
                 )
             )
@@ -275,7 +275,7 @@ class OrnithWorkerProvider:
             response.read()
 
     async def warmup(self) -> None:
-        # Gander calls provider.warmup() before announcing the realtime session ready.
+        # GNSIS calls provider.warmup() before announcing the realtime session ready.
         await asyncio.to_thread(self._warmup_sync)
 
     async def open_project(self, project: ProjectRecord) -> OrnithProject:

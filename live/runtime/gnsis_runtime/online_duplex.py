@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .contracts import MediaRef
-from .duplex_bridge import GanderDuplexSession
+from .duplex_bridge import GNSISDuplexSession
 from .media_mode import (
     CLIENT_VIDEO_MODES,
     VIDEO_SOURCES,
@@ -138,7 +138,7 @@ class OnlineDuplexSettings:
 
 @dataclass
 class _ActiveSession:
-    duplex: GanderDuplexSession
+    duplex: GNSISDuplexSession
     screen_token: str
     codex_frame_gate: ScreenFrameRateGate
     # Per-session media state, initialized from settings.
@@ -242,15 +242,15 @@ def _build_session(
     *,
     media_mode: str | None = None,
     screen_frames: LatestScreenFrameBuffer | None = None,
-) -> GanderDuplexSession:
+) -> GNSISDuplexSession:
     from mcpmft.infer.realtime import DuplexLiveConfig, DuplexLiveSession
-    from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+    from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
     tools = _model_tool_schemas(runtime)
 
     live = DuplexLiveSession(
         runtime.bundle,
         params=runtime.params,
-        system_prompt=runtime.settings.system_prompt or GANDER_DUPLEX_SYSTEM_PROMPT,
+        system_prompt=runtime.settings.system_prompt or GNSIS_DUPLEX_SYSTEM_PROMPT,
         ref_audio_path=runtime.settings.ref_audio_path,
         config=DuplexLiveConfig(
             trailing_silence_sec=runtime.settings.trailing_silence_sec,
@@ -270,7 +270,7 @@ def _build_session(
         screen_frames = LatestScreenFrameBuffer(
             max_pending_frames=runtime.params.context_max_units
         )
-    return GanderDuplexSession(
+    return GNSISDuplexSession(
         live,
         decode_mode=runtime.settings.decode_mode,
         screen_frames=screen_frames,
@@ -280,7 +280,7 @@ def _build_session(
 def _prepare_static_prefix(runtime: _Runtime) -> None:
     """Prefill the process-static system/tool prefix once for all live sessions."""
     from mcpmft.infer.online import OnlineRunner
-    from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+    from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
     started = time.perf_counter()
     runner_params = runtime.params
     if runtime.detached_talker is not None:
@@ -288,7 +288,7 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
     runner = OnlineRunner(runtime.bundle, runner_params)
     runner.prepare(
         system_prompt=(
-            runtime.settings.system_prompt or GANDER_DUPLEX_SYSTEM_PROMPT
+            runtime.settings.system_prompt or GNSIS_DUPLEX_SYSTEM_PROMPT
         ),
         ref_audio_path=(
             None if runtime.detached_talker is not None else runtime.settings.ref_audio_path
@@ -299,7 +299,7 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
     runtime.prefix_prepare_seconds = time.perf_counter() - started
     runtime.prefix_cache_status = "ready"
     LOGGER.info(
-        "Prepared static Gander prefix cache: tokens=%d seconds=%.3f",
+        "Prepared static GNSIS prefix cache: tokens=%d seconds=%.3f",
         runtime.prefix_snapshot.token_count,
         runtime.prefix_prepare_seconds,
     )
@@ -323,7 +323,7 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
         warm_session.close()
     runtime.first_unit_warmup_seconds = time.perf_counter() - started
     LOGGER.info(
-        "Warmed first Gander duplex unit: decision=%s seconds=%.3f",
+        "Warmed first GNSIS duplex unit: decision=%s seconds=%.3f",
         "listen" if event.is_listen else "speak",
         runtime.first_unit_warmup_seconds,
     )
@@ -334,7 +334,7 @@ async def _open_session(
     *,
     media_mode: str | None = None,
     screen_frames: LatestScreenFrameBuffer | None = None,
-) -> GanderDuplexSession:
+) -> GNSISDuplexSession:
     return await asyncio.to_thread(
         _build_session,
         runtime,
@@ -344,7 +344,7 @@ async def _open_session(
 
 
 def _model_tool_schemas(runtime: _Runtime) -> list[dict[str, Any]]:
-    """Return the model-visible tool set, including Gander's local touch output."""
+    """Return the model-visible tool set, including GNSIS's local touch output."""
 
     from mcpmft.tool_protocol import ensure_lean_task_tools
 
@@ -365,7 +365,7 @@ def _reserve_built_in_tools(params: Any, bundle: Any) -> Any:
     the model is shown, built-ins included. So three business tools, the
     previous maximum beside the three task tools, made seven schemas once
     `haptic` was appended, and a deployment that had always started refused to
-    (Codex's finding on CLIPIT #159). The budget is raised here by exactly what
+    (an earlier regression). The budget is raised here by exactly what
     the built-ins take: one slot each, and the tokens their schemas render to,
     measured with the model's own tokenizer the way the core measures them.
     A bundle without a tokenizer cannot check schema tokens at all, so there is
@@ -431,7 +431,7 @@ def _split_model_haptics(event: Any) -> _HapticSplit:
     A unit may carry up to four calls, and the model may validly put `haptic`
     beside a task or business call. Taken whole, such a unit was refused by
     the coordinator as a mixed batch, so the cue was never felt and the other
-    call was thrown away with it (Codex's finding on CLIPIT #159). So the
+    call was thrown away with it (an earlier regression). So the
     haptic calls are lifted out here: each becomes a `haptic.cue` for the
     phone, and the remaining calls go on as a unit of their own, answered by
     whoever answers them. Only when touch was all the unit asked for does the
@@ -625,7 +625,7 @@ class _WebSocketOutbox:
         self.sequence = 0
         self.audio_generation_floor = 0
         self.task = asyncio.create_task(
-            self._run(), name="gander-duplex-websocket-writer"
+            self._run(), name="gnsis-duplex-websocket-writer"
         )
 
     def _raise_if_failed(self) -> None:
@@ -795,7 +795,7 @@ class _WebSocketOutbox:
 
 
 async def _drain(
-    session: GanderDuplexSession,
+    session: GNSISDuplexSession,
     emit_model_event: Callable[[Any], Awaitable[None]],
     *,
     pending_unit_capture_start_ms: float | None = None,
@@ -904,7 +904,7 @@ def create_online_duplex_app(
         raise ValueError("asr_timeout_sec must be positive")
     if runtime.settings.turn_bind_grace_sec < 0:
         raise ValueError("turn_bind_grace_sec cannot be negative")
-    app = FastAPI(title="Gander Online Duplex", version="1.0.0")
+    app = FastAPI(title="GNSIS Online Duplex", version="1.0.0")
 
     async def prepare_static_prefix() -> None:
         await asyncio.to_thread(_prepare_static_prefix, runtime)
@@ -984,7 +984,7 @@ def create_online_duplex_app(
             import segno
         except ModuleNotFoundError:
             return Response(
-                "QR rendering needs segno: install gander-runtime[qr]",
+                "QR rendering needs segno: install gnsis-live-runtime[qr]",
                 status_code=501,
                 media_type="text/plain",
             )
@@ -1385,10 +1385,10 @@ def create_online_duplex_app(
 
         park_for_resume = False
         slot_state = {"released": False}
-        session: GanderDuplexSession | None = None
+        session: GNSISDuplexSession | None = None
         coordinator: Any | None = None
         active: _ActiveSession | None = None
-        open_task: asyncio.Task[GanderDuplexSession] | None = None
+        open_task: asyncio.Task[GNSISDuplexSession] | None = None
         outbound_task: asyncio.Task[None] | None = None
         warmup_task: asyncio.Task[None] | None = None
         receive_watcher: asyncio.Task[dict[str, Any]] | None = None
@@ -1437,7 +1437,7 @@ def create_online_duplex_app(
             await websocket_outbox.send_event(event, wait_sent=wait_sent)
 
         def start_speech_output_pump(
-            target: GanderDuplexSession,
+            target: GNSISDuplexSession,
         ) -> tuple[asyncio.Event, asyncio.Task[None]]:
             stop = asyncio.Event()
 
@@ -1470,7 +1470,7 @@ def create_online_duplex_app(
                         return
 
             return stop, asyncio.create_task(
-                pump(), name=f"gander-detached-talker-output-{session_id}"
+                pump(), name=f"gnsis-detached-talker-output-{session_id}"
             )
 
         async def stop_speech_output_pump() -> None:
@@ -1545,7 +1545,7 @@ def create_online_duplex_app(
             coordinator.observe_frontbrain(event)
 
         async def build_coordinator(
-            model_session: GanderDuplexSession,
+            model_session: GNSISDuplexSession,
         ) -> TaskToolsRealtimeCoordinator:
             gateway = runtime.gateway_factory(session_id)
             task_coordinator = TaskToolsRealtimeCoordinator(
@@ -1702,7 +1702,7 @@ def create_online_duplex_app(
                 else:
                     open_task = asyncio.create_task(
                         _open_session(runtime),
-                        name=f"gander-model-open-{session_id}",
+                        name=f"gnsis-model-open-{session_id}",
                     )
                     session = await asyncio.shield(open_task)
                     if runtime.detached_talker is not None:
@@ -1738,7 +1738,7 @@ def create_online_duplex_app(
 
                 outbound_task = asyncio.create_task(
                     forward_tool_outputs(),
-                    name=f"gander-native-tool-output-{session_id}",
+                    name=f"gnsis-native-tool-output-{session_id}",
                 )
                 outbound_task.add_done_callback(
                     lambda task: (
@@ -1829,7 +1829,7 @@ def create_online_duplex_app(
                 async def warm_back_brain() -> None:
                     """Warm the Brain behind the session that is already running.
 
-                    Gander is perceptually ready before this finishes. A delegated
+                    GNSIS is perceptually ready before this finishes. A delegated
                     task that arrives first is not dropped: the provider's worker
                     start is guarded by its own lock, so the task waits for the
                     same warm-up rather than starting a second one.
@@ -1842,7 +1842,7 @@ def create_online_duplex_app(
                         raise
                     except Exception as exc:
                         # An unreachable or cold Brain costs delegated work, not
-                        # the session: Gander can still see, hear and answer.
+                        # the session: GNSIS can still see, hear and answer.
                         LOGGER.warning(
                             "back brain warmup failed for %s: %s", session_id, exc
                         )
@@ -1876,7 +1876,7 @@ def create_online_duplex_app(
                     # A resumed session already has a warm Brain.
                     warmup_task = asyncio.create_task(
                         warm_back_brain(),
-                        name=f"gander-brain-warmup-{session_id}",
+                        name=f"gnsis-brain-warmup-{session_id}",
                     )
 
             # Watch the socket while the session starts. A client that
@@ -1884,10 +1884,10 @@ def create_online_duplex_app(
             # now, not whenever startup happens to finish.
             receive_watcher = asyncio.create_task(
                 websocket.receive(),
-                name=f"gander-duplex-receive-{session_id}",
+                name=f"gnsis-duplex-receive-{session_id}",
             )
             startup = asyncio.create_task(
-                run_startup(), name=f"gander-duplex-startup-{session_id}"
+                run_startup(), name=f"gnsis-duplex-startup-{session_id}"
             )
             try:
                 while not startup.done():
@@ -1914,7 +1914,7 @@ def create_online_duplex_app(
                     pending_messages.append(early)
                     receive_watcher = asyncio.create_task(
                         websocket.receive(),
-                        name=f"gander-duplex-receive-{session_id}",
+                        name=f"gnsis-duplex-receive-{session_id}",
                     )
             finally:
                 if not startup.done():
@@ -2061,7 +2061,7 @@ def create_online_duplex_app(
                     active.coordinator = coordinator
                     outbound_task = asyncio.create_task(
                         forward_tool_outputs(),
-                        name=f"gander-native-tool-output-{session_id}",
+                        name=f"gnsis-native-tool-output-{session_id}",
                     )
                     await send_text(
                         {
@@ -2269,7 +2269,7 @@ def create_online_duplex_app(
                 active.resumed = asyncio.Event()
                 grace_task = asyncio.create_task(
                     expire_reconnect_grace(active, detach_connection),
-                    name=f"gander-duplex-grace-{session_id}",
+                    name=f"gnsis-duplex-grace-{session_id}",
                 )
                 runtime.grace_tasks.add(grace_task)
                 grace_task.add_done_callback(runtime.grace_tasks.discard)
@@ -2289,7 +2289,7 @@ def create_online_duplex_app(
                 # finished and never closed.
                 abandoned = asyncio.create_task(
                     close_abandoned_open(open_task),
-                    name=f"gander-abandoned-open-{session_id}",
+                    name=f"gnsis-abandoned-open-{session_id}",
                 )
                 runtime.grace_tasks.add(abandoned)
                 abandoned.add_done_callback(runtime.grace_tasks.discard)

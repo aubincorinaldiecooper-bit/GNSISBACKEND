@@ -1,4 +1,4 @@
-"""Memory search providers for Gander workers."""
+"""Memory search providers for GNSIS workers."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class HttpMemoryProvider:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "X-Gander-Memory-Version": "1",
+            "X-GNSIS-Memory-Version": "1",
         }
         if self.bearer_token:
             headers["Authorization"] = f"Bearer {self.bearer_token}"
