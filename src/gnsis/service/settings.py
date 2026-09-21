@@ -61,9 +61,9 @@ class Settings:
     modal_token_id: Optional[str] = None
     modal_token_secret: Optional[str] = None
     modal_environment: str = "main"
-    gnsis_modal_app_name: str = "gnsis-live"
-    gnsis_modal_function_name: str = "gnsis_live_server"
-    gnsis_models_volume: str = "gnsis-models"
+    live_modal_app_name: str = "gnsis-live"
+    live_modal_function_name: str = "gnsis_live_server"
+    live_models_volume: str = "gnsis-models"
     # Reserved for the optional Ornith action layer; the live perception MVP
     # does not receive or require this secret.
     ornith_secret_name: str = "gnsis-ornith-auth"
@@ -448,9 +448,9 @@ class Settings:
             modal_token_id=os.environ.get("MODAL_TOKEN_ID"),
             modal_token_secret=os.environ.get("MODAL_TOKEN_SECRET"),
             modal_environment=os.environ.get("MODAL_ENVIRONMENT", "main"),
-            gnsis_modal_app_name=os.environ.get("GNSIS_MODAL_APP_NAME", "gnsis-live"),
-            gnsis_modal_function_name=os.environ.get("GNSIS_MODAL_FUNCTION_NAME", "gnsis_live_server"),
-            gnsis_models_volume=os.environ.get("GNSIS_MODELS_VOLUME", "gnsis-models"),
+            live_modal_app_name=os.environ.get("GNSIS_LIVE_MODAL_APP_NAME", "gnsis-live"),
+            live_modal_function_name=os.environ.get("GNSIS_LIVE_MODAL_FUNCTION_NAME", "gnsis_live_server"),
+            live_models_volume=os.environ.get("GNSIS_LIVE_MODELS_VOLUME", "gnsis-models"),
             ornith_secret_name=os.environ.get("ORNITH_SECRET_NAME", "gnsis-ornith-auth"),
             ornith_modal_app_name=os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith"),
             ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "gnsis-ornith-cache"),
