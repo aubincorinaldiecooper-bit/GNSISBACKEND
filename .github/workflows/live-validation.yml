@@ -56,7 +56,7 @@ jobs:
       # this Modal version no longer has fails here, not on deploy day.
       - name: Import the Modal definitions and compile the deploy checks
         env:
-          GNSIS_MODELS_VOLUME: placeholder-existing-volume
+          GNSIS_LIVE_MODELS_VOLUME: placeholder-existing-volume
         run: |
           python -c "import runpy; m = runpy.run_path('modal/live.py'); assert m['app'].name == 'gnsis-live', m['app'].name; assert 'gnsis_live_server' in m"
           python -m py_compile scripts/verify-modal-live.py
