@@ -14,7 +14,7 @@ from mcpmft.args import (
 from mcpmft.infer.common import load_for_infer
 from mcpmft.infer.offline import OfflineRunner, build_user_messages
 from mcpmft.infer.online import DuplexParams, OnlineRunner
-from mcpmft.prompts import GANDER_DUPLEX_SYSTEM_PROMPT
+from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tool_protocol import ensure_lean_task_tools, normalize_tool_schema
 
 
@@ -41,7 +41,7 @@ class GenerationConfig:
 
 @dataclass(frozen=True)
 class DuplexConfig:
-    system_prompt: str = GANDER_DUPLEX_SYSTEM_PROMPT
+    system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT
     tools_path: str | None = None
     enable_task_tools: bool = False
     trailing_silence_sec: float = 20.0

@@ -83,7 +83,7 @@ def load_for_infer(
     import torch
 
     if not torch.cuda.is_available():
-        raise RuntimeError("Gander inference requires CUDA")
+        raise RuntimeError("GNSIS inference requires CUDA")
     if inference_args.device_map is None:
         model.to("cuda")
     return InferBundle(model=model, tokenizer=tokenizer, processor=processor)

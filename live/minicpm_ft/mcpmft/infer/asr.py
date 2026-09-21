@@ -311,10 +311,10 @@ def watch_parent(parent_pid: int) -> None:
     def run() -> None:
         while os.getppid() == parent_pid:
             time.sleep(0.5)
-        LOGGER.info("Gander parent exited; stopping managed ASR")
+        LOGGER.info("GNSIS parent exited; stopping managed ASR")
         os.kill(os.getpid(), signal.SIGTERM)
 
-    threading.Thread(target=run, name="gander-parent-watch", daemon=True).start()
+    threading.Thread(target=run, name="gnsis-parent-watch", daemon=True).start()
 
 
 def build_parser() -> argparse.ArgumentParser:
