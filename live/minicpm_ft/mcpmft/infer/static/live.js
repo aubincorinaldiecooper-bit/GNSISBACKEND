@@ -1,6 +1,6 @@
 'use strict';
 /**
- * gnsis live — the phone surface over Gander's existing WebSocket runtime.
+ * gnsis live — the phone surface over GNSIS's existing WebSocket runtime.
  *
  * This adds no transport and no protocol. It speaks exactly what the desktop
  * client already speaks: `/ws/duplex` for PCM16 audio both ways, `/ws/screen`
@@ -211,7 +211,7 @@ function toPcm16(samples, fromRate) {
   return out.buffer;
 }
 
-/** Schedules Gander's speech so consecutive packets do not overlap or gap. */
+/** Schedules GNSIS's speech so consecutive packets do not overlap or gap. */
 function createPlayback() {
   const context = new (window.AudioContext || window.webkitAudioContext)();
   const sources = new Set();
@@ -334,7 +334,7 @@ async function startMicrophone(session) {
   };
   source.connect(capture);
   // Not connected to the destination: routing the microphone to the speaker
-  // would feed Gander's own voice straight back into it.
+  // would feed GNSIS's own voice straight back into it.
   return { context, source, capture };
 }
 
@@ -416,7 +416,7 @@ function handleDuplex(session, event) {
       live.playback.cancel();
       break;
     case 'haptic.cue': {
-      // Gander chooses meaning, never a raw motor pattern. The device owns how
+      // GNSIS chooses meaning, never a raw motor pattern. The device owns how
       // that meaning feels, which keeps the protocol stable across hardware.
       const preset = MODEL_HAPTIC_PRESETS[payload.cue];
       if (preset) {
