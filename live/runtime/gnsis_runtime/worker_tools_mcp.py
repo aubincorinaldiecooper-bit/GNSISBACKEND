@@ -1,4 +1,4 @@
-"""Dependency-free stdio MCP server for Gander's three worker tools."""
+"""Dependency-free stdio MCP server for GNSIS's three worker tools."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from gander_runtime.contracts import stable_id
-from gander_runtime.worker_tools import (
+from gnsis_runtime.contracts import stable_id
+from gnsis_runtime.worker_tools import (
     WORKER_TOOL_NAMES,
     WORKER_TOOL_SCHEMAS,
     validate_tool_arguments,
@@ -30,12 +30,12 @@ def _reply(request_id: Any, result: Any = None, error: Any = None) -> None:
 
 
 def _allowed_tools() -> frozenset[str]:
-    raw = os.environ.get("GANDER_WORKER_TOOL_ALLOW", "").strip()
+    raw = os.environ.get("GNSIS_WORKER_TOOL_ALLOW", "").strip()
     if not raw:
-        raise RuntimeError("GANDER_WORKER_TOOL_ALLOW is not configured")
+        raise RuntimeError("GNSIS_WORKER_TOOL_ALLOW is not configured")
     allowed = frozenset(item.strip() for item in raw.split(",") if item.strip())
     if not allowed or not allowed <= WORKER_TOOL_NAMES:
-        raise RuntimeError("GANDER_WORKER_TOOL_ALLOW contains unsupported tools")
+        raise RuntimeError("GNSIS_WORKER_TOOL_ALLOW contains unsupported tools")
     return allowed
 
 
@@ -46,12 +46,12 @@ def _call_worker_tool(
     call_id: str,
 ) -> dict[str, Any]:
     normalized = validate_tool_arguments(name, arguments)
-    route_path = os.environ.get("GANDER_WORKER_TOOLS_ROUTE")
+    route_path = os.environ.get("GNSIS_WORKER_TOOLS_ROUTE")
     if not route_path:
-        raise RuntimeError("GANDER_WORKER_TOOLS_ROUTE is not configured")
+        raise RuntimeError("GNSIS_WORKER_TOOLS_ROUTE is not configured")
     route = _load_route(route_path)
     if not route.get("active"):
-        raise RuntimeError("no active Gander worker accepts tool calls")
+        raise RuntimeError("no active GNSIS worker accepts tool calls")
     if name not in set(route.get("tools") or ()):
         raise RuntimeError(f"worker tool is not active: {name}")
     call = {
@@ -115,7 +115,7 @@ def _router_request(
         raise ValueError("worker tool request exceeds limit")
     try:
         with socket.create_connection((host, port), timeout=5) as connection:
-            timeout = float(os.environ["GANDER_WORKER_TOOL_TIMEOUT_SEC"])
+            timeout = float(os.environ["GNSIS_WORKER_TOOL_TIMEOUT_SEC"])
             if timeout <= 0:
                 raise ValueError("worker tool timeout must be positive")
             connection.settimeout(timeout)
@@ -188,7 +188,7 @@ def main() -> int:
                 {
                     "protocolVersion": requested,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "gander-worker-tools", "version": "1.0.0"},
+                    "serverInfo": {"name": "gnsis-worker-tools", "version": "1.0.0"},
                     "instructions": (
                         "Pull memory/context only when needed and share only meaningful "
                         "user-facing updates."

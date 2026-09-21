@@ -1,7 +1,7 @@
 """Lifecycle tests for the online duplex endpoints.
 
 Each test names a thing a person can observe: whether Start works after Stop,
-whether one bad frame ends their screen share, whether Gander answers before
+whether one bad frame ends their screen share, whether GNSIS answers before
 the Brain is warm.
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ def _settle(ws) -> dict:
 
 
 def test_ready_does_not_wait_for_the_brain(harness):
-    """Gander sees and hears before Ornith answers (audit 14)."""
+    """GNSIS sees and hears before Ornith answers (audit 14)."""
 
     gate = threading.Event()
     h = harness(warmup_gate=gate)
@@ -491,7 +491,7 @@ def test_an_abandoned_model_open_is_closed_before_the_slot_is_freed(harness):
 def test_flooding_before_ready_is_refused(harness):
     """Buffering what a client sends during startup is bounded."""
 
-    from gander_runtime.online_duplex import STARTUP_BUFFER_MAX_MESSAGES
+    from gnsis_runtime.online_duplex import STARTUP_BUFFER_MAX_MESSAGES
 
     gate = threading.Event()
     h = harness(open_gate=gate)

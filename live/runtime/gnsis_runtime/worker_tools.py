@@ -1,4 +1,4 @@
-"""Provider-neutral tool contract for pull-context Gander workers."""
+"""Provider-neutral tool contract for pull-context GNSIS workers."""
 
 from __future__ import annotations
 

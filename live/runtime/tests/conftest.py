@@ -15,7 +15,7 @@ import pytest
 
 
 class StubThinker:
-    """Stands in for ``GanderDuplexSession``."""
+    """Stands in for ``GNSISDuplexSession``."""
 
     def __init__(self) -> None:
         self.closed = False
@@ -187,7 +187,7 @@ def harness(monkeypatch, tmp_path):
         provider_name: str | None = "stub",
         **settings_kwargs: Any,
     ) -> Harness:
-        from gander_runtime import online_duplex
+        from gnsis_runtime import online_duplex
 
         provider = StubProvider(fail=warmup_fails, gate=warmup_gate)
         gateway = StubGateway(provider)
