@@ -38,7 +38,7 @@ class InternalGNSISAdminTests(unittest.TestCase):
 
     def test_status_queues_worker_task(self):
         queued = SimpleNamespace(id="task-status")
-        with patch("gnsis.service.tasks.modal_gnsis_status.delay", return_value=queued) as delay:
+        with patch("gnsis.service.tasks.modal_live_status.delay", return_value=queued) as delay:
             r = self.client.post(
                 "/internal/compute/live/status?smoke=false",
                 headers=self.auth,
