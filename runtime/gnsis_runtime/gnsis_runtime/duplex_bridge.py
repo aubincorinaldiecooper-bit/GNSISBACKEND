@@ -162,6 +162,13 @@ class GNSISDuplexSession:
         with self._model_lock:
             return dict(self.live.talker_state())
 
+    def context_window_snapshot(self) -> dict[str, Any] | None:
+        """Latest context-window retention stats, or None when unavailable."""
+
+        with self._model_lock:
+            getter = getattr(self.live, "context_window_snapshot", None)
+            return getter() if callable(getter) else None
+
     def poll_output(self, timeout: float = 0.0) -> Any | None:
         return self.live.poll_output(timeout)
 

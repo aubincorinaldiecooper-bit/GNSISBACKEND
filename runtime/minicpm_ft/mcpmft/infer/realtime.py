@@ -486,8 +486,29 @@ class DuplexLiveSession:
             unit_start_sec=unit_start_sec,
             unit_end_sec=unit_end_sec,
         )
+        if consumed_frame_ids:
+            self._tag_latest_unit_visual()
         self.timeline_sec = unit_end_sec
         return event
+
+    def _tag_latest_unit_visual(self) -> None:
+        """Mark the unit this step registered as carrying a consumed frame.
+
+        Retention metrics count these so "recent visual history was never kept"
+        is distinguishable from "it was kept but the model did not use it".
+        """
+        decoder = getattr(self.runner.duplex, "decoder", None)
+        history = getattr(decoder, "_unit_history", None) if decoder is not None else None
+        if not history:
+            return
+        for entry in reversed(history):
+            if entry.get("type") != "system":
+                entry["visual"] = True
+                return
+
+    def context_window_snapshot(self) -> dict[str, Any] | None:
+        """Current context-window retention stats, for runtime diagnostics."""
+        return self._context_window_metrics()
 
     def _generate_event(
         self,
@@ -674,6 +695,14 @@ class DuplexLiveSession:
                 return config.get(name, default)
             return getattr(config, name, default)
 
+        history = [
+            entry
+            for entry in getattr(decoder, "_unit_history", ())
+            if entry.get("type") != "system"
+        ]
+        unit_ids = [
+            entry["unit_id"] for entry in history if entry.get("unit_id") is not None
+        ]
         unit_count = stats.get("unit_count")
         if unit_count is None:
             unit_count = len(getattr(decoder, "_unit_history", ()))
@@ -692,6 +721,9 @@ class DuplexLiveSession:
             "previous_max_tokens": config_value("context_previous_max_tokens"),
             "sliding_events": getattr(decoder, "_sliding_event_count", 0),
             "dropped_units": getattr(decoder, "_total_dropped_units", 0),
+            "oldest_unit_id": unit_ids[0] if unit_ids else None,
+            "newest_unit_id": unit_ids[-1] if unit_ids else None,
+            "visual_units": sum(1 for entry in history if entry.get("visual")),
         }
 
     def _ensure_open(self) -> None:
