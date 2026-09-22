@@ -63,9 +63,14 @@ MAX_CONTAINERS = int(os.environ.get("GNSIS_MAX_CONTAINERS") or 5)
 #
 # from_dict passes the value to containers as an environment variable at run
 # time; it is never written into an image layer. It is read from whoever runs
-# the deploy. Unset, it is empty, the runtime logs that the check is off at
-# startup, and behaviour is exactly what it was before this existed — so a
-# deploy can never take the site down by getting ahead of the variable.
+# the deploy.
+#
+# THIS side is the switch. Unset here the runtime's check is off, it accepts
+# anything, and it says so at startup — so deploying this code before the value
+# exists cannot take the site down. Setting it here FIRST can: the site would
+# still be sending an empty header, and every session would be refused. Set the
+# site's GNSIS_EDGE_SECRET first and this one second; on a rollback, clear this
+# one first and the site's last.
 edge_secret = modal.Secret.from_dict(
     {"GNSIS_EDGE_SECRET": os.environ.get("GNSIS_EDGE_SECRET", "")}
 )
