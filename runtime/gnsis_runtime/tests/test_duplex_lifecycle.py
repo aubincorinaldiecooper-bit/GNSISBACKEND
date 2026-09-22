@@ -663,3 +663,34 @@ def test_a_resume_does_not_extend_the_time_limit(harness):
             # What remains is what the first connection did not spend.
             ended = _expect(ws, "error")
     assert "time limit" in ended["message"]
+
+
+def test_a_huge_audio_frame_cannot_outlast_the_time_limit(harness):
+    """One frame must not buy unbounded GPU time.
+
+    Nothing bounds how much audio a single frame carries, and the runtime
+    splits whatever arrives into chunks and feeds every one of them to the
+    model. Checking the clock only between messages therefore checked it in
+    the one place a determined client never goes: send one enormous frame just
+    before the deadline and the model stays busy for as long as the frame is
+    long. The deadline is checked between chunks for that reason.
+    """
+
+    h = harness(max_session_sec=1.0)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            _settle(ws)
+            thinker = h.thinkers[0]
+            # 50 ms of model time per chunk, at 32 000 bytes a chunk (16 kHz,
+            # 1 s units, 16-bit). Feeding all 60 would take about three times
+            # the whole session's budget.
+            thinker.feed_delay = 0.05
+            chunks = 60
+            ws.send_bytes(b"\x00" * (32_000 * chunks))
+            ended = _expect(ws, "error")
+
+    assert "time limit" in ended["message"]
+    assert len(thinker.fed) < chunks, (
+        f"fed {len(thinker.fed)} of {chunks} chunks — the frame outlived the "
+        "deadline instead of being cut short by it"
+    )

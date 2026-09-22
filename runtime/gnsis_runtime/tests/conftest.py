@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,17 @@ class StubThinker:
         self.close_count = 0
         self.interrupted = 0
         self.frames: list[Any] = []
+        # Chunks fed to the model, and how long each one is made to take. A
+        # test that needs the session's deadline to fall *during* a frame sets
+        # feed_delay, since a stub otherwise consumes any frame instantly.
+        self.fed: list[bytes] = []
+        self.feed_delay = 0.0
+
+    def feed_pcm16(self, data: bytes, *, unit_capture_start_ms=None) -> tuple:
+        self.fed.append(data)
+        if self.feed_delay:
+            time.sleep(self.feed_delay)
+        return ()
 
     def talker_state(self) -> dict[str, Any]:
         return {"generation_id": 0}

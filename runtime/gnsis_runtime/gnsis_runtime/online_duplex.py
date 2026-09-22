@@ -1480,6 +1480,25 @@ def create_online_duplex_app(
             websocket, runtime.settings.output_sample_rate
         )
 
+        def raise_if_expired() -> None:
+            """End the session the moment its budget is gone.
+
+            Bounding the socket read is not enough by itself. The loop can
+            spend real time without going near the socket: one audio frame is
+            split into as many chunks as it holds and every chunk is fed to the
+            model before the next read, so a single enormous frame would hold
+            the GPU for as long as it took to feed and the deadline would never
+            come up for air. Messages buffered during startup skip the read
+            entirely for the same reason. Both call this.
+            """
+
+            if (
+                active is not None
+                and active.expires_at
+                and time.monotonic() >= active.expires_at
+            ):
+                raise _SessionExpired
+
         async def receive_message() -> dict[str, Any]:
             """Next client message, oldest first.
 
@@ -1489,6 +1508,7 @@ def create_online_duplex_app(
             """
 
             if pending_messages:
+                raise_if_expired()
                 return pending_messages.popleft()
             deadline = active.expires_at if active is not None else 0.0
             if not deadline:
@@ -2058,6 +2078,11 @@ def create_online_duplex_app(
                             for part in timed_parts
                         )
                     for part, capture_starts in parts:
+                        # Between chunks, not just between messages: the frame
+                        # that arrives one second before the deadline decides
+                        # how long this holds the GPU, and nothing bounds how
+                        # much audio one frame carries.
+                        raise_if_expired()
                         events = await asyncio.to_thread(
                             session.feed_pcm16,
                             part,
