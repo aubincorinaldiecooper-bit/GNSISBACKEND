@@ -1578,6 +1578,12 @@ def create_online_duplex_app(
             await runtime.model_lock.acquire()
 
         park_for_resume = False
+        # Set by whichever path ended the session, so one keyed termination
+        # event is emitted in `finally` whether the socket was closed cleanly
+        # (stop), dropped, expired or failed — clean and abrupt ends must be
+        # distinguishable in the same log.
+        disconnect_reason = "closed"
+        disconnect_code: Any = None
         slot_state = {"released": False}
         session: GNSISDuplexSession | None = None
         coordinator: Any | None = None
@@ -2266,6 +2272,7 @@ def create_online_duplex_app(
                     await send_text({"type": "pong", "id": control.get("id")})
                 elif event_type == "stop":
                     # An explicit Stop ends the session; it is never parked.
+                    disconnect_reason = "stop"
                     if active is not None:
                         active.stopped = True
                     await _drain(
@@ -2486,15 +2493,10 @@ def create_online_duplex_app(
         except WebSocketDisconnect as exc:
             # A socket that dropped without a Stop is a candidate for resume.
             park_for_resume = True
-            LOGGER.info(
-                "duplex disconnected: container=%s session_id=%s "
-                "close_code=%s parked=%s",
-                _container_id(),
-                session_id,
-                getattr(exc, "code", None),
-                park_for_resume,
-            )
+            disconnect_reason = "disconnect"
+            disconnect_code = getattr(exc, "code", None)
         except _SessionExpired:
+            disconnect_reason = "expired"
             # Not a fault: the session spent its budget. It ends rather than
             # being parked for a resume, so the model slot — and the GPU
             # container behind it — is freed immediately instead of being held
@@ -2519,6 +2521,7 @@ def create_online_duplex_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         except _StartupFlood as exc:
+            disconnect_reason = "startup_flood"
             # The client's doing, not a fault here: no traceback, and the
             # session ends rather than being held for a resume.
             LOGGER.warning("duplex startup flood from %s: %s", session_id, exc)
@@ -2530,6 +2533,7 @@ def create_online_duplex_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         except Exception as exc:
+            disconnect_reason = "error"
             LOGGER.exception("duplex websocket failed: %s", session_id)
             try:
                 await send_text(
@@ -2539,6 +2543,16 @@ def create_online_duplex_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         finally:
+            LOGGER.info(
+                "duplex disconnected: container=%s session_id=%s "
+                "close_code=%s reason=%s parked=%s",
+                _container_id(),
+                session_id,
+                disconnect_code,
+                disconnect_reason,
+                park_for_resume,
+            )
+
             async def detach_connection() -> None:
                 """Stop everything tied to this socket, keeping the session."""
 
