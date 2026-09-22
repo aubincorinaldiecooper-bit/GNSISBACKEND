@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -267,7 +268,15 @@ class DeferredRuntimeApp:
             self._error = f"{type(exc).__name__}: {exc}"
             self._error_public = type(exc).__name__
             self._state = "failed"
-            LOGGER.exception("runtime startup: model load failed")
+            LOGGER.error(
+                "runtime startup: model load failed type=%s message=%s "
+                "loader=%r elapsed_ms=%d\n%s",
+                type(exc).__name__,
+                exc,
+                self._loader,
+                round((time.perf_counter() - started) * 1000),
+                traceback.format_exc(),
+            )
         finally:
             self._event().set()
 

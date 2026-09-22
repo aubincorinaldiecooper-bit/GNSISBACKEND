@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import traceback
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -18,6 +19,8 @@ from mcpmft.tool_protocol import ensure_lean_task_tools, normalize_tool_schema
 
 from .asr_process import AsrConfig, AsrService, asr_base_url, validate_asr_config
 from .media_mode import VIDEO_SOURCES
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -520,12 +523,29 @@ def build_app(config: ReleaseConfig):
     )
     detached = duplex.detached_talker_device is not None
     thinker_model = replace(config.model, init_tts=False) if detached else config.model
-    bundle = load_for_infer(
-        thinker_model,
-        checkpoint=duplex.checkpoint,
-        talker_checkpoint=None if detached else duplex.talker_checkpoint,
-        init_token2wav=duplex.generate_audio and not detached,
-    )
+    try:
+        bundle = load_for_infer(
+            thinker_model,
+            checkpoint=duplex.checkpoint,
+            talker_checkpoint=None if detached else duplex.talker_checkpoint,
+            init_token2wav=duplex.generate_audio and not detached,
+        )
+    except Exception as exc:
+        LOGGER.error(
+            "build_app: load_for_infer failed type=%s message=%s "
+            "model_name_or_path=%s processor_name_or_path=%s checkpoint=%s "
+            "talker_checkpoint=%s init_token2wav=%s detached=%s\n%s",
+            type(exc).__name__,
+            exc,
+            getattr(thinker_model, "model_name_or_path", None),
+            getattr(thinker_model, "processor_name_or_path", None),
+            duplex.checkpoint,
+            None if detached else duplex.talker_checkpoint,
+            duplex.generate_audio and not detached,
+            detached,
+            traceback.format_exc(),
+        )
+        raise
     detached_talker = None
     if duplex.detached_talker_device:
         import torch
