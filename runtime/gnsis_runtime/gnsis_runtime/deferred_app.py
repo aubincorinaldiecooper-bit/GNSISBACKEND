@@ -28,17 +28,23 @@ def _came_through_the_front_door(scope: dict[str, Any]) -> bool:
 
     An empty secret means the check is off — the behaviour before the header
     existed — so the two ends can be configured in either order.
+
+    Compared as bytes, never as text. compare_digest refuses two str operands
+    if either holds a non-ASCII character — even when they are equal — so a
+    secret with an accent in it would raise on every request and take the live
+    page down, and one non-ASCII byte in the header would be an uncaught error
+    anyone could trigger.
     """
 
     expected = os.environ.get("GNSIS_EDGE_SECRET", "")
     if not expected:
         return True
-    presented = ""
+    presented = b""
     for name, value in scope.get("headers") or ():
         if name == b"x-gnsis-edge":
-            presented = value.decode("latin-1", "replace")
+            presented = value
             break
-    return secrets.compare_digest(presented, expected)
+    return secrets.compare_digest(presented, expected.encode("utf-8"))
 
 
 class DeferredRuntimeApp:
