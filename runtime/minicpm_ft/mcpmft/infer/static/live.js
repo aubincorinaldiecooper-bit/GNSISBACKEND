@@ -19,6 +19,12 @@
 const INPUT_RATE = 16000;
 const JPEG_QUALITY = 0.72;
 const MAX_EDGE = 640;
+// How long a cold start may look like nothing before the page says so in
+// words. The runtime reports `runtime.status` while it loads the model onto a
+// GPU, which takes minutes from cold. The wait is not cancelled when this
+// fires — it goes on underneath, and a session that becomes ready while the
+// notice is up simply starts.
+const WAKING_NOTICE_MS = 35000;
 
 const ui = {
   root: document.getElementById('live'),
@@ -34,10 +40,40 @@ const ui = {
   says: document.getElementById('says'),
   start: document.getElementById('start'),
   end: document.getElementById('end'),
+  waking: document.getElementById('waking'),
+  wakingWait: document.getElementById('wakingWait'),
+  wakingRetry: document.getElementById('wakingRetry'),
 };
 
 /** Everything a running session owns, so End can let go of all of it. */
 let live = null;
+
+/** Pending timer for the cold-start notice, so every exit can clear it. */
+let wakingTimer = null;
+
+/**
+ * The runtime is loading its model. Say so, and if the wait goes on long
+ * enough to look broken, say it in words as well.
+ */
+function wakingUp() {
+  show('GNSIS is waking up…', { state: 'connecting' });
+  if (wakingTimer !== null) return;
+  wakingTimer = setTimeout(() => {
+    wakingTimer = null;
+    // `ready`, a close and End all clear this first, so reaching here means
+    // the wait really is still going.
+    if (live && !live.ready && !live.stopped) ui.waking.hidden = false;
+  }, WAKING_NOTICE_MS);
+}
+
+/** Stop waiting on the cold start, however the waiting ended. */
+function doneWaking() {
+  if (wakingTimer !== null) {
+    clearTimeout(wakingTimer);
+    wakingTimer = null;
+  }
+  ui.waking.hidden = true;
+}
 
 // --- feel ----------------------------------------------------------------
 
@@ -382,7 +418,15 @@ function handleDuplex(session, event) {
   try { payload = JSON.parse(event.data); } catch { return; }
 
   switch (payload.type) {
+    case 'runtime.status':
+      // Sent every few seconds while a cold machine loads the model. Before
+      // this case existed the frames arrived and nothing read them, so the
+      // page sat on one unchanging line for the whole load.
+      if (payload.status === 'loading') wakingUp();
+      return;
+
     case 'ready':
+      doneWaking();
       live.sessionId = payload.session_id;
       live.ready = payload;
       // The session starts in voice mode, and /ws/screen refuses every frame
@@ -496,6 +540,7 @@ async function start() {
   live.duplex = duplex;
   duplex.addEventListener('message', (event) => handleDuplex(session, event));
   duplex.addEventListener('close', (event) => {
+    doneWaking();
     if (!live || live.stopped) return;
     if (event.code === 1013) {
       // The single model slot is taken. Say that in words a person can act on.
@@ -513,6 +558,7 @@ async function start() {
 }
 
 async function stop({ keepMessage = false } = {}) {
+  doneWaking();
   const session = live;
   if (!session || session.stopped) return;
   session.stopped = true;
@@ -603,6 +649,22 @@ ui.allow.addEventListener('click', () => {
   void start();
 });
 ui.cancel.addEventListener('click', dismiss);
+// Keep waiting only dismisses the notice: the wait was never interrupted, so
+// there is nothing to resume. End is behind this, and reachable again once it
+// is gone.
+ui.wakingWait.addEventListener('click', () => {
+  ui.waking.hidden = true;
+});
+
+// Start over does NOT make the model load faster — it is already loading, and
+// a fresh socket joins the same wait. It is here for the case where the wait
+// is not the model at all: a socket that died quietly, a phone that slept.
+ui.wakingRetry.addEventListener('click', async () => {
+  ui.waking.hidden = true;
+  await stop({ keepMessage: true });
+  await start();
+});
+
 ui.permission.addEventListener('click', (event) => {
   // Tapping the dimmed area is a refusal too.
   if (event.target === ui.permission) dismiss();

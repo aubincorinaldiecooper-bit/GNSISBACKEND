@@ -92,6 +92,22 @@
       <button class="link" id="cancel" type="button">Not now</button>
     </div>
   </div>
+
+  <!-- A cold machine has to load the model before it can see anything, which
+       takes minutes. The line behind this says so from the first moment, but
+       a line that never changes is indistinguishable from a hang, so once the
+       wait stops looking normal we say it in words and offer a way out.
+       Nothing here cancels the wait: it goes on underneath, and a session
+       that becomes ready while this is up simply starts. -->
+  <div class="sheet" id="waking" hidden>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="wakingTitle">
+      <h2 class="ask" id="wakingTitle">Still waking up</h2>
+      <p class="askbody">GNSIS has not run for a while, so it is loading itself back onto a machine.</p>
+      <p class="askfine">It will start on its own the moment it is ready.</p>
+      <button class="action start" id="wakingWait" type="button">Keep waiting</button>
+      <button class="link" id="wakingRetry" type="button">Start over</button>
+    </div>
+  </div>
 </main>
 <script src="/assets/live.js" type="module"></script>
 </body>
