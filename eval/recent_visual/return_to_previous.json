@@ -1,0 +1,7 @@
+[
+  {"show": "frames/keyboard.jpg", "seconds": 4},
+  {"show": "frames/roku_remote.jpg", "seconds": 4},
+  {"show": "frames/keyboard.jpg", "seconds": 4},
+  {"ask": "questions/is_this_the_same_keyboard.wav", "tail_seconds": 20},
+  {"expect_any": ["same", "yes", "before", "earlier"]}
+]

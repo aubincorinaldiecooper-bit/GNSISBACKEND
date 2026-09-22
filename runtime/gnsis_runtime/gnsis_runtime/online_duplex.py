@@ -107,6 +107,18 @@ def _container_id() -> str:
     )
 
 
+def _context_window_snapshot(active: "_ActiveSession") -> dict[str, Any]:
+    """Retention stats for one session, or {} when the session cannot report.
+
+    Stubs in the lifecycle tests have no context window; callers log the
+    fields as absent rather than failing the frame path on diagnostics.
+    """
+
+    snapshot = getattr(active.duplex, "context_window_snapshot", None)
+    window = snapshot() if callable(snapshot) else None
+    return window if isinstance(window, dict) else {}
+
+
 class _StartupFlood(Exception):
     """A client sent more before `ready` than the startup buffer will hold."""
 
@@ -1392,6 +1404,22 @@ def create_online_duplex_app(
                                 "context_sampled": context_sampled,
                             }
                         )
+                    )
+                    # Retention diagnostics, never image contents: proves the
+                    # recent visual sequence is surviving in the context window.
+                    window = _context_window_snapshot(active)
+                    LOGGER.info(
+                        "screen frame accepted: container=%s session_id=%s "
+                        "frame_id=%s context_units=%s visual_units=%s "
+                        "oldest_unit=%s newest_unit=%s dropped_units=%s",
+                        _container_id(),
+                        session_id,
+                        header.frame_id,
+                        window.get("unit_count"),
+                        window.get("visual_units"),
+                        window.get("oldest_unit_id"),
+                        window.get("newest_unit_id"),
+                        window.get("dropped_units"),
                     )
                     source = header.video_source or active.video_source
                     if context_sampled and _should_persist_frame(runtime, source):

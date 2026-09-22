@@ -712,6 +712,23 @@ def test_end_says_stop_rather_than_dropping_the_socket(harness):
     assert "setTimeout(resolve" in stop_block
 
 
+def test_the_live_prompt_teaches_recent_visual_context():
+    """GNSIS must answer from the recent visual sequence, not the current frame alone.
+
+    The context window already retains ~context_max_units recent multimodal
+    units; the prompt is what turns retention into behaviour. This pins the
+    section's presence and the failure it is written against: answering "I can
+    see a television" when the question was about the remote shown before it.
+    """
+
+    from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
+
+    assert "RECENT VISUAL CONTEXT" in GNSIS_DUPLEX_SYSTEM_PROMPT
+    assert "not as an isolated image" in GNSIS_DUPLEX_SYSTEM_PROMPT
+    assert "Which one was the Roku" in GNSIS_DUPLEX_SYSTEM_PROMPT
+    assert "Do not invent continuity" in GNSIS_DUPLEX_SYSTEM_PROMPT
+
+
 def test_gnsis_live_mvp_has_no_external_worker_dependency():
     """The deployable MVP is GNSIS perception itself, not the Ornith action layer."""
 

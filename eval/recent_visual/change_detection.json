@@ -1,0 +1,6 @@
+[
+  {"show": "frames/table_with_object.jpg", "seconds": 5},
+  {"show": "frames/table_without_object.jpg", "seconds": 4},
+  {"ask": "questions/what_changed.wav", "tail_seconds": 20},
+  {"expect_any": ["removed", "gone", "missing", "disappeared"]}
+]

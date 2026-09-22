@@ -1,0 +1,7 @@
+[
+  {"show": "frames/keyboard.jpg", "seconds": 4},
+  {"show": "frames/roku_remote.jpg", "seconds": 4},
+  {"show": "frames/television.jpg", "seconds": 4},
+  {"ask": "questions/which_one_was_the_roku.wav", "tail_seconds": 20},
+  {"expect_any": ["remote", "roku"], "expect_none": ["television", "keyboard"]}
+]
