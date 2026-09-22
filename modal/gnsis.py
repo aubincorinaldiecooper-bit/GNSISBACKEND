@@ -42,6 +42,34 @@ MODELS_VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME") or "gnsis-model-weigh
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 
+# The ceiling on how many GPUs this app will ever hold at once.
+#
+# The runtime serves one session per container, so concurrent sessions and
+# running GPUs are the same number. The live page is deliberately open to
+# anyone with the link, which means without a ceiling the only limit on the
+# bill is the account's own quota: a short script opening sockets would start
+# GPUs until it hit that, and every real visitor would be queued behind them.
+#
+# Past this many, Modal queues instead of starting another, and the runtime's
+# model lock answers "busy, retry" to whoever is waiting. That is a deliberate
+# trade — some visitors are turned away at a busy moment — and it is the point:
+# a number we chose beats a number an attacker chooses.
+MAX_CONTAINERS = int(os.environ.get("GNSIS_MAX_CONTAINERS") or 5)
+
+# The shared secret the site's proxy stamps on every socket it forwards. The
+# runtime refuses sockets without it, so reaching this app's public .modal.run
+# address directly — going around the site, and around everything applied
+# there — gets a close rather than a GPU.
+#
+# from_dict passes the value to containers as an environment variable at run
+# time; it is never written into an image layer. It is read from whoever runs
+# the deploy. Unset, it is empty, the runtime logs that the check is off at
+# startup, and behaviour is exactly what it was before this existed — so a
+# deploy can never take the site down by getting ahead of the variable.
+edge_secret = modal.Secret.from_dict(
+    {"GNSIS_EDGE_SECRET": os.environ.get("GNSIS_EDGE_SECRET", "")}
+)
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install(
@@ -106,8 +134,15 @@ def cache_gnsis_models() -> dict[str, str]:
 @app.function(
     gpu="L40S",
     volumes={"/models": models},
+    secrets=[edge_secret],
+    # Left as it was on purpose. The session ceiling that actually bounds cost
+    # is now the runtime's own (OnlineDuplexSettings.max_session_sec), which is
+    # enforced where a session is a known thing and can be tested. What this
+    # parameter bounds for a web_server is not something the deploy can verify,
+    # and guessing at it would risk cutting a live session short to no benefit.
     timeout=24 * 60 * 60,
     scaledown_window=60,
+    max_containers=MAX_CONTAINERS,
 )
 @modal.web_server(PORT, startup_timeout=1800)
 def gnsis_server() -> None:

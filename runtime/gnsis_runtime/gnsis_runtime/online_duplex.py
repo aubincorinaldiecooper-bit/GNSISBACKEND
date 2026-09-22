@@ -82,13 +82,43 @@ RECONNECT_GRACE_SEC = 15.0
 # grow the server's memory without limit.
 STARTUP_BUFFER_MAX_MESSAGES = 32
 STARTUP_BUFFER_MAX_BYTES = 4 * 1024 * 1024
+# The longest one visitor may hold the model. The live page is deliberately
+# open to anyone with the link, and a socket holds the model slot — and so a
+# whole GPU container — for as long as it stays open. Without a ceiling an
+# abandoned tab bills until somebody notices, and a script that opens sockets
+# and walks away is a bill with no upper bound. A session ends here on its own,
+# the client is told why, and starting another is one tap.
+MAX_SESSION_SEC = 15 * 60.0
 
 
 class _StartupFlood(Exception):
     """A client sent more before `ready` than the startup buffer will hold."""
 
+
+class _SessionExpired(Exception):
+    """The session reached `max_session_sec` and must end."""
+
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
+
+
+def _came_through_the_front_door(websocket: WebSocket, expected: str) -> bool:
+    """Whether this socket carries the site's shared edge secret.
+
+    The runtime's own address is public, so a caller who learns it can reach
+    these sockets without passing the site — and therefore without passing
+    anything applied there. The site's proxy sets this header on everything it
+    forwards; nothing else knows the value.
+
+    An empty `expected` means the check is disabled and everything is allowed,
+    which is what this runtime did before the header existed.
+    """
+
+    if not expected:
+        return True
+    return secrets.compare_digest(
+        websocket.headers.get("x-gnsis-edge", ""), expected
+    )
 
 
 @dataclass(frozen=True)
@@ -134,6 +164,20 @@ class OnlineDuplexSettings:
     tool_schemas: tuple[dict[str, Any], ...] = ()
     expose_task_slate_to_model: bool = False
     warm_first_unit: bool = True
+    # See MAX_SESSION_SEC. Zero removes the ceiling, which is what the runtime
+    # did before this existed; only set it there for an operator-run session on
+    # a machine nobody else can reach.
+    max_session_sec: float = MAX_SESSION_SEC
+    # Shared secret proving a socket came through the site's own front door
+    # rather than straight at this runtime's public address. The front door is
+    # the only place a rate limit, a WAF or any other bound can be applied, so
+    # a socket that skipped it has skipped all of them.
+    #
+    # Empty means the check is off — the runtime's behaviour before this
+    # existed — so that deploying this code cannot take the site down before
+    # the secret is set on both ends. `create_online_duplex_app` logs a warning
+    # while it is unset, so "off" is never silent.
+    edge_secret: str = ""
 
 
 @dataclass
@@ -154,6 +198,11 @@ class _ActiveSession:
     stopped: bool = False
     slot_released: bool = False
     resumed: asyncio.Event = field(default_factory=asyncio.Event)
+    # Monotonic deadline for the whole session. Set once, when the session is
+    # created, and deliberately NOT extended by a resume: the budget belongs to
+    # the session, not to the socket, so dropping and re-binding cannot be used
+    # to hold a GPU indefinitely. Zero means no deadline.
+    expires_at: float = 0.0
 
 
 @dataclass
@@ -850,6 +899,17 @@ def create_online_duplex_app(
         media_dir=Path(media_dir).expanduser().resolve(),
         detached_talker=detached_talker,
     )
+    if not runtime.settings.edge_secret:
+        LOGGER.warning(
+            "GNSIS_EDGE_SECRET is not set: /ws/duplex and /ws/screen accept "
+            "sockets from anywhere, including callers who reach this runtime's "
+            "public address without passing the site"
+        )
+    if runtime.settings.max_session_sec <= 0:
+        LOGGER.warning(
+            "max_session_sec is 0: a session may hold the model, and the GPU "
+            "behind it, until the client goes away"
+        )
     if runtime.params.sliding_window_mode not in {
         "context_memory",
         "context_no_previous",
@@ -1164,6 +1224,13 @@ def create_online_duplex_app(
 
     @app.websocket("/ws/screen")
     async def screen(websocket: WebSocket) -> None:
+        if not _came_through_the_front_door(
+            websocket, runtime.settings.edge_secret
+        ):
+            # Refused before the handshake, and told nothing: a caller here has
+            # gone around the site to reach the runtime directly.
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
         session_id = websocket.query_params.get("session_id") or ""
         token = websocket.query_params.get("token") or ""
@@ -1339,6 +1406,14 @@ def create_online_duplex_app(
 
     @app.websocket("/ws/duplex")
     async def duplex(websocket: WebSocket) -> None:
+        if not _came_through_the_front_door(
+            websocket, runtime.settings.edge_secret
+        ):
+            # Refused before the handshake, and before the model slot is even
+            # considered: this is the socket that costs a GPU, so a caller who
+            # went around the site never gets to start one.
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
         requested_id = websocket.query_params.get("session_id")
         session_id = requested_id or f"duplex_{secrets.token_hex(8)}"
@@ -1415,7 +1490,19 @@ def create_online_duplex_app(
 
             if pending_messages:
                 return pending_messages.popleft()
-            return await websocket.receive()
+            deadline = active.expires_at if active is not None else 0.0
+            if not deadline:
+                return await websocket.receive()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _SessionExpired
+            try:
+                # Bounded rather than checked per message: a client that holds
+                # the socket open and says nothing is the case that costs the
+                # most, and a check between messages would never run for it.
+                return await asyncio.wait_for(websocket.receive(), remaining)
+            except asyncio.TimeoutError:
+                raise _SessionExpired from None
 
         async def send_text(
             payload: dict[str, Any],
@@ -1717,6 +1804,11 @@ def create_online_duplex_app(
                         ),
                         media_mode=runtime.settings.media_mode,
                         resume_token=secrets.token_urlsafe(32),
+                        expires_at=(
+                            time.monotonic() + runtime.settings.max_session_sec
+                            if runtime.settings.max_session_sec > 0
+                            else 0.0
+                        ),
                     )
                     runtime.sessions[session_id] = active
                     coordinator = await build_coordinator(session)
@@ -2208,6 +2300,30 @@ def create_online_duplex_app(
             LOGGER.info("duplex websocket disconnected: %s", session_id)
             # A socket that dropped without a Stop is a candidate for resume.
             park_for_resume = True
+        except _SessionExpired:
+            # Not a fault: the session spent its budget. It ends rather than
+            # being parked for a resume, so the model slot — and the GPU
+            # container behind it — is freed immediately instead of being held
+            # through the reconnect grace by a client that cannot come back.
+            LOGGER.info(
+                "duplex session %s reached its %.0fs limit",
+                session_id,
+                runtime.settings.max_session_sec,
+            )
+            try:
+                await send_text(
+                    {
+                        "type": "error",
+                        "message": (
+                            "This session reached its time limit. "
+                            "Start a new one to keep going."
+                        ),
+                        "fatal": True,
+                    }
+                )
+                await websocket_outbox.join()
+            except (RuntimeError, WebSocketDisconnect):
+                pass
         except _StartupFlood as exc:
             # The client's doing, not a fault here: no traceback, and the
             # session ends rather than being held for a resume.
