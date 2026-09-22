@@ -655,15 +655,21 @@ class DuplexLiveSession:
             tool_response_expected=bool(out.get("tool_response_expected", False)),
         )
         LOGGER.info(
-            "duplex chunk=%d decision=%s input_rms=%.6f input_peak=%.6f text=%r",
+            "duplex chunk=%d decision=%s unit_id=%s prefill_mode=%s "
+            "consumed_frame_ids=%s input_rms=%.6f input_peak=%.6f "
+            "input_has_speech=%s text=%r",
             event.index,
             (
                 "tool"
                 if event.is_tool_call
                 else ("interrupt" if event.interrupted else ("listen" if event.is_listen else "speak"))
             ),
+            unit_id,
+            prefill_mode,
+            consumed_frame_ids,
             input_rms,
             input_peak,
+            input_has_speech,
             event.text,
         )
         return event

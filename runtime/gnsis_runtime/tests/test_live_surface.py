@@ -19,7 +19,7 @@ from starlette.testclient import TestClient
 
 from starlette.websockets import WebSocketDisconnect
 
-from test_duplex_lifecycle import _drain_until, _jpeg, _settle, connect
+from test_duplex_lifecycle import _drain_until, _jpeg, _settle, _stop, connect
 from test_live_camera_privacy import _camera_header
 
 
@@ -738,3 +738,75 @@ def test_gnsis_live_mvp_has_no_external_worker_dependency():
     assert document["duplex"]["allow_client_video"] is True
     assert document["duplex"]["media_mode"] == "omni"
     assert set(document["duplex"]["client_video_sources"]) == {"camera", "screen"}
+
+
+def test_a_phone_session_leaves_a_reconstructable_log_trail(harness, caplog):
+    """The phone session IS the eval: its logs must reconstruct what happened.
+
+    After one real session an operator reads the log, not a harness, to tell
+    "frame never arrived" apart from "retained but unused". This pins the
+    events that reconstruction walks: connect, ready, media.mode, screen
+    attach, frame accepted, disconnects — each carrying container + session.
+    """
+
+    caplog.set_level("INFO")
+    h = harness(allow_client_video=True, provider_name=None)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            ready = _settle(ws)
+            attach = (
+                f"/ws/screen?session_id={ready['session_id']}"
+                f"&token={ready['screen']['token']}"
+            )
+            ws.send_json({"type": "media.mode", "video": True, "source": "camera"})
+            _answer(ws, "media.mode.done")
+            with connect(client, attach) as screen:
+                _drain_until(screen, "screen.ready")
+                screen.send_text(json.dumps(_camera_header("f1")))
+                screen.send_bytes(_jpeg())
+                _drain_until(screen, "screen.frame.accepted")
+                # A malformed frame is a logged, structured drop — not silent.
+                screen.send_text("{not json")
+                _drain_until(screen, "screen.frame.dropped")
+            _stop(ws)
+
+    messages = [record.getMessage() for record in caplog.records]
+    seen = "\n".join(messages)
+    for event in (
+        "channel=duplex session_id=s1",
+        "duplex ready: container=",
+        "media mode requested: container=",
+        "media mode applied: container=",
+        "channel=screen session_id=s1",
+        "screen ready: container=",
+        "screen frame accepted: container=",
+        "screen frame dropped: container=",
+        "screen disconnected: container=",
+    ):
+        assert event in seen, f"missing log event: {event}"
+    # Diagnostics never carry the screen token or frame contents.
+    assert ready["screen"]["token"] not in seen
+
+
+def test_screen_rejects_are_logged_without_the_token(harness, caplog):
+    """Every refused screen attach names a safe reason, never the token."""
+
+    caplog.set_level("INFO")
+    h = harness(allow_client_video=True, provider_name=None)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            _settle(ws)
+            # No active session under this id at all.
+            with connect(client, "/ws/screen?session_id=ghost&token=x") as early:
+                assert early.receive_json()["type"] == "error"
+            # Real session, still in voice mode.
+            with connect(
+                client, "/ws/screen?session_id=s1&token=x"
+            ) as voice:
+                assert "voice" in voice.receive_json()["message"]
+            _stop(ws)
+
+    messages = [record.getMessage() for record in caplog.records]
+    seen = "\n".join(messages)
+    assert "reason=inactive_session" in seen
+    assert "reason=voice_mode" in seen
