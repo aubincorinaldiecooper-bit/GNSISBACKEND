@@ -1281,18 +1281,33 @@ def create_online_duplex_app(
         )
         active = runtime.sessions.get(session_id)
         if not _SESSION_ID.fullmatch(session_id) or active is None:
+            LOGGER.info(
+                "screen rejected: container=%s session_id=%s reason=inactive_session",
+                _container_id(),
+                session_id,
+            )
             await websocket.send_text(
                 _json({"type": "error", "message": "duplex session is not active"})
             )
             await websocket.close(code=1008)
             return
         if active.media_mode == "voice":
+            LOGGER.info(
+                "screen rejected: container=%s session_id=%s reason=voice_mode",
+                _container_id(),
+                session_id,
+            )
             await websocket.send_text(
                 _json({"type": "error", "message": "screen input is disabled in voice mode"})
             )
             await websocket.close(code=1008)
             return
         if not token or not secrets.compare_digest(token, active.screen_token):
+            LOGGER.info(
+                "screen rejected: container=%s session_id=%s reason=invalid_token",
+                _container_id(),
+                session_id,
+            )
             await websocket.send_text(
                 _json({"type": "error", "message": "invalid screen session token"})
             )
@@ -1315,6 +1330,13 @@ def create_online_duplex_app(
                     ),
                 }
             )
+        )
+        LOGGER.info(
+            "screen ready: container=%s session_id=%s media_mode=%s source=%s",
+            _container_id(),
+            session_id,
+            active.media_mode,
+            active.video_source,
         )
 
         async def receive_while_session_active() -> dict[str, Any] | None:
@@ -1376,6 +1398,13 @@ def create_online_duplex_app(
                         return
                     if active.media_mode == "voice":
                         # Ignore a frame completed after the session returned to audio mode.
+                        LOGGER.info(
+                            "screen frame dropped: container=%s session_id=%s "
+                            "frame_id=%s reason=voice_mode",
+                            _container_id(),
+                            session_id,
+                            header.frame_id,
+                        )
                         await websocket.send_text(
                             _json(
                                 {
@@ -1416,11 +1445,18 @@ def create_online_duplex_app(
                     )
                     LOGGER.info(
                         "screen frame accepted: container=%s session_id=%s "
-                        "frame_id=%s context_units=%s visual_units=%s "
+                        "frame_id=%s captured_at_ms=%s width=%s height=%s "
+                        "video_source=%s context_sampled=%s "
+                        "context_units=%s visual_units=%s "
                         "oldest_unit=%s newest_unit=%s dropped_units=%s",
                         _container_id(),
                         session_id,
                         header.frame_id,
+                        header.captured_at_ms,
+                        decoded.width,
+                        decoded.height,
+                        header.video_source or active.video_source,
+                        context_sampled,
                         window.get("unit_count"),
                         window.get("visual_units"),
                         window.get("oldest_unit_id"),
@@ -1448,7 +1484,12 @@ def create_online_duplex_app(
                     # the screen channel. The capture is still good and the next
                     # frame usually is too, so report the drop and keep going.
                     LOGGER.warning(
-                        "dropping screen frame for %s: %s", session_id, exc
+                        "screen frame dropped: container=%s session_id=%s "
+                        "frame_id=%s reason=%s",
+                        _container_id(),
+                        session_id,
+                        frame_id,
+                        exc,
                     )
                     await websocket.send_text(
                         _json(
@@ -1470,6 +1511,12 @@ def create_online_duplex_app(
                 await websocket.close(code=1003)
             except RuntimeError:
                 pass
+        finally:
+            LOGGER.info(
+                "screen disconnected: container=%s session_id=%s",
+                _container_id(),
+                session_id,
+            )
 
     @app.websocket("/ws/duplex")
     async def duplex(websocket: WebSocket) -> None:
@@ -1531,6 +1578,12 @@ def create_online_duplex_app(
             await runtime.model_lock.acquire()
 
         park_for_resume = False
+        # Set by whichever path ended the session, so one keyed termination
+        # event is emitted in `finally` whether the socket was closed cleanly
+        # (stop), dropped, expired or failed — clean and abrupt ends must be
+        # distinguishable in the same log.
+        disconnect_reason = "closed"
+        disconnect_code: Any = None
         slot_state = {"released": False}
         session: GNSISDuplexSession | None = None
         coordinator: Any | None = None
@@ -1877,7 +1930,11 @@ def create_online_duplex_app(
                         speech_output_stop, speech_output_task = (
                             start_speech_output_pump(session)
                         )
-                    LOGGER.info("duplex session resumed: %s", session_id)
+                    LOGGER.info(
+                        "duplex resumed: container=%s session_id=%s",
+                        _container_id(),
+                        session_id,
+                    )
                 else:
                     open_task = asyncio.create_task(
                         _open_session(runtime),
@@ -2008,6 +2065,20 @@ def create_online_duplex_app(
                             "client_video": _client_video_capabilities(runtime),
                         },
                     }
+                )
+
+                LOGGER.info(
+                    "duplex ready: container=%s session_id=%s media_mode=%s "
+                    "context_max_units=%s vision_available=%s generate_audio=%s",
+                    _container_id(),
+                    session_id,
+                    active.media_mode,
+                    runtime.params.context_max_units,
+                    _vision_available(runtime),
+                    bool(
+                        runtime.params.generate_audio
+                        or runtime.detached_talker is not None
+                    ),
                 )
 
                 async def warm_back_brain() -> None:
@@ -2201,6 +2272,7 @@ def create_online_duplex_app(
                     await send_text({"type": "pong", "id": control.get("id")})
                 elif event_type == "stop":
                     # An explicit Stop ends the session; it is never parked.
+                    disconnect_reason = "stop"
                     if active is not None:
                         active.stopped = True
                     await _drain(
@@ -2266,11 +2338,27 @@ def create_online_duplex_app(
                     assert active is not None
                     want_video = bool(control.get("video"))
                     source = control.get("source") if want_video else None
+                    LOGGER.info(
+                        "media mode requested: container=%s session_id=%s "
+                        "want_video=%s source=%s current_mode=%s",
+                        _container_id(),
+                        session_id,
+                        want_video,
+                        source,
+                        active.media_mode,
+                    )
                     reason = _reject_media_mode(
                         runtime, want_video=want_video, source=source
                     )
                     if reason is not None:
                         # A rejected mode request is nonfatal for the session.
+                        LOGGER.info(
+                            "media mode rejected: container=%s session_id=%s "
+                            "reason=%s",
+                            _container_id(),
+                            session_id,
+                            reason,
+                        )
                         await send_text(
                             {"type": "media.mode.rejected", "reason": reason}
                         )
@@ -2284,6 +2372,15 @@ def create_online_duplex_app(
                     )
                     active.media_mode = target
                     active.video_source = source
+                    LOGGER.info(
+                        "media mode applied: container=%s session_id=%s "
+                        "previous_mode=%s new_mode=%s source=%s",
+                        _container_id(),
+                        session_id,
+                        previous,
+                        target,
+                        source,
+                    )
                     warnings = source_warnings(source)
                     if warnings:
                         LOGGER.warning(
@@ -2393,11 +2490,13 @@ def create_online_duplex_app(
                             "message": f"unsupported control event: {event_type}",
                         }
                     )
-        except WebSocketDisconnect:
-            LOGGER.info("duplex websocket disconnected: %s", session_id)
+        except WebSocketDisconnect as exc:
             # A socket that dropped without a Stop is a candidate for resume.
             park_for_resume = True
+            disconnect_reason = "disconnect"
+            disconnect_code = getattr(exc, "code", None)
         except _SessionExpired:
+            disconnect_reason = "expired"
             # Not a fault: the session spent its budget. It ends rather than
             # being parked for a resume, so the model slot — and the GPU
             # container behind it — is freed immediately instead of being held
@@ -2422,6 +2521,7 @@ def create_online_duplex_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         except _StartupFlood as exc:
+            disconnect_reason = "startup_flood"
             # The client's doing, not a fault here: no traceback, and the
             # session ends rather than being held for a resume.
             LOGGER.warning("duplex startup flood from %s: %s", session_id, exc)
@@ -2433,6 +2533,7 @@ def create_online_duplex_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         except Exception as exc:
+            disconnect_reason = "error"
             LOGGER.exception("duplex websocket failed: %s", session_id)
             try:
                 await send_text(
@@ -2442,6 +2543,16 @@ def create_online_duplex_app(
             except (RuntimeError, WebSocketDisconnect):
                 pass
         finally:
+            LOGGER.info(
+                "duplex disconnected: container=%s session_id=%s "
+                "close_code=%s reason=%s parked=%s",
+                _container_id(),
+                session_id,
+                disconnect_code,
+                disconnect_reason,
+                park_for_resume,
+            )
+
             async def detach_connection() -> None:
                 """Stop everything tied to this socket, keeping the session."""
 

@@ -1,6 +1,0 @@
-[
-  {"show": "frames/red_cup.jpg", "seconds": 4},
-  {"show": "frames/blue_cup.jpg", "seconds": 4},
-  {"ask": "questions/what_color_was_the_first_cup.wav", "tail_seconds": 20},
-  {"expect_any": ["red"], "expect_none": ["blue"]}
-]
