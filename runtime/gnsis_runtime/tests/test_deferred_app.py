@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 
+import pytest
 from fastapi import FastAPI, WebSocket
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from gnsis_runtime.deferred_app import create_deferred_app
 
@@ -114,7 +117,10 @@ def test_model_load_failure_stays_observable_instead_of_killing_server():
         failed = _wait_for_state(client, "failed")
         assert failed["status"] == "failed"
         assert failed["runtime_state"] == "failed"
-        assert "weights are corrupt" in failed["load_error"]
+        # The class name, not the exception text: /health is public on this
+        # runtime's own address, and an exception string carries file paths.
+        assert failed["load_error"] == "RuntimeError"
+        assert "weights are corrupt" not in json.dumps(failed)
 
         with client.websocket_connect("/ws/duplex") as websocket:
             message = websocket.receive_json()
@@ -124,4 +130,39 @@ def test_model_load_failure_stays_observable_instead_of_killing_server():
                 message = websocket.receive_json()
             assert message["type"] == "error"
             assert message["fatal"] is True
-            assert "weights are corrupt" in message["message"]
+            assert message["message"] == "runtime failed to load (RuntimeError)"
+            assert "weights are corrupt" not in message["message"]
+
+
+def test_a_cold_start_socket_without_the_edge_secret_is_refused(monkeypatch):
+    """The front-door check has to hold during the load, not just after it.
+
+    The real app makes this check too, but it does not exist yet while the
+    model is loading — so without it here, a caller who found this runtime's
+    public address held an accepted socket for the whole cold start and was
+    only turned away at handoff.
+    """
+
+    monkeypatch.setenv("GNSIS_EDGE_SECRET", "front-door-secret")
+    release = threading.Event()
+
+    def loader():
+        release.wait(2.0)
+        return _inner_app()
+
+    app = create_deferred_app(loader, heartbeat_interval_s=0.05)
+    try:
+        with TestClient(app) as client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/duplex"):
+                    pass
+            # The same socket, with the header, is served as before.
+            with client.websocket_connect(
+                "/ws/duplex", headers={"X-GNSIS-Edge": "front-door-secret"}
+            ) as ws:
+                assert ws.receive_json() == {
+                    "type": "runtime.status",
+                    "status": "loading",
+                }
+    finally:
+        release.set()

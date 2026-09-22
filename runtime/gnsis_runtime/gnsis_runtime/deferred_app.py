@@ -4,6 +4,8 @@ import asyncio
 import inspect
 import json
 import logging
+import os
+import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -14,6 +16,29 @@ from fastapi.responses import FileResponse, JSONResponse
 
 LOGGER = logging.getLogger(__name__)
 _PROCESS_STARTED_AT = time.time()
+
+
+def _came_through_the_front_door(scope: dict[str, Any]) -> bool:
+    """Whether this socket carries the site's shared edge secret.
+
+    The same check the runtime's own handlers make, read straight off the ASGI
+    scope because the real app does not exist yet while the model is loading.
+    The value is read from the environment for the same reason: this wrapper is
+    built before any config is parsed.
+
+    An empty secret means the check is off — the behaviour before the header
+    existed — so the two ends can be configured in either order.
+    """
+
+    expected = os.environ.get("GNSIS_EDGE_SECRET", "")
+    if not expected:
+        return True
+    presented = ""
+    for name, value in scope.get("headers") or ():
+        if name == b"x-gnsis-edge":
+            presented = value.decode("latin-1", "replace")
+            break
+    return secrets.compare_digest(presented, expected)
 
 
 class DeferredRuntimeApp:
@@ -42,7 +67,12 @@ class DeferredRuntimeApp:
         self._load_task: asyncio.Task[None] | None = None
         self._ready_event: asyncio.Event | None = None
         self._state = "loading"
+        # Two forms on purpose. The full text goes to the container log,
+        # where the operator reads it; only the exception's class name leaves
+        # the process, because /health and this websocket are both reachable
+        # from the public internet and an exception string carries file paths.
         self._error: str | None = None
+        self._error_public: str | None = None
 
         self._server_started_at: float | None = None
         self._model_load_started_at: float | None = None
@@ -186,8 +216,8 @@ class DeferredRuntimeApp:
             payload.setdefault("status", "ok")
         payload["runtime_state"] = self._state
         payload["startup"] = self._startup_timings()
-        if self._error is not None:
-            payload["load_error"] = self._error
+        if self._error_public is not None:
+            payload["load_error"] = self._error_public
         return payload
 
     async def _load_runtime(self) -> None:
@@ -229,6 +259,7 @@ class DeferredRuntimeApp:
             raise
         except Exception as exc:
             self._error = f"{type(exc).__name__}: {exc}"
+            self._error_public = type(exc).__name__
             self._state = "failed"
             LOGGER.exception("runtime startup: model load failed")
         finally:
@@ -274,6 +305,14 @@ class DeferredRuntimeApp:
         if first.get("type") != "websocket.connect":
             return
 
+        if not _came_through_the_front_door(scope):
+            # The real app checks this too, but only once it exists. Without
+            # the same check here, a caller who found this runtime's public
+            # address held an accepted socket for the whole cold load and was
+            # only turned away at handoff.
+            await send({"type": "websocket.close", "code": 1008})
+            return
+
         await send({"type": "websocket.accept"})
         self._last_websocket_connected_at = time.time()
         LOGGER.info(
@@ -314,7 +353,14 @@ class DeferredRuntimeApp:
                         "text": json.dumps(
                             {
                                 "type": "error",
-                                "message": self._error or "runtime failed to load",
+                                "message": (
+                                    "runtime failed to load"
+                                    + (
+                                        f" ({self._error_public})"
+                                        if self._error_public
+                                        else ""
+                                    )
+                                ),
                                 "fatal": True,
                             },
                             separators=(",", ":"),
