@@ -166,3 +166,40 @@ def test_a_cold_start_socket_without_the_edge_secret_is_refused(monkeypatch):
                 }
     finally:
         release.set()
+
+
+def test_a_non_ascii_edge_secret_does_not_crash_the_check(monkeypatch):
+    """compare_digest refuses str operands holding non-ASCII — even equal ones.
+
+    Compared as text this raised whenever EITHER side was non-ASCII, so an
+    operator who put an accent in the secret broke every request, including
+    ordinary ones from the real site. Compared as bytes both a wrong header
+    and the right one are ordinary outcomes.
+    """
+
+    monkeypatch.setenv("GNSIS_EDGE_SECRET", "clé-de-la-porte")
+    release = threading.Event()
+
+    def loader():
+        release.wait(2.0)
+        return _inner_app()
+
+    app = create_deferred_app(loader, heartbeat_interval_s=0.05)
+    try:
+        with TestClient(app) as client:
+            # A plain ASCII header against the non-ASCII secret. This is the
+            # case any real client produces, and it used to raise.
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect(
+                    "/ws/duplex", headers={"X-GNSIS-Edge": "wrong"}
+                ):
+                    pass
+            # The matching secret, as the bytes a client actually puts on the
+            # wire, is still served.
+            with client.websocket_connect(
+                "/ws/duplex",
+                headers={"X-GNSIS-Edge": "clé-de-la-porte".encode("utf-8")},
+            ) as ws:
+                assert ws.receive_json()["status"] == "loading"
+    finally:
+        release.set()
