@@ -488,6 +488,20 @@ class DuplexLiveSession:
         )
         if consumed_frame_ids:
             self._tag_latest_unit_visual()
+            # Retention is proven here, not at upload time: an accepted frame
+            # enters history only when a unit consumes it, so logging then is
+            # what shows the final frame of a sequence was actually kept.
+            window = self._context_window_metrics() or {}
+            LOGGER.info(
+                "visual unit retained: consumed_frame_ids=%s context_units=%s "
+                "visual_units=%s oldest_unit=%s newest_unit=%s dropped_units=%s",
+                consumed_frame_ids,
+                window.get("unit_count"),
+                window.get("visual_units"),
+                window.get("oldest_unit_id"),
+                window.get("newest_unit_id"),
+                window.get("dropped_units"),
+            )
         self.timeline_sec = unit_end_sec
         return event
 

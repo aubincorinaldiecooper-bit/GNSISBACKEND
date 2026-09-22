@@ -1392,6 +1392,15 @@ def create_online_duplex_app(
                     )
                     # Publish to the front brain before ACK; persist off the event loop.
                     active.duplex.enqueue_screen_frame(decoded.frame)
+                    # Retention diagnostics, never image contents. Snapshot
+                    # before the ACK: after it, the client may drop the socket
+                    # and cancel this task before persistence below runs, so
+                    # nothing additional may await between ACK and persist.
+                    # The model lock can be held by in-flight inference, so the
+                    # snapshot runs off the event loop like other model calls.
+                    window = await asyncio.to_thread(
+                        _context_window_snapshot, active
+                    )
                     await websocket.send_text(
                         _json(
                             {
@@ -1405,9 +1414,6 @@ def create_online_duplex_app(
                             }
                         )
                     )
-                    # Retention diagnostics, never image contents: proves the
-                    # recent visual sequence is surviving in the context window.
-                    window = _context_window_snapshot(active)
                     LOGGER.info(
                         "screen frame accepted: container=%s session_id=%s "
                         "frame_id=%s context_units=%s visual_units=%s "
