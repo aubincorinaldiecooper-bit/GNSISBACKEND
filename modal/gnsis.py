@@ -90,7 +90,6 @@ image = (
         "transformers==4.51.0",
         "accelerate>=1.10,<2",
         "av>=14,<18",
-        "deepspeed>=0.19,<0.21",
         "librosa>=0.9,<0.11",
         "numpy>=1.26,<2",
         "pillow>=10",
