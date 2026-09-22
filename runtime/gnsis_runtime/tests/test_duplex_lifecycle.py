@@ -13,10 +13,11 @@ import time
 
 import pytest
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 
 @contextlib.contextmanager
-def connect(client, url: str):
+def connect(client, url: str, **kwargs):
     """Open a websocket, tolerating a handler that finishes before we close.
 
     The duplex handler returns as soon as the client is gone, so by the time
@@ -26,7 +27,7 @@ def connect(client, url: str):
     the server's own log lines, are what decide whether it behaved.
     """
 
-    connection = client.websocket_connect(url)
+    connection = client.websocket_connect(url, **kwargs)
     websocket = connection.__enter__()
     try:
         yield websocket
@@ -54,6 +55,34 @@ def _drain_until(ws, wanted: str, limit: int = 20) -> dict:
         if message.get("type") == wanted:
             return message
     raise AssertionError(f"never received {wanted!r}")
+
+
+def _expect(ws, wanted: str, timeout: float = 10.0) -> dict:
+    """Read frames until ``wanted``, failing rather than hanging.
+
+    ``receive_json`` blocks with no deadline of its own, so a regression that
+    stops a frame ever being sent would hang the suite instead of failing it —
+    which is how the session-limit tests behaved before this existed. The read
+    happens on a worker thread and the deadline is enforced here.
+    """
+
+    received: dict = {}
+    failure: list[BaseException] = []
+
+    def read() -> None:
+        try:
+            received.update(_drain_until(ws, wanted, limit=60))
+        except BaseException as exc:  # reported on the calling thread below
+            failure.append(exc)
+
+    worker = threading.Thread(target=read, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise AssertionError(f"timed out after {timeout}s waiting for {wanted!r}")
+    if failure:
+        raise failure[0]
+    return received
 
 
 def _settle(ws) -> dict:
@@ -507,3 +536,161 @@ def test_flooding_before_ready_is_refused(harness):
                 assert "before the session was ready" in refused["message"]
     finally:
         gate.set()
+
+
+# --- Bounding what one visitor can consume -----------------------------------
+#
+# The live page is open to anyone with the link, and a duplex socket holds the
+# model slot — and so a whole GPU container — for as long as it stays open.
+# These cover the two things that keep that from becoming an unbounded bill:
+# the session's own time limit, and the front-door secret that stops a caller
+# reaching the runtime's public address directly.
+
+
+def test_no_front_door_secret_configured_accepts_every_socket(harness):
+    """Shipping this before the secret is set changes nothing.
+
+    The check is off until both ends have the value, so the deploy order can
+    never take the live page down.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            assert _settle(ws)["session_id"] == "s1"
+            _stop(ws)
+
+
+def test_a_socket_without_the_front_door_secret_never_reaches_the_model(harness):
+    """Going around the site gets a closed socket, not a GPU."""
+
+    h = harness(edge_secret="front-door-secret")
+    with TestClient(h.app) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/duplex?session_id=s1"):
+                pass
+    assert h.thinkers == [], "a refused socket must not open a Thinker"
+
+
+def test_a_wrong_front_door_secret_is_refused(harness):
+    """Knowing the header's name is not knowing its value."""
+
+    h = harness(edge_secret="front-door-secret")
+    with TestClient(h.app) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                "/ws/duplex?session_id=s1",
+                headers={"X-GNSIS-Edge": "front-door-secre"},
+            ):
+                pass
+    assert h.thinkers == []
+
+
+def test_the_front_door_secret_lets_a_real_visitor_through(harness):
+    """A socket forwarded by the site works exactly as before."""
+
+    h = harness(edge_secret="front-door-secret")
+    with TestClient(h.app) as client:
+        with connect(
+            client,
+            "/ws/duplex?session_id=s1",
+            headers={"X-GNSIS-Edge": "front-door-secret"},
+        ) as ws:
+            assert _settle(ws)["session_id"] == "s1"
+            _stop(ws)
+
+
+def test_the_screen_socket_needs_the_front_door_secret_too(harness):
+    """Both sockets reach the runtime, so both are covered."""
+
+    h = harness(edge_secret="front-door-secret")
+    with TestClient(h.app) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/screen?session_id=s1&token=x"):
+                pass
+
+
+def test_a_session_ends_when_it_reaches_its_time_limit(harness):
+    """An open socket cannot hold a GPU indefinitely.
+
+    This is the abandoned tab: nobody is there, nothing is being sent, and
+    before the limit existed the container stayed up until the client's
+    browser gave up or the machine was noticed on a bill.
+    """
+
+    h = harness(max_session_sec=1.5)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            _settle(ws)
+            ended = _expect(ws, "error")
+    assert ended["fatal"] is True
+    assert "time limit" in ended["message"]
+
+
+def test_the_slot_is_free_once_a_session_times_out(harness):
+    """The point of the limit is the GPU coming back, not the message."""
+
+    h = harness(max_session_sec=1.0, reconnect_grace_sec=5.0)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            _settle(ws)
+            _expect(ws, "error")
+        # An expired session is not parked for a resume: it is over, so the
+        # slot must not be held through the reconnect grace by a client that
+        # has already been told it cannot come back.
+        assert _wait_until(
+            lambda: client.get("/health").json()["busy"] is False
+        ), "the model slot was still held after the session timed out"
+
+
+def test_a_resume_does_not_extend_the_time_limit(harness):
+    """Dropping and reconnecting cannot buy more GPU time.
+
+    The budget belongs to the session, not to the socket — otherwise holding a
+    machine forever is just a reconnect loop.
+    """
+
+    h = harness(max_session_sec=1.5, reconnect_grace_sec=5.0)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            token = _settle(ws)["resume_token"]
+        _wait_resumable(client, "s1")
+        time.sleep(0.8)
+        with connect(
+            client, f"/ws/duplex?session_id=s1&resume_token={token}"
+        ) as ws:
+            assert _drain_until(ws, "ready")["resumed"] is True
+            # What remains is what the first connection did not spend.
+            ended = _expect(ws, "error")
+    assert "time limit" in ended["message"]
+
+
+def test_a_huge_audio_frame_cannot_outlast_the_time_limit(harness):
+    """One frame must not buy unbounded GPU time.
+
+    Nothing bounds how much audio a single frame carries, and the runtime
+    splits whatever arrives into chunks and feeds every one of them to the
+    model. Checking the clock only between messages therefore checked it in
+    the one place a determined client never goes: send one enormous frame just
+    before the deadline and the model stays busy for as long as the frame is
+    long. The deadline is checked between chunks for that reason.
+    """
+
+    h = harness(max_session_sec=1.0)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            _settle(ws)
+            thinker = h.thinkers[0]
+            # 50 ms of model time per chunk, at 32 000 bytes a chunk (16 kHz,
+            # 1 s units, 16-bit). Feeding all 60 would take about three times
+            # the whole session's budget.
+            thinker.feed_delay = 0.05
+            chunks = 60
+            ws.send_bytes(b"\x00" * (32_000 * chunks))
+            ended = _expect(ws, "error")
+
+    assert "time limit" in ended["message"]
+    assert len(thinker.fed) < chunks, (
+        f"fed {len(thinker.fed)} of {chunks} chunks — the frame outlived the "
+        "deadline instead of being cut short by it"
+    )

@@ -52,6 +52,15 @@ class DuplexConfig:
     tools_path: str | None = None
     trailing_silence_sec: float = 8.0
     turn_bind_grace_sec: float = 5.0
+    # The longest one visitor may hold the model, and so the GPU. None keeps
+    # the runtime's own default (online_duplex.MAX_SESSION_SEC) rather than
+    # repeating the number here; 0 removes the ceiling entirely.
+    max_session_sec: float | None = None
+    # Names the environment variable holding the shared secret the site's proxy
+    # puts on every socket it forwards, so the value itself never reaches a
+    # config file. Unset in the environment, the check is off and the runtime
+    # says so at startup. Same shape as memory.token_env.
+    edge_secret_env: str = "GNSIS_EDGE_SECRET"
     media_mode: Literal["voice", "omni", "auto"] = "voice"
     allow_client_video: bool = False
     client_video_mode: Literal["omni", "auto"] = "omni"
@@ -462,6 +471,14 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
         tool_schemas=_tool_schemas(duplex.tools_path),
         expose_task_slate_to_model=duplex.expose_task_slate_to_model,
         warm_first_unit=duplex.warm_first_unit,
+        max_session_sec=(
+            OnlineDuplexSettings.max_session_sec
+            if duplex.max_session_sec is None
+            else duplex.max_session_sec
+        ),
+        # The secret lives in the environment, never in the config file. Absent,
+        # this is "" and the socket check stays off — see OnlineDuplexSettings.
+        edge_secret=os.environ.get(duplex.edge_secret_env, ""),
     )
 
 
