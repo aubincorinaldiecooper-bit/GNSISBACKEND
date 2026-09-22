@@ -42,19 +42,20 @@ MODELS_VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME") or "gnsis-model-weigh
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 
-# The ceiling on how many GPUs this app will ever hold at once.
+# For the MVP this app runs exactly one GPU container.
 #
-# The runtime serves one session per container, so concurrent sessions and
-# running GPUs are the same number. The live page is deliberately open to
-# anyone with the link, which means without a ceiling the only limit on the
-# bill is the account's own quota: a short script opening sockets would start
-# GPUs until it hit that, and every real visitor would be queued behind them.
+# A live session is two WebSockets that share state — /ws/duplex creates the
+# session in process-local runtime.sessions and /ws/screen looks it up there.
+# With more than one container Modal can route the two sockets to different
+# processes, and /ws/screen 500s on a session it cannot see: the phone sits on
+# "Waiting for the first frame…" forever. Sticky routing is not a fix —
+# correctness cannot depend on which backend a load balancer happens to pick.
+# One container keeps the state and both sockets in one process; multi-user
+# routing is designed after a single session is proven end to end.
 #
-# Past this many, Modal queues instead of starting another, and the runtime's
-# model lock answers "busy, retry" to whoever is waiting. That is a deliberate
-# trade — some visitors are turned away at a busy moment — and it is the point:
-# a number we chose beats a number an attacker chooses.
-MAX_CONTAINERS = int(os.environ.get("GNSIS_MAX_CONTAINERS") or 5)
+# This is a literal 1 on the decorator, not an env default: a deployment that
+# still sets GNSIS_MAX_CONTAINERS=5 would override a default and split the
+# channels again.
 
 # The shared secret the site's proxy stamps on every socket it forwards. The
 # runtime refuses sockets without it, so reaching this app's public .modal.run
@@ -146,8 +147,13 @@ def cache_gnsis_models() -> dict[str, str]:
     # and guessing at it would risk cutting a live session short to no benefit.
     timeout=24 * 60 * 60,
     scaledown_window=60,
-    max_containers=MAX_CONTAINERS,
+    max_containers=1,
 )
+# One long-lived /ws/duplex must not hold the container's only input slot, or
+# /ws/screen — and health traffic — would queue behind it forever. Four is
+# enough for duplex + screen + a control request + headroom; this is session
+# plumbing, not throughput.
+@modal.concurrent(max_inputs=4)
 @modal.web_server(PORT, startup_timeout=1800)
 def gnsis_server() -> None:
     """Serve the GNSIS realtime runtime from the source under runtime/."""
