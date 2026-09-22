@@ -112,13 +112,21 @@ def _came_through_the_front_door(websocket: WebSocket, expected: str) -> bool:
 
     An empty `expected` means the check is disabled and everything is allowed,
     which is what this runtime did before the header existed.
+
+    Compared as bytes, never as text. compare_digest refuses two str operands
+    if either holds a non-ASCII character — even when they are equal — so a
+    secret with an accent in it would raise on every request, including the
+    ordinary ones from the site, and take the live page down.
     """
 
     if not expected:
         return True
-    return secrets.compare_digest(
-        websocket.headers.get("x-gnsis-edge", ""), expected
-    )
+    presented = b""
+    for name, value in websocket.headers.raw:
+        if name == b"x-gnsis-edge":
+            presented = value
+            break
+    return secrets.compare_digest(presented, expected.encode("utf-8"))
 
 
 @dataclass(frozen=True)

@@ -694,3 +694,31 @@ def test_a_huge_audio_frame_cannot_outlast_the_time_limit(harness):
         f"fed {len(thinker.fed)} of {chunks} chunks — the frame outlived the "
         "deadline instead of being cut short by it"
     )
+
+
+def test_a_non_ascii_front_door_secret_does_not_crash_the_check(harness):
+    """compare_digest refuses str operands holding non-ASCII — even equal ones.
+
+    Compared as text this raised whenever EITHER side was non-ASCII, so an
+    operator who put an accent in the secret broke every request, the ordinary
+    ASCII ones from the real site included. That is an outage from a config
+    choice nothing warned about.
+    """
+
+    h = harness(edge_secret="clé-de-la-porte")
+    with TestClient(h.app) as client:
+        # A plain ASCII header against the non-ASCII secret: the case any real
+        # client produces, and the one that used to raise.
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                "/ws/duplex?session_id=s1", headers={"X-GNSIS-Edge": "wrong"}
+            ):
+                pass
+        # The matching secret, as the bytes a client puts on the wire.
+        with connect(
+            client,
+            "/ws/duplex?session_id=s1",
+            headers={"X-GNSIS-Edge": "clé-de-la-porte".encode("utf-8")},
+        ) as ws:
+            assert _settle(ws)["session_id"] == "s1"
+            _stop(ws)
