@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -116,19 +117,61 @@ class ModalCompute:
         """
         return self._web_url(self.ornith_ref)
 
-    def gnsis_health(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
-        """Cold-start the live runtime and return its /health document."""
+    def gnsis_health(
+        self,
+        *,
+        timeout_seconds: float = 1800.0,
+        poll_interval_seconds: float = 2.0,
+    ) -> dict[str, Any]:
+        """Cold-start the live runtime and wait for /health to become ready.
+
+        The port-first runtime intentionally reports status=loading while
+        MiniCPM-o is loading in the background. That state is healthy during a
+        cold start, so smoke checks poll until the runtime reports status=ok
+        rather than failing the deployment immediately.
+        """
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+
         url = self.gnsis_web_url()
-        try:
-            with urllib.request.urlopen(
-                f"{url}/health", timeout=timeout_seconds
-            ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise RuntimeError(f"GNSIS health check failed: {exc}") from exc
-        if not isinstance(payload, dict) or payload.get("status") != "ok":
-            raise RuntimeError(f"GNSIS reported unhealthy status: {payload!r}")
-        return payload
+        deadline = time.monotonic() + timeout_seconds
+        last_payload: dict[str, Any] | None = None
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "GNSIS health check timed out "
+                    f"after {timeout_seconds:g}s; last payload: {last_payload!r}"
+                )
+
+            try:
+                with urllib.request.urlopen(
+                    f"{url}/health", timeout=remaining
+                ) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                raise RuntimeError(f"GNSIS health check failed: {exc}") from exc
+
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"GNSIS reported unhealthy status: {payload!r}")
+
+            status = payload.get("status")
+            if status == "ok":
+                return payload
+            if status != "loading":
+                raise RuntimeError(f"GNSIS reported unhealthy status: {payload!r}")
+
+            last_payload = payload
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "GNSIS health check timed out "
+                    f"after {timeout_seconds:g}s; last payload: {last_payload!r}"
+                )
+            time.sleep(min(poll_interval_seconds, remaining))
 
     def deploy_gnsis(
         self,
