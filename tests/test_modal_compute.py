@@ -46,6 +46,73 @@ class ModalComputeTests(unittest.TestCase):
             if old_secret is not None:
                 os.environ["MODAL_TOKEN_SECRET"] = old_secret
 
+
+    def test_gnsis_health_waits_through_loading_until_ok(self):
+        compute = ModalCompute(
+            token_id="id-test",
+            token_secret="secret-test",
+            modal_module=_FakeModal,
+        )
+
+        class _Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                import json
+
+                return json.dumps(self._payload).encode("utf-8")
+
+        responses = iter(
+            [
+                _Response({"status": "loading", "runtime_state": "loading"}),
+                _Response({"status": "ok", "runtime_state": "ready"}),
+            ]
+        )
+
+        with patch(
+            "gnsis.service.modal_compute.urllib.request.urlopen",
+            side_effect=lambda *args, **kwargs: next(responses),
+        ) as urlopen, patch("gnsis.service.modal_compute.time.sleep") as sleep:
+            payload = compute.gnsis_health(
+                timeout_seconds=30,
+                poll_interval_seconds=0.01,
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_gnsis_health_rejects_failed_runtime(self):
+        compute = ModalCompute(
+            token_id="id-test",
+            token_secret="secret-test",
+            modal_module=_FakeModal,
+        )
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"status":"failed","runtime_state":"failed"}'
+
+        with patch(
+            "gnsis.service.modal_compute.urllib.request.urlopen",
+            return_value=_Response(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unhealthy status"):
+                compute.gnsis_health(timeout_seconds=30, poll_interval_seconds=0.01)
+
     def test_deploy_is_explicit_and_uses_worker_credentials(self):
         compute = ModalCompute(token_id="id-test", token_secret="secret-test")
         with patch("gnsis.service.modal_compute.subprocess.run") as run:
