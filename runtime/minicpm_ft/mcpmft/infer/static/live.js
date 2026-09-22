@@ -19,6 +19,12 @@
 const INPUT_RATE = 16000;
 const JPEG_QUALITY = 0.72;
 const MAX_EDGE = 640;
+// How long a cold start may look like nothing before the page says so in
+// words. The runtime reports `runtime.status` while it loads the model onto a
+// GPU, which takes minutes from cold. The wait is not cancelled when this
+// fires — it goes on underneath, and a session that becomes ready while the
+// notice is up simply starts.
+const WAKING_NOTICE_MS = 35000;
 
 const ui = {
   root: document.getElementById('live'),
@@ -34,10 +40,87 @@ const ui = {
   says: document.getElementById('says'),
   start: document.getElementById('start'),
   end: document.getElementById('end'),
+  waking: document.getElementById('waking'),
+  wakingWait: document.getElementById('wakingWait'),
+  wakingRetry: document.getElementById('wakingRetry'),
 };
 
 /** Everything a running session owns, so End can let go of all of it. */
 let live = null;
+
+/** Pending timer for the cold-start notice, so every exit can clear it. */
+let wakingTimer = null;
+
+/** Where focus was before the notice took it, so it can be handed back. */
+let wakingReturnFocus = null;
+
+/** Set once the person has said they will wait, so this session stops asking. */
+let wakingDismissed = false;
+
+/**
+ * The runtime is loading its model. Say so, and if the wait goes on long
+ * enough to look broken, say it in words as well.
+ */
+function wakingUp() {
+  show('GNSIS is waking up…', { state: 'connecting' });
+  // Keep waiting has to mean keep waiting. The runtime heartbeats every
+  // fifteen seconds and each one lands here, so without the dismissed flag
+  // the next one would arm a fresh timer and the sheet somebody just closed
+  // would be back thirty-five seconds later — again and again, for the whole
+  // of exactly the multi-minute load this is meant to make bearable.
+  if (wakingDismissed || wakingTimer !== null) return;
+  wakingTimer = setTimeout(() => {
+    wakingTimer = null;
+    // `ready`, a close and End all clear this first, so reaching here means
+    // the wait really is still going.
+    if (live && !live.ready && !live.stopped) openWaking();
+  }, WAKING_NOTICE_MS);
+}
+
+/**
+ * Show the notice and move into it.
+ *
+ * Unhiding an aria-modal dialog neither announces it nor moves the keyboard.
+ * Focus would stay on whatever sits behind the sheet, so somebody reading the
+ * screen or driving it from a keyboard would never learn that the notice, or
+ * either of its buttons, was there.
+ */
+function openWaking() {
+  if (!ui.waking.hidden) return;
+  wakingReturnFocus = document.activeElement;
+  ui.waking.hidden = false;
+  ui.wakingWait.focus();
+}
+
+/** Close the notice, handing focus back if there is still somewhere to hand it. */
+function closeWaking() {
+  if (ui.waking.hidden) return;
+  ui.waking.hidden = true;
+  const back = wakingReturnFocus;
+  wakingReturnFocus = null;
+  // End replaces the whole view, so what focus came from may be gone by now.
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
+}
+
+/** The person has chosen to wait it out: do not raise it again this session. */
+function dismissWaking() {
+  wakingDismissed = true;
+  closeWaking();
+}
+
+/**
+ * Stop waiting on the cold start, however the waiting ended. The dismissal is
+ * cleared with it: a later session — Start over opens one — gets to say that
+ * it is slow on its own account.
+ */
+function doneWaking() {
+  if (wakingTimer !== null) {
+    clearTimeout(wakingTimer);
+    wakingTimer = null;
+  }
+  wakingDismissed = false;
+  closeWaking();
+}
 
 // --- feel ----------------------------------------------------------------
 
@@ -382,7 +465,15 @@ function handleDuplex(session, event) {
   try { payload = JSON.parse(event.data); } catch { return; }
 
   switch (payload.type) {
+    case 'runtime.status':
+      // Sent every few seconds while a cold machine loads the model. Before
+      // this case existed the frames arrived and nothing read them, so the
+      // page sat on one unchanging line for the whole load.
+      if (payload.status === 'loading') wakingUp();
+      return;
+
     case 'ready':
+      doneWaking();
       live.sessionId = payload.session_id;
       live.ready = payload;
       // The session starts in voice mode, and /ws/screen refuses every frame
@@ -496,7 +587,14 @@ async function start() {
   live.duplex = duplex;
   duplex.addEventListener('message', (event) => handleDuplex(session, event));
   duplex.addEventListener('close', (event) => {
-    if (!live || live.stopped) return;
+    // Only ever speak for the session this socket belonged to. Start over
+    // closes this socket and opens another straight away, and a close
+    // handshake can easily outlast that: without this check the old socket's
+    // close would report "Connection lost" about the session that replaced
+    // it, and then tear that session down. Clearing the cold-start notice is
+    // inside the guard for the same reason — by then it is the new one's.
+    if (live !== session || live.stopped) return;
+    doneWaking();
     if (event.code === 1013) {
       // The single model slot is taken. Say that in words a person can act on.
       show('Another session is open. Try again in a moment.', { tone: 'busy' });
@@ -508,11 +606,12 @@ async function start() {
     void stop({ keepMessage: true });
   });
   duplex.addEventListener('error', () => {
-    if (live && !live.stopped) show('Could not connect.', { tone: 'bad' });
+    if (live === session && !live.stopped) show('Could not connect.', { tone: 'bad' });
   });
 }
 
 async function stop({ keepMessage = false } = {}) {
+  doneWaking();
   const session = live;
   if (!session || session.stopped) return;
   session.stopped = true;
@@ -603,12 +702,27 @@ ui.allow.addEventListener('click', () => {
   void start();
 });
 ui.cancel.addEventListener('click', dismiss);
+// Keep waiting only dismisses the notice: the wait was never interrupted, so
+// there is nothing to resume. End is behind this, and reachable again once it
+// is gone.
+ui.wakingWait.addEventListener('click', dismissWaking);
+
+// Start over does NOT make the model load faster — it is already loading, and
+// a fresh socket joins the same wait. It is here for the case where the wait
+// is not the model at all: a socket that died quietly, a phone that slept.
+ui.wakingRetry.addEventListener('click', async () => {
+  closeWaking();
+  await stop({ keepMessage: true });
+  await start();
+});
+
 ui.permission.addEventListener('click', (event) => {
   // Tapping the dimmed area is a refusal too.
   if (event.target === ui.permission) dismiss();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !ui.permission.hidden) dismiss();
+  else if (event.key === 'Escape' && !ui.waking.hidden) dismissWaking();
 });
 
 ui.end.addEventListener('click', () => { haptics.play('rigid'); void stop(); });
