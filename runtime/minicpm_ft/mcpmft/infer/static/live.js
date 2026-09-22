@@ -51,6 +51,9 @@ let live = null;
 /** Pending timer for the cold-start notice, so every exit can clear it. */
 let wakingTimer = null;
 
+/** Where focus was before the notice took it, so it can be handed back. */
+let wakingReturnFocus = null;
+
 /**
  * The runtime is loading its model. Say so, and if the wait goes on long
  * enough to look broken, say it in words as well.
@@ -62,8 +65,33 @@ function wakingUp() {
     wakingTimer = null;
     // `ready`, a close and End all clear this first, so reaching here means
     // the wait really is still going.
-    if (live && !live.ready && !live.stopped) ui.waking.hidden = false;
+    if (live && !live.ready && !live.stopped) openWaking();
   }, WAKING_NOTICE_MS);
+}
+
+/**
+ * Show the notice and move into it.
+ *
+ * Unhiding an aria-modal dialog neither announces it nor moves the keyboard.
+ * Focus would stay on whatever sits behind the sheet, so somebody reading the
+ * screen or driving it from a keyboard would never learn that the notice, or
+ * either of its buttons, was there.
+ */
+function openWaking() {
+  if (!ui.waking.hidden) return;
+  wakingReturnFocus = document.activeElement;
+  ui.waking.hidden = false;
+  ui.wakingWait.focus();
+}
+
+/** Close the notice, handing focus back if there is still somewhere to hand it. */
+function closeWaking() {
+  if (ui.waking.hidden) return;
+  ui.waking.hidden = true;
+  const back = wakingReturnFocus;
+  wakingReturnFocus = null;
+  // End replaces the whole view, so what focus came from may be gone by now.
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
 }
 
 /** Stop waiting on the cold start, however the waiting ended. */
@@ -72,7 +100,7 @@ function doneWaking() {
     clearTimeout(wakingTimer);
     wakingTimer = null;
   }
-  ui.waking.hidden = true;
+  closeWaking();
 }
 
 // --- feel ----------------------------------------------------------------
@@ -540,8 +568,14 @@ async function start() {
   live.duplex = duplex;
   duplex.addEventListener('message', (event) => handleDuplex(session, event));
   duplex.addEventListener('close', (event) => {
+    // Only ever speak for the session this socket belonged to. Start over
+    // closes this socket and opens another straight away, and a close
+    // handshake can easily outlast that: without this check the old socket's
+    // close would report "Connection lost" about the session that replaced
+    // it, and then tear that session down. Clearing the cold-start notice is
+    // inside the guard for the same reason — by then it is the new one's.
+    if (live !== session || live.stopped) return;
     doneWaking();
-    if (!live || live.stopped) return;
     if (event.code === 1013) {
       // The single model slot is taken. Say that in words a person can act on.
       show('Another session is open. Try again in a moment.', { tone: 'busy' });
@@ -553,7 +587,7 @@ async function start() {
     void stop({ keepMessage: true });
   });
   duplex.addEventListener('error', () => {
-    if (live && !live.stopped) show('Could not connect.', { tone: 'bad' });
+    if (live === session && !live.stopped) show('Could not connect.', { tone: 'bad' });
   });
 }
 
@@ -652,15 +686,13 @@ ui.cancel.addEventListener('click', dismiss);
 // Keep waiting only dismisses the notice: the wait was never interrupted, so
 // there is nothing to resume. End is behind this, and reachable again once it
 // is gone.
-ui.wakingWait.addEventListener('click', () => {
-  ui.waking.hidden = true;
-});
+ui.wakingWait.addEventListener('click', closeWaking);
 
 // Start over does NOT make the model load faster — it is already loading, and
 // a fresh socket joins the same wait. It is here for the case where the wait
 // is not the model at all: a socket that died quietly, a phone that slept.
 ui.wakingRetry.addEventListener('click', async () => {
-  ui.waking.hidden = true;
+  closeWaking();
   await stop({ keepMessage: true });
   await start();
 });
@@ -671,6 +703,7 @@ ui.permission.addEventListener('click', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !ui.permission.hidden) dismiss();
+  else if (event.key === 'Escape' && !ui.waking.hidden) closeWaking();
 });
 
 ui.end.addEventListener('click', () => { haptics.play('rigid'); void stop(); });
