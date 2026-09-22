@@ -651,7 +651,14 @@ def main(argv: list[str] | None = None) -> None:
     with AsrService(config.asr):
         if config.server.cuda_visible_devices:
             os.environ["CUDA_VISIBLE_DEVICES"] = config.server.cuda_visible_devices
-        app = build_app(config)
+
+        # Do not make the HTTP/WebSocket server wait for MiniCPM-o. Modal can
+        # route only after the port is listening, so model construction lives
+        # behind a lightweight ASGI wrapper that reports loading/ready/failed
+        # and hands already-open duplex sockets to the real app once ready.
+        from .deferred_app import create_deferred_app
+
+        app = create_deferred_app(lambda: build_app(config))
 
         import uvicorn
 
