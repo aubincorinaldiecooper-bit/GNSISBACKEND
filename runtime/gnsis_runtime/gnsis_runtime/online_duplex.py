@@ -6,8 +6,10 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import secrets
+import socket
 import time
 import urllib.parse
 from collections import deque
@@ -89,6 +91,20 @@ STARTUP_BUFFER_MAX_BYTES = 4 * 1024 * 1024
 # and walks away is a bill with no upper bound. A session ends here on its own,
 # the client is told why, and starting another is one tap.
 MAX_SESSION_SEC = 15 * 60.0
+
+
+def _container_id() -> str:
+    """A stable name for the process serving a connection.
+
+    On Modal that is the task/container id; anywhere else it is the host and
+    pid, which still distinguishes two local runtime processes in logs.
+    """
+
+    return (
+        os.environ.get("MODAL_TASK_ID")
+        or os.environ.get("MODAL_CONTAINER_ID")
+        or f"{socket.gethostname()}:{os.getpid()}"
+    )
 
 
 class _StartupFlood(Exception):
@@ -1242,6 +1258,15 @@ def create_online_duplex_app(
         await websocket.accept()
         session_id = websocket.query_params.get("session_id") or ""
         token = websocket.query_params.get("token") or ""
+        # /ws/duplex and /ws/screen share state through this process's
+        # runtime.sessions; logging the container identity on both channels is
+        # how a split across containers is proven rather than inferred. The
+        # screen token is deliberately not logged.
+        LOGGER.info(
+            "websocket connected: container=%s channel=screen session_id=%s",
+            _container_id(),
+            session_id,
+        )
         active = runtime.sessions.get(session_id)
         if not _SESSION_ID.fullmatch(session_id) or active is None:
             await websocket.send_text(
@@ -1425,6 +1450,11 @@ def create_online_duplex_app(
         await websocket.accept()
         requested_id = websocket.query_params.get("session_id")
         session_id = requested_id or f"duplex_{secrets.token_hex(8)}"
+        LOGGER.info(
+            "websocket connected: container=%s channel=duplex session_id=%s",
+            _container_id(),
+            session_id,
+        )
         if not _SESSION_ID.fullmatch(session_id):
             await websocket.send_text(
                 _json(
