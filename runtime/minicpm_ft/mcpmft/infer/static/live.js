@@ -54,13 +54,21 @@ let wakingTimer = null;
 /** Where focus was before the notice took it, so it can be handed back. */
 let wakingReturnFocus = null;
 
+/** Set once the person has said they will wait, so this session stops asking. */
+let wakingDismissed = false;
+
 /**
  * The runtime is loading its model. Say so, and if the wait goes on long
  * enough to look broken, say it in words as well.
  */
 function wakingUp() {
   show('GNSIS is waking up…', { state: 'connecting' });
-  if (wakingTimer !== null) return;
+  // Keep waiting has to mean keep waiting. The runtime heartbeats every
+  // fifteen seconds and each one lands here, so without the dismissed flag
+  // the next one would arm a fresh timer and the sheet somebody just closed
+  // would be back thirty-five seconds later — again and again, for the whole
+  // of exactly the multi-minute load this is meant to make bearable.
+  if (wakingDismissed || wakingTimer !== null) return;
   wakingTimer = setTimeout(() => {
     wakingTimer = null;
     // `ready`, a close and End all clear this first, so reaching here means
@@ -94,12 +102,23 @@ function closeWaking() {
   if (back && back.isConnected && typeof back.focus === 'function') back.focus();
 }
 
-/** Stop waiting on the cold start, however the waiting ended. */
+/** The person has chosen to wait it out: do not raise it again this session. */
+function dismissWaking() {
+  wakingDismissed = true;
+  closeWaking();
+}
+
+/**
+ * Stop waiting on the cold start, however the waiting ended. The dismissal is
+ * cleared with it: a later session — Start over opens one — gets to say that
+ * it is slow on its own account.
+ */
 function doneWaking() {
   if (wakingTimer !== null) {
     clearTimeout(wakingTimer);
     wakingTimer = null;
   }
+  wakingDismissed = false;
   closeWaking();
 }
 
@@ -686,7 +705,7 @@ ui.cancel.addEventListener('click', dismiss);
 // Keep waiting only dismisses the notice: the wait was never interrupted, so
 // there is nothing to resume. End is behind this, and reachable again once it
 // is gone.
-ui.wakingWait.addEventListener('click', closeWaking);
+ui.wakingWait.addEventListener('click', dismissWaking);
 
 // Start over does NOT make the model load faster — it is already loading, and
 // a fresh socket joins the same wait. It is here for the case where the wait
@@ -703,7 +722,7 @@ ui.permission.addEventListener('click', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !ui.permission.hidden) dismiss();
-  else if (event.key === 'Escape' && !ui.waking.hidden) closeWaking();
+  else if (event.key === 'Escape' && !ui.waking.hidden) dismissWaking();
 });
 
 ui.end.addEventListener('click', () => { haptics.play('rigid'); void stop(); });
