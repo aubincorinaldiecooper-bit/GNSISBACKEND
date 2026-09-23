@@ -15,6 +15,7 @@ from typing import Any, Literal
 import yaml
 
 from mcpmft.args import ModelArguments
+from mcpmft.infer import startup_timing
 from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tool_protocol import ensure_lean_task_tools, normalize_tool_schema
 
@@ -562,6 +563,7 @@ def build_app(config: ReleaseConfig):
             traceback.format_exc(),
         )
         raise
+    startup_timing.resource_snapshot("after_thinker_load")
     detached_talker = None
     if duplex.detached_talker_device:
         import torch
@@ -577,6 +579,8 @@ def build_app(config: ReleaseConfig):
             raise ValueError("duplex.detached_talker_device must be a CUDA device")
         if thinker_device == talker_device:
             raise ValueError("Thinker and detached Talker must use different devices")
+        talker_gpu_index = talker_device.index if talker_device.index is not None else 0
+        startup_timing.mark("detached_talker_init", "start", gpu=talker_gpu_index)
         detached_talker = DetachedTalkerRuntime.from_thinker_model(
             bundle.model,
             base_model_checkpoint=config.model.model_name_or_path,
@@ -592,6 +596,10 @@ def build_app(config: ReleaseConfig):
                 final_speech_tokens_max=duplex.talker_final_speech_tokens_max,
             ),
         )
+        startup_timing.mark("detached_talker_init", "end", gpu=talker_gpu_index)
+        startup_timing.mark("detached_talker_ready", "ready", gpu=talker_gpu_index)
+        startup_timing.resource_snapshot("after_talker_load")
+        startup_timing.resource_snapshot("after_token2wav")
     params = _duplex_params(duplex)
     settings = _duplex_settings(config)
     memory_provider = (
@@ -678,7 +686,12 @@ def main(argv: list[str] | None = None) -> None:
         level=config.server.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # The nearest observable "process start": module import already cost real
+    # time we cannot see from here, and the elapsed baseline is the timing
+    # module's own import. Documented limitation, not a fake bind event.
+    startup_timing.mark("container_process_start", "start")
     preflight_config(config)
+    startup_timing.mark("preflight_done", "end")
     if args.check_config:
         print(
             json.dumps(
@@ -715,6 +728,7 @@ def main(argv: list[str] | None = None) -> None:
 
         import uvicorn
 
+        startup_timing.mark("uvicorn_start_called", "start")
         uvicorn.run(
             app,
             host=config.server.host,

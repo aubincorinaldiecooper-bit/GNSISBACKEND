@@ -18,6 +18,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from mcpmft.infer import startup_timing
+
 from .contracts import MediaRef
 from .duplex_bridge import GNSISDuplexSession
 from .media_mode import (
@@ -248,6 +250,39 @@ class _ActiveSession:
     # the session, not to the socket, so dropping and re-binding cannot be used
     # to hold a GPU indefinitely. Zero means no deadline.
     expires_at: float = 0.0
+    # At least one camera frame has been accepted on this session, so a
+    # consumed_frame_ids sighting is genuinely a camera unit being spent.
+    camera_frames_seen: bool = False
+    # Session-timing record shared by the duplex and screen handlers — the
+    # marks set dedups first-event lines across both channels and resumes.
+    session_marks: set = field(default_factory=set)
+    session_timing_t0: float = 0.0
+    startup_class: str = "warm"
+
+
+def _session_timing_mark(
+    active: "_ActiveSession",
+    session_id: str,
+    event: str,
+    *,
+    at: float | None = None,
+) -> None:
+    """One ``gnsis_session_timing`` line, first occurrence only per session."""
+
+    if event in active.session_marks:
+        return
+    active.session_marks.add(event)
+    now = at if at is not None else time.monotonic()
+    LOGGER.info(
+        "gnsis_session_timing session_id=%s startup_attempt=%s "
+        "startup_class=%s event=%s elapsed_ms=%d proc_ms=%d",
+        session_id,
+        startup_timing.attempt_id(),
+        active.startup_class,
+        event,
+        round((now - active.session_timing_t0) * 1000),
+        startup_timing.process_ms(),
+    )
 
 
 @dataclass
@@ -381,29 +416,41 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
     if runtime.detached_talker is not None:
         runner_params = replace(runner_params, generate_audio=False)
     runner = OnlineRunner(runtime.bundle, runner_params)
-    runner.prepare(
-        system_prompt=(
-            runtime.settings.system_prompt or GNSIS_DUPLEX_SYSTEM_PROMPT
-        ),
-        ref_audio_path=(
-            None if runtime.detached_talker is not None else runtime.settings.ref_audio_path
-        ),
-        tools=_model_tool_schemas(runtime),
-    )
-    runtime.prefix_snapshot = runner.capture_prefix_snapshot()
-    runtime.prefix_prepare_seconds = time.perf_counter() - started
-    runtime.prefix_cache_status = "ready"
+    with startup_timing.stage("prefix_prepare"):
+        runner.prepare(
+            system_prompt=(
+                runtime.settings.system_prompt or GNSIS_DUPLEX_SYSTEM_PROMPT
+            ),
+            ref_audio_path=(
+                None if runtime.detached_talker is not None else runtime.settings.ref_audio_path
+            ),
+            tools=_model_tool_schemas(runtime),
+        )
+        runtime.prefix_snapshot = runner.capture_prefix_snapshot()
+        runtime.prefix_prepare_seconds = time.perf_counter() - started
+        runtime.prefix_cache_status = "ready"
+        startup_timing.mark(
+            "prefix_cache_ready",
+            "ready",
+            tokens=runtime.prefix_snapshot.token_count,
+        )
     LOGGER.info(
         "Prepared static GNSIS prefix cache: tokens=%d seconds=%.3f",
         runtime.prefix_snapshot.token_count,
         runtime.prefix_prepare_seconds,
     )
+    startup_timing.resource_snapshot("after_prefix_prepare")
 
     if not runtime.settings.warm_first_unit:
         return
     if runtime.detached_talker is not None:
         started = time.perf_counter()
-        runtime.detached_talker.warm_token2wav()
+        warmup_gpu = None
+        talker_device = getattr(runtime.detached_talker, "device", "")
+        if isinstance(talker_device, str) and talker_device.startswith("cuda:"):
+            warmup_gpu = int(talker_device.split(":", 1)[1])
+        with startup_timing.stage("detached_speech_warmup", gpu=warmup_gpu):
+            runtime.detached_talker.warm_token2wav()
         runtime.first_unit_warmup_seconds = time.perf_counter() - started
         LOGGER.info(
             "Warmed detached Token2wav first chunk: seconds=%.3f",
@@ -413,7 +460,8 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
     started = time.perf_counter()
     warm_session = _build_session(runtime)
     try:
-        event = warm_session.step_silence()
+        with startup_timing.stage("first_unit_warmup"):
+            event = warm_session.step_silence()
     finally:
         warm_session.close()
     runtime.first_unit_warmup_seconds = time.perf_counter() - started
@@ -719,6 +767,9 @@ class _WebSocketOutbox:
         ] = asyncio.PriorityQueue()
         self.sequence = 0
         self.audio_generation_floor = 0
+        # Optional hook after each payload actually reaches the wire — the
+        # duplex handler uses it for first-send timing, not for protocol work.
+        self.on_sent: Callable[[Any], None] | None = None
         self.task = asyncio.create_task(
             self._run(), name="gnsis-duplex-websocket-writer"
         )
@@ -861,6 +912,8 @@ class _WebSocketOutbox:
                     )
                 if sent is not None and not sent.done():
                     sent.set_result(None)
+                if self.on_sent is not None:
+                    self.on_sent(payload)
             except RuntimeError as exc:
                 error = WebSocketDisconnect(code=1006)
                 if sent is not None and not sent.done():
@@ -1216,6 +1269,7 @@ def create_online_duplex_app(
             ),
             "prefix_prepare_seconds": runtime.prefix_prepare_seconds,
             "first_unit_warmup_seconds": runtime.first_unit_warmup_seconds,
+            **startup_timing.health_fields(),
             "task_slate_visible_to_model": (
                 runtime.settings.expose_task_slate_to_model
             ),
@@ -1423,6 +1477,10 @@ def create_online_duplex_app(
                     )
                     if runtime.sessions.get(session_id) is not active:
                         return
+                    if (header.video_source or active.video_source or "camera") == "camera":
+                        _session_timing_mark(
+                            active, session_id, "first_camera_frame_received"
+                        )
                     if active.media_mode == "voice":
                         # Ignore a frame completed after the session returned to audio mode.
                         LOGGER.info(
@@ -1470,6 +1528,12 @@ def create_online_duplex_app(
                             }
                         )
                     )
+                    source = header.video_source or active.video_source
+                    if (source or "camera") == "camera":
+                        active.camera_frames_seen = True
+                        _session_timing_mark(
+                            active, session_id, "first_camera_frame_accepted"
+                        )
                     LOGGER.info(
                         "screen frame accepted: container=%s session_id=%s "
                         "frame_id=%s captured_at_ms=%s width=%s height=%s "
@@ -1578,6 +1642,60 @@ def create_online_duplex_app(
         # A session whose socket dropped is held briefly. The same client,
         # with the token it was given, re-binds to its own Thinker instead of
         # queuing behind it for the model slot it is already holding.
+        # Session timing continues the record the deferred wrapper started on
+        # this same scope while the model was loading; a socket that arrives
+        # with no such record is "warm" by the documented rule — the runtime
+        # was already ready when it was accepted.
+        ws_timing = websocket.scope.get("gnsis.session_timing")
+        if not isinstance(ws_timing, dict):
+            ws_timing = {}
+            websocket.scope["gnsis.session_timing"] = ws_timing
+        ws_timing.setdefault("t0", time.monotonic())
+        ws_timing.setdefault(
+            "startup_class",
+            "warm"
+            if startup_timing.first_event_at("runtime_ready") is not None
+            else "cold",
+        )
+        if not isinstance(ws_timing.get("marks"), set):
+            ws_timing["marks"] = set()
+        # One mutable record for the whole handler. Nested coroutines only
+        # ever mutate it in place, never rebind it, so the closure below stays
+        # valid on both the fresh-session and resume paths.
+        timing_record: dict[str, Any] = ws_timing
+
+        def _session_mark(event: str, *, at: float | None = None) -> None:
+            marks = timing_record["marks"]
+            if event in marks:
+                return
+            marks.add(event)
+            now = at if at is not None else time.monotonic()
+            LOGGER.info(
+                "gnsis_session_timing session_id=%s startup_attempt=%s "
+                "startup_class=%s event=%s elapsed_ms=%d proc_ms=%d",
+                session_id,
+                startup_timing.attempt_id(),
+                timing_record["startup_class"],
+                event,
+                round((now - timing_record["t0"]) * 1000),
+                startup_timing.process_ms(),
+            )
+
+        _session_mark("client_start_request_received")
+        _session_mark("ws_duplex_connected")
+
+        def _note_event_sent(payload: Any) -> None:
+            if type(payload).__name__ != "SpeechSynthesisChunk":
+                return
+            # The Talker submit instant is process-wide first-only, so it is
+            # attributable to this session only when it happened after this
+            # socket connected. Otherwise the mark is omitted, not estimated.
+            submit_at = startup_timing.first_event_at(
+                "talker_generation_submit"
+            )
+            if submit_at is not None and submit_at >= timing_record["t0"]:
+                _session_mark("first_talker_generation_start", at=submit_at)
+            _session_mark("first_audio_chunk_sent")
         resume_token = websocket.query_params.get("resume_token") or ""
         parked = runtime.sessions.get(session_id)
         resuming = bool(
@@ -1631,6 +1749,7 @@ def create_online_duplex_app(
         websocket_outbox = _WebSocketOutbox(
             websocket, runtime.settings.output_sample_rate
         )
+        websocket_outbox.on_sent = _note_event_sent
 
         def raise_if_expired() -> None:
             """End the session the moment its budget is gone.
@@ -1768,6 +1887,17 @@ def create_online_duplex_app(
             output: Any | None = None,
         ) -> None:
             assert coordinator is not None
+            if active is not None:
+                if getattr(event, "is_listen", True) is False:
+                    _session_mark("first_model_speak_decision")
+                if getattr(event, "text", "") or "":
+                    _session_mark("first_model_text_chunk")
+                metrics = getattr(event, "metrics", None)
+                if (
+                    active.camera_frames_seen
+                    and getattr(metrics, "consumed_frame_ids", None)
+                ):
+                    _session_mark("first_camera_frame_consumed")
             if output is None:
                 output = coordinator.model_output(event)
             split = _split_model_haptics(event)
@@ -1953,6 +2083,11 @@ def create_online_duplex_app(
                     coordinator = active.coordinator
                     active.attached = True
                     active.resumed.set()
+                    # The resume continues the session's own timing record, so
+                    # a re-bind cannot re-emit first-event lines.
+                    timing_record["marks"] = active.session_marks
+                    timing_record["t0"] = active.session_timing_t0
+                    timing_record["startup_class"] = active.startup_class
                     if runtime.detached_talker is not None:
                         speech_output_stop, speech_output_task = (
                             start_speech_output_pump(session)
@@ -1975,6 +2110,9 @@ def create_online_duplex_app(
                     active = _ActiveSession(
                         duplex=session,
                         screen_token=secrets.token_urlsafe(32),
+                        session_marks=timing_record["marks"],
+                        session_timing_t0=timing_record["t0"],
+                        startup_class=timing_record["startup_class"],
                         codex_frame_gate=ScreenFrameRateGate(
                             _codex_frame_interval_ms(runtime)
                         ),
@@ -2093,6 +2231,7 @@ def create_online_duplex_app(
                         },
                     }
                 )
+                _session_mark("ready_event_sent")
 
                 LOGGER.info(
                     "duplex ready: container=%s session_id=%s media_mode=%s "
@@ -2223,6 +2362,7 @@ def create_online_duplex_app(
                     return
                 if message.get("bytes") is not None:
                     audio = message["bytes"]
+                    _session_mark("first_mic_bytes_received")
                     await asyncio.to_thread(coordinator.record_pcm16, audio)
                     # Process one unit per model call so provider events run between units.
                     chunk_bytes = int(
@@ -2258,6 +2398,7 @@ def create_online_duplex_app(
                             part,
                             unit_capture_start_ms=capture_starts,
                         )
+                        _session_mark("first_audio_unit_consumed")
                         for event in events:
                             await emit_model_event(event)
                     continue
@@ -2365,6 +2506,8 @@ def create_online_duplex_app(
                     assert active is not None
                     want_video = bool(control.get("video"))
                     source = control.get("source") if want_video else None
+                    if want_video and (source or "camera") == "camera":
+                        _session_mark("camera_mode_requested")
                     LOGGER.info(
                         "media mode requested: container=%s session_id=%s "
                         "want_video=%s source=%s current_mode=%s",
@@ -2437,6 +2580,8 @@ def create_online_duplex_app(
                             ),
                         }
                     )
+                    if want_video and (source or "camera") == "camera":
+                        _session_mark("camera_mode_applied")
                 elif event_type == "break":
                     await asyncio.to_thread(session.set_break)
                     await send_text({"type": "break.done"})

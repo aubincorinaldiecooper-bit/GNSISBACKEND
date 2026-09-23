@@ -15,8 +15,43 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
+from mcpmft.infer import startup_timing
+
 LOGGER = logging.getLogger(__name__)
 _PROCESS_STARTED_AT = time.time()
+
+
+def _session_timing(
+    scope: dict[str, Any],
+    session_id: str,
+    event: str,
+    *,
+    at: float | None = None,
+) -> None:
+    """One ``gnsis_session_timing`` line for the cold-path socket.
+
+    `elapsed_ms` is measured from the moment the client's socket was accepted
+    by this wrapper (`proc_ms` is from process start, so the same line also
+    correlates with the ``gnsis_startup`` boot stages).
+    """
+
+    timing = scope.setdefault("gnsis.session_timing", {})
+    now = at if at is not None else time.monotonic()
+    timing.setdefault("t0", now)
+    marks = timing.setdefault("marks", set())
+    if event in marks:
+        return
+    marks.add(event)
+    LOGGER.info(
+        "gnsis_session_timing session_id=%s startup_attempt=%s "
+        "startup_class=%s event=%s elapsed_ms=%d proc_ms=%d",
+        session_id,
+        startup_timing.attempt_id(),
+        timing.get("startup_class", "cold"),
+        event,
+        round((now - timing["t0"]) * 1000),
+        startup_timing.process_ms(),
+    )
 
 
 def _came_through_the_front_door(scope: dict[str, Any]) -> bool:
@@ -88,8 +123,12 @@ class DeferredRuntimeApp:
         self._runtime_ready_at: float | None = None
         self._last_websocket_connected_at: float | None = None
         self._last_session_ready_at: float | None = None
-
         self._bootstrap = self._build_bootstrap_app()
+        # Both routes exist the moment the bootstrap app is built — honest
+        # availability, not invented socket events.
+        startup_timing.mark("asgi_app_created", "end")
+        startup_timing.mark("health_endpoint_available", "ready")
+        startup_timing.mark("websocket_route_available", "ready")
 
     @property
     def runtime_state(self) -> str:
@@ -199,6 +238,7 @@ class DeferredRuntimeApp:
             )
 
         return {
+            "startup_attempt": startup_timing.attempt_id(),
             "process_started_unix_ms": unix_ms(_PROCESS_STARTED_AT),
             "server_started_unix_ms": unix_ms(self._server_started_at),
             "model_load_started_unix_ms": unix_ms(self._model_load_started_at),
@@ -224,6 +264,7 @@ class DeferredRuntimeApp:
             payload.setdefault("status", "ok")
         payload["runtime_state"] = self._state
         payload["startup"] = self._startup_timings()
+        payload.update(startup_timing.health_fields())
         if self._error_public is not None:
             payload["load_error"] = self._error_public
         return payload
@@ -263,6 +304,19 @@ class DeferredRuntimeApp:
             self._inner = inner
             self._runtime_ready_at = time.time()
             self._state = "ready"
+            startup_timing.observe_once("runtime_ready")
+            covered_ms, serial_ms, overlap_ms = startup_timing.covered_ms()
+            total_ms = startup_timing.process_ms()
+            startup_timing.mark(
+                "runtime_ready",
+                "ready",
+                total_startup_ms=total_ms,
+                serial_sum_ms=serial_ms,
+                wall_clock_covered_ms=covered_ms,
+                overlap_ms=overlap_ms,
+                unexplained_ms=max(0, total_ms - covered_ms),
+            )
+            startup_timing.resource_snapshot("runtime_ready")
             LOGGER.info(
                 "runtime startup: ready unix_ms=%d server_to_ready_ms=%d",
                 round(self._runtime_ready_at * 1000),
@@ -312,6 +366,9 @@ class DeferredRuntimeApp:
             message_type = message.get("type")
             if message_type == "lifespan.startup":
                 self._server_started_at = time.time()
+                # Uvicorn has bound and asked the app to start: the truthful
+                # "socket bound / routes live" boundary we can observe.
+                startup_timing.mark("server_socket_bound", "ready")
                 LOGGER.info(
                     "runtime startup: server available unix_ms=%d",
                     round(self._server_started_at * 1000),
@@ -352,8 +409,23 @@ class DeferredRuntimeApp:
             round(self._last_websocket_connected_at * 1000),
             scope.get("path"),
         )
+        # The socket was accepted while the model was still loading, so this
+        # session's startup class is cold and its t0 is this accept.
+        timing = scope.setdefault("gnsis.session_timing", {})
+        timing.setdefault("t0", time.monotonic())
+        timing["startup_class"] = "cold"
+        # A provisional id for timing lines emitted before the inner app
+        # assigns the real session_id; the same marks set is shared through
+        # the scope so the real session continues it, not restarts it.
+        loading_session_id = secrets.token_hex(8)
+        scope["gnsis.session_timing"]["loading_session_id"] = loading_session_id
+        _session_timing(scope, loading_session_id, "client_start_request_received")
+        _session_timing(scope, loading_session_id, "ws_duplex_connected")
+
+        loading_status_sent = False
 
         async def send_loading_status() -> None:
+            nonlocal loading_status_sent
             await send(
                 {
                     "type": "websocket.send",
@@ -366,6 +438,11 @@ class DeferredRuntimeApp:
                     ),
                 }
             )
+            if not loading_status_sent:
+                loading_status_sent = True
+                _session_timing(
+                    scope, loading_session_id, "runtime_status_loading_first_sent"
+                )
 
         try:
             await send_loading_status()
@@ -404,6 +481,8 @@ class DeferredRuntimeApp:
 
             replay_connect = True
             suppress_accept = True
+            session_id_seen = loading_session_id
+            _session_timing(scope, session_id_seen, "runtime_handoff_start")
 
             async def inner_receive() -> dict[str, Any]:
                 nonlocal replay_connect
@@ -413,9 +492,11 @@ class DeferredRuntimeApp:
                 return await receive()
 
             async def inner_send(message: dict[str, Any]) -> None:
-                nonlocal suppress_accept
+                nonlocal suppress_accept, session_id_seen
                 if message.get("type") == "websocket.accept" and suppress_accept:
                     suppress_accept = False
+                    # The inner app has taken the socket: the handoff is done.
+                    _session_timing(scope, session_id_seen, "runtime_handoff_end")
                     return
                 if message.get("type") == "websocket.send":
                     raw = message.get("text")
@@ -426,6 +507,12 @@ class DeferredRuntimeApp:
                             payload = {}
                         if payload.get("type") == "ready":
                             self._last_session_ready_at = time.time()
+                            real_id = payload.get("session_id")
+                            if real_id:
+                                session_id_seen = str(real_id)
+                                timing = scope.get("gnsis.session_timing") or {}
+                                timing["session_id"] = session_id_seen
+                            _session_timing(scope, session_id_seen, "ready_event_sent")
                             LOGGER.info(
                                 "runtime startup: session inference started "
                                 "unix_ms=%d session_id=%s",
