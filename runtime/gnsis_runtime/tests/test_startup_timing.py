@@ -155,3 +155,51 @@ def test_stage_duration_ms_accessor():
         pass
     assert startup_timing.stage_duration_ms("prefix_prepare") >= 0
     assert startup_timing.stage_duration_ms("missing") is None
+
+
+def test_startup_only_stages_stop_recording_after_ready():
+    """Prefix sub-stages also run per session on the no-snapshot path. Once
+    the runtime is ready they must vanish, or the boot record would grow with
+    session count and the health numbers would drift."""
+
+    with startup_timing.stage("prefix_duplex_prefill", startup_only=True):
+        pass
+    assert startup_timing.stage_duration_ms("prefix_duplex_prefill") is not None
+    boot_stages = len(startup_timing._STAGES)
+
+    startup_timing.observe_once("runtime_ready")
+    with startup_timing.stage("prefix_duplex_prefill", startup_only=True):
+        pass
+    assert len(startup_timing._STAGES) == boot_stages
+
+
+def test_startup_only_stage_still_runs_its_body_after_ready():
+    startup_timing.observe_once("runtime_ready")
+    ran = []
+    with startup_timing.stage("prefix_duplex_prefill", startup_only=True):
+        ran.append(True)
+    assert ran == [True]
+
+
+def test_cuda_sync_is_a_no_op_without_cuda():
+    startup_timing.cuda_sync()
+    with startup_timing.stage("prefix_duplex_prefill", sync=True):
+        pass
+    assert startup_timing.stage_duration_ms("prefix_duplex_prefill") >= 0
+
+
+def test_prefix_sub_stages_are_reported_on_health():
+    for name in ("prefix_duplex_prefill", "prefix_snapshot_capture"):
+        with startup_timing.stage(name):
+            pass
+    keys = startup_timing.health_fields()["startup_stage_seconds"]
+    assert "prefix_duplex_prefill" in keys
+    assert "prefix_snapshot_capture" in keys
+
+
+def test_probe_stages_absent_unless_the_probe_ran():
+    with startup_timing.stage("prefix_prepare"):
+        pass
+    keys = startup_timing.health_fields()["startup_stage_seconds"]
+    assert "cuda_context_probe" not in keys
+    assert "prefix_prefill_repeat" not in keys

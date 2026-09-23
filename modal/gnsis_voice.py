@@ -116,7 +116,12 @@ def cache_gnsis_models() -> dict[str, str]:
     # See modal/gnsis.py: the session ceiling belongs to the runtime's own
     # max_session_sec, not to this opaque web-server timeout.
     timeout=24 * 60 * 60,
-    scaledown_window=60,
+    # A cold boot costs ~115s (32s Modal provisioning + ~84s runtime init,
+    # measured in the startup profile), so an idle window shorter than a
+    # coffee break makes a user who returns minutes later pay it again. Five
+    # minutes keeps repeat sessions warm; the container still exits on its
+    # own, this is not a warm pool.
+    scaledown_window=300,
     max_containers=1,
 )
 # One long-lived /ws/duplex must not hold the container's only input slot.
