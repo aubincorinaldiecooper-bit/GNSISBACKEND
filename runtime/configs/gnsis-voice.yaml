@@ -1,0 +1,70 @@
+# GNSIS isolated voice (Path B) runtime: the same live surface as
+# gnsis-live.yaml plus spoken responses through the detached Talker.
+#
+# GPU 0 runs the Thinker; GPU 1 runs the detached Talker + Token2wav, so
+# synthesis never blocks perception and playback.cancel can interrupt.
+# Deployed only through the separate `gnsis-voice` Modal app — the
+# production `gnsis-live` runtime is untouched. Model/Talker pairing
+# verified against Gander-v63-Unit8 on the model volume (release manifest
+# unit_contract: 8 text tokens / 50 speech tokens per 1-second unit).
+
+model:
+  model_name_or_path: /models/MiniCPM-o-4_5
+  processor_name_or_path: /models/MiniCPM-o-4_5
+  trust_remote_code: true
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  init_vision: true
+  init_audio: true
+  # Required by config validation for generate_audio; the Thinker itself
+  # still loads without TTS when a detached Talker is configured.
+  init_tts: true
+  token2wav_dir: /models/Gander/talker/assets/token2wav
+  token2wav_n_timesteps: 10
+  token2wav_enable_float16: false
+  low_cpu_mem_usage: true
+  device_map: cuda
+
+server:
+  host: 0.0.0.0
+  port: 7975
+  runtime_dir: /var/gnsis
+  ledger_dir: /var/gnsis/ledger
+  mode: lean
+  log_level: info
+  cuda_visible_devices: "0,1"
+
+asr:
+  mode: disabled
+
+duplex:
+  checkpoint: /models/GNSIS/thinker
+  talker_checkpoint: /models/Gander/talker
+  detached_talker_device: cuda:1
+  ref_audio_path: /models/Gander/talker/assets/ref_audio.wav
+  generate_audio: true
+  # Gander-v63-Unit8 unit contract: 8 text tokens per speak unit, 50 S3
+  # speech tokens per unit streamed as two 25-token emissions.
+  speak_text_tokens_per_unit: 8
+  talker_speech_tokens_per_unit: 50
+  talker_emit_speech_tokens: 25
+  decode_mode: sampling
+  media_mode: omni
+  allow_client_video: true
+  client_video_mode: omni
+  client_video_sources:
+    - camera
+    - screen
+  vision_max_slice_nums: 1
+  vision_batch_feed: false
+  context_max_units: 128
+  memory_slate_max_tokens: 256
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  warm_first_unit: true
+
+# The MVP has no action layer. Native task tools remain protocol-compatible,
+# but there is intentionally no worker to dispatch them to.
+worker:
+  provider: none

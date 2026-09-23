@@ -9,6 +9,7 @@ on:
     paths:
       - 'runtime/**'
       - 'modal/gnsis.py'
+      - 'modal/gnsis_voice.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-gnsis.py'
       - 'scripts/verify-modal-ornith.py'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'runtime/**'
       - 'modal/gnsis.py'
+      - 'modal/gnsis_voice.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-gnsis.py'
       - 'scripts/verify-modal-ornith.py'
@@ -48,7 +50,15 @@ jobs:
             echo "Retired product naming found in a tracked path." >&2
             exit 1
           fi
-          if git grep -nIiE "$RETIRED" -- . ':!docs/'; then
+          if git grep -nIiE "cl[i]pit" -- . ':!docs/'; then
+            echo "Retired product naming found in tracked source content." >&2
+            exit 1
+          fi
+          # The verified Talker asset lives under the upstream project's
+          # directory on the Modal volume, so the two Path B files that
+          # address it may name it; the retired product name stays banned
+          # everywhere else, including in every other file here.
+          if git grep -nIiE "g[a]nder" -- . ':!docs/' ':!modal/gnsis_voice.py' ':!runtime/configs/gnsis-voice.yaml' ':!runtime/gnsis_runtime/tests/test_live_surface.py'; then
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi
@@ -79,6 +89,7 @@ jobs:
           GNSIS_SECRET_NAME: placeholder-existing-secret
         run: |
           python -c "import runpy; m = runpy.run_path('modal/gnsis.py'); assert m['app'].name == 'gnsis-live', m['app'].name; assert 'gnsis_server' in m"
+          python -c "import runpy; m = runpy.run_path('modal/gnsis_voice.py'); assert m['app'].name == 'gnsis-voice', m['app'].name; assert 'gnsis_server' in m"
           python -m py_compile scripts/verify-modal-gnsis.py
           # The brain, under its own name. The assertion is what keeps a
           # publish from this repository off the running previous-ornith-service.

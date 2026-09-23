@@ -886,3 +886,38 @@ def test_health_distinguishes_configured_voice_assets_from_loaded(harness):
     # The stub model carries no tts/token2wav modules — asked for, not loaded.
     assert payload["tts_loaded"] is False
     assert payload["token2wav_loaded"] is False
+
+
+def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
+    """gnsis-voice.yaml is the isolated Path B runtime: speech on, nothing
+    else changed.
+
+    Each subsystem's state is asserted explicitly so a default can never
+    silently decide it — the Gander pair was verified against the release
+    manifest (8 text / 50 speech tokens per unit, emitted as 2×25).
+    """
+
+    from gnsis_runtime.cli import load_config
+
+    config = load_config("runtime/configs/gnsis-voice.yaml")
+
+    # Voice on: detached Talker on GPU 1, Token2wav + ref audio on the
+    # verified Gander pair, and the unit contract values.
+    assert config.model.init_tts is True
+    assert config.model.token2wav_dir.endswith("/token2wav")
+    assert config.duplex.generate_audio is True
+    assert config.duplex.talker_checkpoint == "/models/Gander/talker"
+    assert config.duplex.detached_talker_device == "cuda:1"
+    assert config.duplex.speak_text_tokens_per_unit == 8
+    assert config.duplex.talker_speech_tokens_per_unit == 50
+    assert config.duplex.talker_emit_speech_tokens == 25
+    assert config.server.cuda_visible_devices == "0,1"
+
+    # Everything else exactly as production: raw audio into the model (no
+    # ASR), no worker, no memory layer, camera negotiated as before.
+    assert config.asr.mode == "disabled"
+    assert config.worker.provider == "none"
+    assert config.duplex.sliding_window_mode == "context_no_previous"
+    assert config.duplex.allow_client_video is True
+    assert config.duplex.client_video_mode == "omni"
+    assert config.duplex.persist_camera_frames is False
