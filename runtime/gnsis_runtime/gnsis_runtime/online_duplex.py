@@ -1687,18 +1687,14 @@ def create_online_duplex_app(
         def _note_event_sent(payload: Any) -> None:
             if type(payload).__name__ != "SpeechSynthesisChunk":
                 return
+            # The Talker submit instant is process-wide first-only, so it is
+            # attributable to this session only when it happened after this
+            # socket connected. Otherwise the mark is omitted, not estimated.
             submit_at = startup_timing.first_event_at(
                 "talker_generation_submit"
             )
-            _session_mark(
-                "first_talker_generation_start",
-                at=(
-                    submit_at
-                    if submit_at is not None
-                    and submit_at >= timing_record["t0"]
-                    else None
-                ),
-            )
+            if submit_at is not None and submit_at >= timing_record["t0"]:
+                _session_mark("first_talker_generation_start", at=submit_at)
             _session_mark("first_audio_chunk_sent")
         resume_token = websocket.query_params.get("resume_token") or ""
         parked = runtime.sessions.get(session_id)
