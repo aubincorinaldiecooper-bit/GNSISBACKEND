@@ -1179,10 +1179,21 @@ def create_online_duplex_app(
             "input_sample_rate": runtime.settings.input_sample_rate,
             "output_sample_rate": runtime.settings.output_sample_rate,
             "input_speech_rms": runtime.settings.input_speech_rms,
-            # "configured", not "loaded": these report what the loader was
-            # asked for, not that the weights verified on device.
+            # Configured (what the loader was asked for) vs loaded (verified
+            # present on the live model): the Path B checks need both to
+            # tell "voice off by config" from "asked for and missing".
             "talker_checkpoint_configured": bool(runtime.settings.talker_checkpoint),
             "token2wav_configured": bool(runtime.settings.token2wav_dir),
+            "tts_loaded": getattr(runtime.bundle.model, "tts", None) is not None,
+            "token2wav_loaded": (
+                runtime.detached_talker is not None
+                or getattr(
+                    getattr(runtime.bundle.model, "tts", None),
+                    "audio_tokenizer",
+                    None,
+                )
+                is not None
+            ),
             "git_commit": os.environ.get("GNSIS_GIT_COMMIT") or None,
             "generate_audio": bool(
                 runtime.params.generate_audio or runtime.detached_talker is not None

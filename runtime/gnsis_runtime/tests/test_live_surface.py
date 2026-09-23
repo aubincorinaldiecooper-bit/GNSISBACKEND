@@ -865,3 +865,24 @@ def test_the_speech_rms_diagnostic_can_actually_be_set(tmp_path):
     assert _duplex_settings(config).input_speech_rms == 0.01
     default = _duplex_settings(load_config(_config(tmp_path, "none", "rmsd")))
     assert default.input_speech_rms == 1e-4
+
+
+def test_health_distinguishes_configured_voice_assets_from_loaded(harness):
+    """`configured` is what the deployment asked for; `loaded` is verified.
+
+    Configured-but-not-loaded is exactly the state the Path B checks must
+    catch — a field that conflates the two would report a working voice
+    path that never proved its assets.
+    """
+
+    h = harness(
+        talker_checkpoint="/tmp/talker.safetensors",
+        token2wav_dir="/tmp/token2wav",
+    )
+    with TestClient(h.app) as client:
+        payload = client.get("/health").json()
+    assert payload["talker_checkpoint_configured"] is True
+    assert payload["token2wav_configured"] is True
+    # The stub model carries no tts/token2wav modules — asked for, not loaded.
+    assert payload["tts_loaded"] is False
+    assert payload["token2wav_loaded"] is False
