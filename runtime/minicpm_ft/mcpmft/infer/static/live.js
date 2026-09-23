@@ -865,7 +865,9 @@ function handleDuplex(session, event) {
       // Back to voice after Camera off: nothing to attach, frames already
       // paused.
       if (payload.video === false) {
-        live.pendingSource = null;
+        // Only the off request is being answered. `goDark` already cleared
+        // its own state; clearing `pendingSource` here would cancel a newer
+        // enable request whose `done` has not arrived yet.
         syncSourceControls(session);
         break;
       }
