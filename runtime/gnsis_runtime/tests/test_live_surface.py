@@ -1071,6 +1071,25 @@ def test_every_switch_attempt_is_timed(harness):
         assert field in log
 
 
+def test_a_stale_first_ack_cannot_announce_ready(harness):
+    """A delayed first ACK outlives its source — it must not unlock or report.
+
+    Frame acknowledgements arrive after their source may have ended. If the
+    very first ACK lands after `goDark` or while a replacement picker is open,
+    the page must neither say "Session ready." nor enable switches that
+    `setSource` would still ignore.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+
+    first = source.split("live.stats.accepted === 1")[1].split("else if (live.awaitingSight)")[0]
+    assert "live.source && !live.pendingSource" in first
+    assert "syncSourceControls(session)" in first
+    assert "setSwitchesDisabled(false)" not in first
+
+
 def test_the_tap_is_answered_before_the_server_replies(harness):
     """Status and the busy marker move at click time, not at `media.mode.done`."""
 

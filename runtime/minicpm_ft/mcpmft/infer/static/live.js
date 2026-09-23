@@ -771,11 +771,17 @@ function attachScreen(session, ready) {
     if (payload.type === 'screen.frame.accepted') {
       live.stats.accepted += 1;
       if (live.stats.accepted === 1) {
-        // The first proof that a real frame arrived. Only now is it true.
-        show('Session ready.', { state: 'live', tone: 'live' });
-        haptics.play('success');
-        setSwitchesDisabled(false);
-        settle('Session ready.');
+        // The first proof that a real frame arrived — and only while that
+        // frame's source is still the live one. Acknowledgements outlive
+        // their source: a delayed first ACK landing after the track ended
+        // (or while a replacement picker is open) says nothing about the
+        // session being ready.
+        if (live.source && !live.pendingSource) {
+          show('Session ready.', { state: 'live', tone: 'live' });
+          haptics.play('success');
+          settle('Session ready.');
+        }
+        syncSourceControls(session);
       } else if (live.awaitingSight) {
         // The same rule after a switch — but only a frame sent under the new
         // source counts. `sightSeq` is the last frame sent from the previous
