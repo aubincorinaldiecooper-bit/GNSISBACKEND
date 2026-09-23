@@ -14,17 +14,63 @@
  *
  * And End means off. Tracks stopped, sockets closed, worklet released,
  * playback dropped, so the phone's own camera and microphone indicators go out.
+ * The same holds for the camera switch inside a session: Camera off stops the
+ * track and tells the runtime to go back to voice, rather than blanking the
+ * picture while the lens stays live.
  */
 
 const INPUT_RATE = 16000;
 const JPEG_QUALITY = 0.72;
 const MAX_EDGE = 640;
+// A shared screen is mostly text and edges, which a small or soft JPEG turns
+// to mush. The live model scales every frame down to 448 px anyway; a back
+// brain, where one is configured, reads the frame as sent. So screens go up
+// larger and cleaner than camera frames — not so large that a home upload
+// chokes at two frames a second.
+const SCREEN_MAX_EDGE = 1280;
+const SCREEN_JPEG_QUALITY = 0.8;
 // How long a cold start may look like nothing before the page says so in
 // words. The runtime reports `runtime.status` while it loads the model onto a
 // GPU, which takes minutes from cold. The wait is not cancelled when this
 // fires — it goes on underneath, and a session that becomes ready while the
 // notice is up simply starts.
 const WAKING_NOTICE_MS = 35000;
+// "Session ready." has done its job once the picture is live; after this long
+// it steps out of the way of the thing being looked at.
+const SETTLE_MS = 2400;
+// How long "Session ended." stays up, over a Night stage with gnsis's eyes
+// closed, before the landing comes back. Long enough to read, no longer.
+const ENDED_HOLD_MS = 900;
+// Rear camera by preference: someone pointing a phone at a thing wants the
+// lens on the far side. `ideal` rather than `exact` so a laptop or a phone
+// without a rear camera still works instead of throwing.
+/**
+ * The browser's own picker, opened on the Tabs list: most of what people want
+ * gnsis to look at is one tab. A window or the whole screen is one click
+ * away in the same picker. This page itself is left out of the list —
+ * sharing it would show gnsis a picture of itself — and Chrome's "Share this
+ * tab instead" stays on, so switching tabs mid-session needs no new picker.
+ */
+const SCREEN_OPTIONS = Object.freeze({
+  video: { displaySurface: 'browser', frameRate: { ideal: 5, max: 10 } },
+  audio: false,
+  selfBrowserSurface: 'exclude',
+  surfaceSwitching: 'include',
+  monitorTypeSurfaces: 'include',
+});
+
+/** Screen sharing needs a browser that can do it and a real pointer. */
+const canShareScreen = Boolean(
+  navigator.mediaDevices
+  && typeof navigator.mediaDevices.getDisplayMedia === 'function'
+  && window.matchMedia('(pointer: fine)').matches
+);
+
+const VIDEO_CONSTRAINTS = Object.freeze({
+  facingMode: { ideal: 'environment' },
+  width: { ideal: 1280 },
+  height: { ideal: 720 },
+});
 
 const ui = {
   root: document.getElementById('live'),
@@ -32,14 +78,25 @@ const ui = {
   allow: document.getElementById('allow'),
   cancel: document.getElementById('cancel'),
   useThis: document.getElementById('useThis'),
+  useScreen: document.getElementById('useScreen'),
+  askTitle: document.getElementById('askTitle'),
+  askBody: document.getElementById('askBody'),
   preview: document.getElementById('preview'),
   scratch: document.getElementById('scratch'),
+  ghost: document.getElementById('ghost'),
   status: document.getElementById('status'),
   statusText: document.getElementById('statusText'),
   hapticsSwitch: document.getElementById('haptics'),
   says: document.getElementById('says'),
   start: document.getElementById('start'),
   end: document.getElementById('end'),
+  mute: document.getElementById('mute'),
+  muteLabel: document.getElementById('muteLabel'),
+  camToggle: document.getElementById('camToggle'),
+  share: document.getElementById('share'),
+  shareLabel: document.getElementById('shareLabel'),
+  voice: document.getElementById('voice'),
+  notice: document.getElementById('notice'),
   waking: document.getElementById('waking'),
   wakingWait: document.getElementById('wakingWait'),
   wakingRetry: document.getElementById('wakingRetry'),
@@ -229,12 +286,27 @@ staggerWords(document.getElementById('headline'));
  * the body and the eyes for the idle and attention motion the guideline
  * describes. If the fetch fails the picture simply stays.
  */
-async function inlineMark(img) {
+async function inlineMark(img, suffix = '') {
   if (!img) return;
   try {
     const response = await fetch(img.getAttribute('src'));
     if (!response.ok) return;
-    const doc = new DOMParser().parseFromString(await response.text(), 'image/svg+xml');
+    let text = await response.text();
+    // The same file goes inline twice (landing header and camera stage), and
+    // its gradients and clip are found by id. Two copies would share ids, and
+    // the header copy is display:none during a session — a gradient inside a
+    // hidden SVG does not paint, so the stage copy would lose its colour.
+    // Each copy gets ids of its own.
+    if (suffix) {
+      const ids = [...text.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+      for (const id of ids) {
+        text = text
+          .replaceAll(`id="${id}"`, `id="${id}${suffix}"`)
+          .replaceAll(`url(#${id})`, `url(#${id}${suffix})`)
+          .replaceAll(`"#${id}"`, `"#${id}${suffix}"`);
+      }
+    }
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
     const svg = doc.documentElement;
     if (!svg || svg.nodeName !== 'svg') return;
     svg.setAttribute('class', 'mark');
@@ -248,6 +320,7 @@ async function inlineMark(img) {
 }
 
 void inlineMark(document.getElementById('mark'));
+void inlineMark(document.getElementById('stageMark'), '-stage');
 
 if (ui.hapticsSwitch) {
   // Where the browser knows what a switch is (Safari 17.4+), it draws it and
@@ -263,7 +336,11 @@ if (ui.hapticsSwitch) {
 void haptics.load();
 void loadMorph();
 
+/** The line the status pill is showing now, so a late settle cannot hide a newer one. */
+let currentStatus = '';
+
 function show(text, { state, tone } = {}) {
+  currentStatus = text || '';
   if (morph) morph.update(text || '');
   else ui.status.textContent = text;
   ui.statusText.textContent = text;
@@ -273,8 +350,173 @@ function show(text, { state, tone } = {}) {
   else if (tone) ui.root.dataset.tone = tone;
 }
 
-function say(text) {
-  ui.says.textContent = text || '';
+/** Let a line that only confirms something step aside after a moment. */
+function settle(text) {
+  setTimeout(() => {
+    if (live && currentStatus === text) show('');
+  }, SETTLE_MS);
+}
+
+/** Empty the caption card, ready for the next reply. */
+function clearSays() {
+  ui.says.textContent = '';
+  ui.says.hidden = true;
+  ui.says.classList.remove('full');
+}
+
+/**
+ * Add one piece of a reply to the caption card. Each piece is its own span so
+ * it can arrive with the headline's motion without replaying what is already
+ * there; the card keeps the newest line in view.
+ */
+function appendSays(text) {
+  const bit = document.createElement('span');
+  bit.className = 'bit';
+  bit.textContent = text;
+  ui.says.append(bit);
+  ui.says.hidden = false;
+  fitSays();
+}
+
+/**
+ * Keep the newest line in view. The card is display:none while you are not
+ * muted, and a hidden box has no size to scroll, so this runs again the
+ * moment Mute shows it.
+ */
+function fitSays() {
+  ui.says.scrollTop = ui.says.scrollHeight;
+  ui.says.classList.toggle('full', ui.says.scrollHeight > ui.says.clientHeight + 1);
+}
+
+const themeColor = document.querySelector('meta[name="theme-color"]');
+
+/** Switch views, and let the browser's own chrome match the one on screen. */
+function setView(view) {
+  ui.root.dataset.view = view;
+  if (themeColor) themeColor.content = view === 'camera' ? '#F5F8FB' : '#FFF8F5';
+}
+
+// --- session controls ----------------------------------------------------
+
+/**
+ * The landing's line about how the last session ended. The status pill lives
+ * on the camera view, so a session that ends in an error needs somewhere to
+ * say so after the landing comes back.
+ */
+function note(text, tone) {
+  ui.notice.textContent = text || '';
+  ui.notice.hidden = !text;
+  if (tone) ui.notice.dataset.tone = tone;
+  else delete ui.notice.dataset.tone;
+}
+
+/**
+ * Mute silences the track rather than stopping it: the duplex stream keeps
+ * flowing as silence, the way a muted call does, so unmuting is instant.
+ * While muted, what gnsis says is shown as captions.
+ */
+function setMuted(on) {
+  if (live) {
+    live.muted = on;
+    for (const track of live.media.audio.getAudioTracks()) track.enabled = !on;
+  }
+  if (on) {
+    ui.root.dataset.muted = 'true';
+    fitSays();
+  } else {
+    delete ui.root.dataset.muted;
+  }
+  ui.mute.toggleAttribute('data-off', on);
+  ui.muteLabel.textContent = on ? 'Unmute' : 'Mute';
+}
+
+/**
+ * Keep the last frame for Camera off. Drawn small — it is shown blurred, so
+ * detail would be wasted — and dropped again when the camera comes back or
+ * the session ends, so no picture outlives the moment it is needed.
+ */
+function holdLastFrame() {
+  const video = ui.preview;
+  if (!video.videoWidth) return;
+  const scale = Math.min(1, 320 / Math.max(video.videoWidth, video.videoHeight));
+  ui.ghost.width = Math.max(2, Math.round(video.videoWidth * scale));
+  ui.ghost.height = Math.max(2, Math.round(video.videoHeight * scale));
+  ui.ghost.getContext('2d').drawImage(video, 0, 0, ui.ghost.width, ui.ghost.height);
+}
+
+function dropLastFrame() {
+  ui.ghost.width = 0;
+  ui.ghost.height = 0;
+}
+
+/**
+ * What gnsis is looking at: 'camera', 'screen', or nothing. One source at a
+ * time — the runtime takes one video source per session — so choosing one
+ * replaces the other.
+ */
+function setSourceUi(kind) {
+  ui.root.dataset.source = kind || 'none';
+  const camera = kind === 'camera';
+  ui.camToggle.setAttribute('aria-pressed', String(camera));
+  ui.camToggle.toggleAttribute('data-off', !camera);
+  const screen = kind === 'screen';
+  ui.share.toggleAttribute('data-active', screen);
+  ui.shareLabel.textContent = screen ? 'Stop sharing' : 'Share screen';
+}
+
+function setSwitchesDisabled(off) {
+  ui.camToggle.disabled = off;
+  ui.share.disabled = off;
+}
+
+/** Back to how a session starts: everything on, nothing in flight. */
+function resetControls(kind = 'camera') {
+  setMuted(false);
+  setSourceUi(kind);
+  ui.mute.disabled = true;
+  ui.end.disabled = false;
+  ui.share.hidden = !canShareScreen;
+  // The camera and share switches wait for proof of sight: before the first
+  // frame is accepted there is nothing to switch yet.
+  setSwitchesDisabled(true);
+}
+
+resetControls();
+
+// --- the voice light -----------------------------------------------------
+
+/**
+ * Feeds the voice light from the real audio: gnsis's playback level lifts it,
+ * the microphone level brightens its rim. Levels rise fast and fall slowly,
+ * because speech comes in bursts and a light that snaps off between words
+ * reads as flicker. Under reduced motion the loop does not run and the light
+ * simply brightens while gnsis is speaking (CSS, from `data-voice`).
+ */
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let meterFrame = null;
+
+function startMeter(session) {
+  if (reduceMotion.matches) return;
+  let gnsis = 0;
+  let you = 0;
+  const step = () => {
+    if (live !== session || session.stopped) { meterFrame = null; return; }
+    const g = Math.min(1, session.playback.level() * 5);
+    const y = session.muted ? 0 : Math.min(1, (session.micLevel || 0) * 8);
+    gnsis += (g - gnsis) * (g > gnsis ? 0.35 : 0.08);
+    you += (y - you) * (y > you ? 0.35 : 0.08);
+    ui.voice.style.setProperty('--gnsis', gnsis.toFixed(3));
+    ui.voice.style.setProperty('--you', you.toFixed(3));
+    meterFrame = requestAnimationFrame(step);
+  };
+  meterFrame = requestAnimationFrame(step);
+}
+
+function stopMeter() {
+  if (meterFrame !== null) cancelAnimationFrame(meterFrame);
+  meterFrame = null;
+  ui.voice.style.removeProperty('--gnsis');
+  ui.voice.style.removeProperty('--you');
 }
 
 // --- audio ---------------------------------------------------------------
@@ -294,13 +536,31 @@ function toPcm16(samples, fromRate) {
   return out.buffer;
 }
 
-/** Schedules GNSIS's speech so consecutive packets do not overlap or gap. */
-function createPlayback() {
+/**
+ * Schedules GNSIS's speech so consecutive packets do not overlap or gap, and
+ * reports when speech starts and stops being audible and how loud it is —
+ * which is what moves the voice light, so it only moves for a real voice.
+ */
+function createPlayback(onVoice = () => {}) {
   const context = new (window.AudioContext || window.webkitAudioContext)();
   const sources = new Set();
   let cursor = 0;
+  // Everything played passes through one analyser on its way out, so the
+  // voice light reads the level that is actually coming out of the speaker.
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.connect(context.destination);
+  const window_ = new Float32Array(analyser.fftSize);
   return {
     context,
+    /** Loudness of what is playing now, 0 to about 0.5 for speech. */
+    level() {
+      if (sources.size === 0) return 0;
+      analyser.getFloatTimeDomainData(window_);
+      let sum = 0;
+      for (let i = 0; i < window_.length; i += 1) sum += window_[i] * window_[i];
+      return Math.sqrt(sum / window_.length);
+    },
     play(bytes, rate) {
       const pcm = new Int16Array(bytes);
       if (!pcm.length) return;
@@ -309,19 +569,25 @@ function createPlayback() {
       for (let i = 0; i < pcm.length; i += 1) channel[i] = pcm[i] / 32768;
       const source = context.createBufferSource();
       source.buffer = buffer;
-      source.connect(context.destination);
+      source.connect(analyser);
       const at = Math.max(context.currentTime + 0.02, cursor);
       source.start(at);
       cursor = at + buffer.duration;
       sources.add(source);
-      source.onended = () => sources.delete(source);
+      if (sources.size === 1) onVoice(true);
+      source.onended = () => {
+        sources.delete(source);
+        if (sources.size === 0) onVoice(false);
+      };
     },
     cancel() {
       for (const source of sources) {
+        source.onended = null;
         try { source.stop(); } catch { /* already finished */ }
       }
       sources.clear();
       cursor = 0;
+      onVoice(false);
     },
     async close() {
       this.cancel();
@@ -339,12 +605,7 @@ function socketUrl(path, query) {
 
 async function openCamera() {
   show('Requesting camera…', { state: 'connecting', tone: null });
-  // Rear camera by preference: someone pointing a phone at a thing wants the
-  // lens on the far side. `ideal` rather than `exact` so a laptop or a phone
-  // without a rear camera still works instead of throwing.
-  const video = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-  });
+  const video = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
   show('Requesting microphone…');
   let audio;
   try {
@@ -358,6 +619,39 @@ async function openCamera() {
   return { video, audio };
 }
 
+/**
+ * A shared tab or screen, then the microphone. The picker has to open inside
+ * the click that asked for it, so nothing is awaited before it.
+ */
+async function openScreen() {
+  const video = await navigator.mediaDevices.getDisplayMedia(SCREEN_OPTIONS);
+  show('Requesting microphone…', { state: 'connecting', tone: null });
+  let audio;
+  try {
+    audio = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (error) {
+    for (const track of video.getTracks()) track.stop();
+    throw error;
+  }
+  return { video, audio };
+}
+
+/**
+ * Stopping a share from the browser's own bar ("Stop sharing"), or a camera
+ * that disappears, ends the track without this page asking. Treat it as the
+ * source being switched off, so the runtime is told and the screen says so.
+ */
+function watchSource(session, stream, kind) {
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  track.addEventListener('ended', () => {
+    if (live !== session || session.stopped || session.media.video !== stream) return;
+    goDark(session, kind === 'screen' ? 'Screen sharing stopped.' : 'Camera off.');
+  }, { once: true });
+}
+
 function startFrames(session, hints) {
   const canvas = ui.scratch;
   const context = canvas.getContext('2d', { alpha: false });
@@ -366,12 +660,14 @@ function startFrames(session, hints) {
   let inFlight = false;
 
   const tick = async () => {
-    if (!live || live.stopped || inFlight) return;
+    if (!live || live.stopped || inFlight || !live.source || live.pendingSource) return;
     const video = ui.preview;
     if (!video.videoWidth) return;
     inFlight = true;
     try {
-      const scale = Math.min(1, MAX_EDGE / Math.max(video.videoWidth, video.videoHeight));
+      const kind = live.source;
+      const edge = kind === 'screen' ? SCREEN_MAX_EDGE : MAX_EDGE;
+      const scale = Math.min(1, edge / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.max(2, Math.round(video.videoWidth * scale));
       const height = Math.max(2, Math.round(video.videoHeight * scale));
       if (canvas.width !== width || canvas.height !== height) {
@@ -379,8 +675,12 @@ function startFrames(session, hints) {
         canvas.height = height;
       }
       context.drawImage(video, 0, 0, width, height);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY));
+      const quality = kind === 'screen' ? SCREEN_JPEG_QUALITY : JPEG_QUALITY;
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
       if (!blob || !live || live.stopped) return;
+      // A switch landed while this frame was encoding: it belongs to the old
+      // source, so it is not sent under the new one's name.
+      if (live.source !== kind || live.pendingSource) return;
       const screen = live.screen;
       if (!screen || screen.readyState !== WebSocket.OPEN) return;
       sequence += 1;
@@ -389,7 +689,7 @@ function startFrames(session, hints) {
         frame_id: `live-${sequence}`,
         captured_at_ms: Date.now(),
         encoding: 'jpeg',
-        video_source: 'camera',
+        video_source: kind,
       }));
       screen.send(await blob.arrayBuffer());
       live.stats.sent += 1;
@@ -412,7 +712,13 @@ async function startMicrophone(session) {
     if (!live || live.stopped) return;
     const duplex = live.duplex;
     if (!duplex || duplex.readyState !== WebSocket.OPEN) return;
-    duplex.send(toPcm16(event.data.samples, context.sampleRate));
+    // Your level, for the voice light's rim. A muted track delivers silence,
+    // so this reads zero while muted without a special case.
+    const samples = event.data.samples;
+    let sum = 0;
+    for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+    live.micLevel = Math.sqrt(sum / Math.max(1, samples.length));
+    duplex.send(toPcm16(samples, context.sampleRate));
     live.stats.audio += 1;
   };
   source.connect(capture);
@@ -432,10 +738,13 @@ function attachScreen(session, ready) {
   );
   socket.binaryType = 'arraybuffer';
   socket.addEventListener('message', (event) => {
-    if (typeof event.data !== 'string') return;
+    // End sets `live` to null before this socket finishes closing, and a
+    // frame acknowledgement can still land in that gap.
+    if (!live || live.stopped || typeof event.data !== 'string') return;
     let payload;
     try { payload = JSON.parse(event.data); } catch { return; }
     if (payload.type === 'screen.ready') {
+      if (live.frameTimer) clearInterval(live.frameTimer);
       live.frameTimer = startFrames(session, payload);
       return;
     }
@@ -445,6 +754,14 @@ function attachScreen(session, ready) {
         // The first proof that a real frame arrived. Only now is it true.
         show('Session ready.', { state: 'live', tone: 'live' });
         haptics.play('success');
+        setSwitchesDisabled(false);
+        settle('Session ready.');
+      } else if (live.awaitingSight) {
+        // The same rule after a switch: seen, not just sent.
+        live.awaitingSight = false;
+        const line = live.source === 'screen' ? 'Sharing your screen.' : 'Camera on.';
+        show(line, { tone: 'live' });
+        settle(line);
       }
       return;
     }
@@ -482,24 +799,44 @@ function handleDuplex(session, event) {
       // ever. So ask for camera mode and wait to be told yes.
       if (payload.screen && payload.screen.enabled) {
         live.duplex.send(JSON.stringify({
-          type: 'media.mode', video: true, source: 'camera',
+          type: 'media.mode', video: true, source: live.pendingSource,
         }));
-        show('Turning the camera on…', { state: 'connecting' });
+        show(live.pendingSource === 'screen' ? 'Starting to share…' : 'Turning the camera on…', { state: 'connecting' });
       } else {
         show('Video is off on this server.', { tone: 'busy' });
       }
       void startMicrophone(session).then((mic) => { if (live) live.mic = mic; });
       break;
     case 'media.mode.done':
+      // Back to voice after Camera off: nothing to attach, frames already
+      // paused.
+      if (payload.video === false) break;
+      if (live.pendingSource) {
+        live.source = live.pendingSource;
+        live.pendingSource = null;
+        // The very first frame has its own line ("Session ready."); after
+        // that, a switch waits for its own proof.
+        live.awaitingSight = live.stats.accepted > 0;
+      }
       // Only now is the server willing to look at a frame.
-      if (!live.screen && live.ready) {
+      if ((!live.screen || live.screen.readyState > WebSocket.OPEN) && live.ready) {
         live.screen = attachScreen(session, live.ready);
-        show('Waiting for the first frame…', { state: 'connecting' });
+        if (live.stats.accepted === 0) show('Waiting for the first frame…', { state: 'connecting' });
       }
       break;
-    case 'media.mode.rejected':
-      show('This session cannot use the camera.', { tone: 'busy' });
+    case 'media.mode.rejected': {
+      const refused = live.pendingSource;
+      if (refused) {
+        // The switch was refused: let go of what we just opened.
+        live.pendingSource = null;
+        live.source = null;
+        for (const track of live.media.video.getTracks()) track.stop();
+        ui.preview.srcObject = null;
+        setSourceUi(null);
+      }
+      show(refused === 'screen' ? 'This session cannot see your screen.' : 'This session cannot use the camera.', { tone: 'busy' });
       break;
+    }
     case 'audio.chunk':
       live.pendingAudio = payload;
       break;
@@ -528,8 +865,10 @@ function handleDuplex(session, event) {
           && performance.now() - live.lastModelHapticAt < 750
         );
         if (!live.reply && !justFeltModelCue) haptics.play('selection');
+        // A new reply starts a clean card.
+        if (!live.reply) clearSays();
         live.reply = (live.reply || '') + payload.text;
-        say(live.reply);
+        appendSays(payload.text);
       }
       if (payload.end_of_turn || payload.interrupted) live.reply = '';
       break;
@@ -543,43 +882,72 @@ function handleDuplex(session, event) {
   }
 }
 
-async function start() {
+/** What the last session opened with, so Start over opens the same. */
+let lastKind = 'camera';
+
+async function start(kind = 'camera') {
+  lastKind = kind;
   ui.start.disabled = true;
-  say('');
+  clearSays();
+  note('');
   let media;
   try {
-    media = await openCamera();
+    media = kind === 'screen' ? await openScreen() : await openCamera();
   } catch (error) {
     const denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
-    // Back to the landing, where the offer still stands.
-    ui.root.dataset.view = 'landing';
-    show(
-      denied
-        ? 'Camera or microphone access was not granted.'
-        : 'This device would not start the camera.',
-      { state: 'idle', tone: 'bad' }
-    );
+    // Back to the landing, where the offer still stands — and where the
+    // reason is now written, since the status pill is not on that view.
+    setView('landing');
+    show('', { state: 'idle', tone: null });
+    if (kind === 'screen') {
+      note(denied ? 'Nothing was shared, so no session started.' : 'This browser would not share the screen.', denied ? 'busy' : 'bad');
+    } else {
+      note(
+        denied
+          ? 'Camera or microphone access was not granted.'
+          : 'This device would not start the camera.',
+        'bad'
+      );
+    }
     ui.start.disabled = false;
     return;
   }
 
   ui.preview.srcObject = media.video;
-  const session = { media };
+  // One object for the whole session. The socket handlers below check
+  // `live === session` to speak only for their own session; `session` used to
+  // be a separate `{ media }` object, which `live` never equals, so a dropped
+  // connection or a busy model was never reported and never released the
+  // camera and microphone.
   live = {
     media,
     duplex: null,
     screen: null,
     mic: null,
-    playback: createPlayback(),
+    playback: createPlayback((speaking) => {
+      if (speaking) ui.root.dataset.voice = 'speaking';
+      else delete ui.root.dataset.voice;
+    }),
     frameTimer: null,
     pendingAudio: null,
     sessionId: null,
     lastModelHapticAt: null,
+    muted: false,
+    micLevel: 0,
+    // What frames are being sent from, and what a switch is waiting on.
+    source: null,
+    pendingSource: kind,
+    awaitingSight: false,
     stopped: false,
     stats: { sent: 0, accepted: 0, dropped: 0, audio: 0 },
   };
+  const session = live;
+  watchSource(session, media.video, kind);
 
-  ui.root.dataset.view = 'camera';
+  setView('camera');
+  resetControls(kind);
+  ui.mute.disabled = false;
+  startMeter(live);
   show('Connecting…', { state: 'connecting' });
 
   const duplex = new WebSocket(socketUrl('/ws/duplex'));
@@ -610,12 +978,109 @@ async function start() {
   });
 }
 
-async function stop({ keepMessage = false } = {}) {
+/**
+ * Turn the picture off without a switch to anything else: hold the last
+ * frame for the 2% trace, stop the track (the camera light or the browser's
+ * "sharing" bar goes away), ask the runtime for voice, and say so.
+ */
+function goDark(session, message) {
+  holdLastFrame();
+  for (const track of session.media.video.getTracks()) track.stop();
+  ui.preview.srcObject = null;
+  session.source = null;
+  session.pendingSource = null;
+  session.awaitingSight = false;
+  setSourceUi(null);
+  const duplex = session.duplex;
+  if (duplex && duplex.readyState === WebSocket.OPEN) {
+    duplex.send(JSON.stringify({ type: 'media.mode', video: false }));
+  }
+  show(message, { tone: null });
+}
+
+/**
+ * The camera and share switches. `kind` is what gnsis should look at next:
+ * 'camera', 'screen', or null for nothing. A new source is opened first and
+ * only then replaces the old one, so a cancelled picker leaves everything as
+ * it was. The picture is only called live once a frame from the new source
+ * has been accepted, the same rule the session started under.
+ */
+async function setSource(kind) {
+  const session = live;
+  if (!session || session.stopped || session.sourceBusy) return;
+  const duplex = session.duplex;
+  if (!duplex || duplex.readyState !== WebSocket.OPEN) return;
+  const current = session.pendingSource || session.source;
+  if (kind === current) return;
+  if (!kind) {
+    goDark(session, current === 'screen' ? 'Screen sharing stopped.' : 'Camera off.');
+    return;
+  }
+  session.sourceBusy = true;
+  setSwitchesDisabled(true);
+  try {
+    let stream;
+    try {
+      if (kind === 'screen') {
+        // Opened straight from the click, before anything is awaited.
+        stream = await navigator.mediaDevices.getDisplayMedia(SCREEN_OPTIONS);
+      } else {
+        show('Turning the camera on…', { tone: 'busy' });
+        stream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
+      }
+    } catch (error) {
+      // Closing the picker is a choice, not a failure: nothing changes.
+      if (kind === 'screen' && error && error.name === 'NotAllowedError') return;
+      show(kind === 'screen' ? 'This browser would not share the screen.' : 'This device would not start the camera.', { tone: 'bad' });
+      return;
+    }
+    // End may have been pressed while the picker or the lens was open.
+    if (live !== session || session.stopped) {
+      for (const track of stream.getTracks()) track.stop();
+      return;
+    }
+    // Hand over: the old source stops only now that the new one exists.
+    for (const track of session.media.video.getTracks()) track.stop();
+    session.media.video = stream;
+    watchSource(session, stream, kind);
+    ui.preview.srcObject = stream;
+    dropLastFrame();
+    session.source = null;
+    session.pendingSource = kind;
+    session.awaitingSight = false;
+    setSourceUi(kind);
+    if (kind === 'screen') show('Starting to share…', { tone: 'busy' });
+    duplex.send(JSON.stringify({ type: 'media.mode', video: true, source: kind }));
+  } finally {
+    session.sourceBusy = false;
+    if (live === session) setSwitchesDisabled(false);
+  }
+}
+
+/**
+ * `ended` is End pressed on purpose: the stage shows the session closing —
+ * picture out, light down, gnsis's eyes shut, "Session ended." — while the
+ * runtime is told to stop, then the landing comes back. `keepMessage` is an
+ * ending that was not chosen (connection lost, busy, a failed start): no
+ * farewell, and the reason is written on the landing.
+ */
+async function stop({ keepMessage = false, ended = false } = {}) {
   doneWaking();
   const session = live;
   if (!session || session.stopped) return;
   session.stopped = true;
   live = null;
+  stopMeter();
+
+  const tone = ui.root.dataset.tone;
+  const leaving = keepMessage && (tone === 'bad' || tone === 'busy') ? { text: currentStatus, tone } : null;
+  if (ended) {
+    ui.root.dataset.state = 'ending';
+    ui.end.disabled = true;
+    ui.mute.disabled = true;
+    ui.camToggle.disabled = true;
+    show('Ending…', { tone: null });
+  }
 
   if (session.frameTimer) clearInterval(session.frameTimer);
 
@@ -663,10 +1128,20 @@ async function stop({ keepMessage = false } = {}) {
   }
   ui.preview.srcObject = null;
 
-  ui.root.dataset.view = 'landing';
+  if (ended) {
+    // Everything is off by now; this is only the moment of saying so.
+    show('Session ended.');
+    await new Promise((resolve) => { setTimeout(resolve, ENDED_HOLD_MS); });
+  }
+
+  clearSays();
+  resetControls();
+  dropLastFrame();
+  delete ui.root.dataset.voice;
+  show('', { state: 'idle', tone: null });
+  setView('landing');
   ui.start.disabled = false;
-  if (!keepMessage) show('Session ended.', { state: 'idle', tone: null });
-  else ui.root.dataset.state = 'idle';
+  note(leaving ? leaving.text : '', leaving ? leaving.tone : null);
 }
 
 /**
@@ -677,15 +1152,35 @@ async function stop({ keepMessage = false } = {}) {
  * Settings — so the sheet explains what is about to be asked while saying no
  * still costs nothing. The native prompt fires on Allow, and only then.
  */
-function ask() {
-  ui.root.dataset.view = 'camera';
+const ASKS = Object.freeze({
+  camera: {
+    title: 'Camera and microphone',
+    body: 'Point the camera at something and talk normally.',
+    allow: 'Allow camera and microphone',
+  },
+  screen: {
+    title: 'Screen and microphone',
+    body: 'Pick a tab or your whole screen, then talk normally.',
+    allow: 'Choose what to share',
+  },
+});
+
+/** What the open sheet is asking for, so Allow starts the right session. */
+let asking = 'camera';
+
+function ask(kind = 'camera') {
+  asking = kind;
+  ui.askTitle.textContent = ASKS[kind].title;
+  ui.askBody.textContent = ASKS[kind].body;
+  ui.allow.textContent = ASKS[kind].allow;
+  setView('camera');
   ui.permission.hidden = false;
   ui.allow.focus({ preventScroll: true });
 }
 
 function dismiss() {
   ui.permission.hidden = true;
-  ui.root.dataset.view = 'landing';
+  setView('landing');
 }
 
 ui.start.addEventListener('click', () => { haptics.play('light'); ask(); });
@@ -693,13 +1188,17 @@ ui.start.addEventListener('click', () => { haptics.play('light'); ask(); });
 if (ui.useThis) {
   ui.useThis.addEventListener('click', () => {
     ui.root.dataset.force = 'touch';
-    ask();
+    ask('camera');
   });
+}
+if (ui.useScreen && canShareScreen) {
+  ui.useScreen.hidden = false;
+  ui.useScreen.addEventListener('click', () => ask('screen'));
 }
 ui.allow.addEventListener('click', () => {
   haptics.play('light');
   ui.permission.hidden = true;
-  void start();
+  void start(asking);
 });
 ui.cancel.addEventListener('click', dismiss);
 // Keep waiting only dismisses the notice: the wait was never interrupted, so
@@ -713,7 +1212,7 @@ ui.wakingWait.addEventListener('click', dismissWaking);
 ui.wakingRetry.addEventListener('click', async () => {
   closeWaking();
   await stop({ keepMessage: true });
-  await start();
+  await start(lastKind);
 });
 
 ui.permission.addEventListener('click', (event) => {
@@ -725,6 +1224,26 @@ document.addEventListener('keydown', (event) => {
   else if (event.key === 'Escape' && !ui.waking.hidden) dismissWaking();
 });
 
-ui.end.addEventListener('click', () => { haptics.play('rigid'); void stop(); });
-// A backgrounded or closed tab must not leave the camera on.
+ui.end.addEventListener('click', () => { haptics.play('rigid'); void stop({ ended: true }); });
+ui.mute.addEventListener('click', () => {
+  if (!live) return;
+  haptics.play('light');
+  setMuted(!live.muted);
+});
+ui.camToggle.addEventListener('click', () => {
+  if (!live) return;
+  haptics.play('light');
+  const current = live.pendingSource || live.source;
+  void setSource(current === 'camera' ? null : 'camera');
+});
+ui.share.addEventListener('click', () => {
+  if (!live) return;
+  const current = live.pendingSource || live.source;
+  // Synchronous down to getDisplayMedia, so the browser sees the click.
+  void setSource(current === 'screen' ? null : 'screen');
+});
+
+// A backgrounded or closed tab must not leave the camera on. (Not fired by
+// switching to another tab while sharing: `pagehide` is the page going away,
+// not going out of view.)
 window.addEventListener('pagehide', () => { void stop({ keepMessage: true }); });

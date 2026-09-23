@@ -16,6 +16,12 @@
  * The character is the guideline's own vector, lifted from the PDF: the body
  * outline and both eyes are its paths, unaltered. Only the gradient is built
  * here, from the words that describe it.
+ *
+ * The session screen's layout is the one exception to "nothing invented": the
+ * full-bleed stage, the floating switches (72 x 52 pills), the voice light
+ * and the 56 px character at the top are this page's own, shaped after a phone-first live camera
+ * pattern. Every colour, type size, radius and duration they use is still a
+ * guideline token.
  */
 :root {
   /* 13 — Colour palette. One name per colour; the dark is always Night. */
@@ -36,6 +42,12 @@
   --r-md: 12px;
   --r-lg: 16px;
   --r-xl: 20px;
+  /* Rounder than the guideline's tokens, by the owner's direction (Sept
+     2026): the large surfaces — the picture's frame, the sheets, the QR
+     panel — read as soft, not cut. */
+  --r-2xl: 28px;
+  --r-frame: 32px;
+  --r-frame-wide: 40px;
   --r-pill: 999px;
   --shadow-card: 0 1px 3px rgba(17, 24, 39, 0.08);
   --shadow-panel: 0 4px 16px rgba(17, 24, 39, 0.12);
@@ -71,7 +83,8 @@ body {
 }
 
 /* 12 — Light first. The landing is the one warm moment; the camera view is a
-   utility screen and sits on Mist so the Night stage is the only dark thing. */
+   utility screen. On a phone the Night stage fills it; on a wide screen the
+   stage is a card on Mist, so it is still the only dark thing. */
 .live {
   position: relative;
   display: grid;
@@ -135,7 +148,6 @@ body {
 
 [data-view="landing"] .camera { display: none; }
 [data-view="camera"] .landing { display: none; }
-.camera { display: grid; grid-template-rows: 1fr auto auto; gap: 16px; min-height: 0; }
 .landing { display: grid; align-content: center; justify-items: center; gap: 32px; text-align: center; }
 
 /* 15/16 — Statement: Condensed 800, 56 / 54, −1%, all caps. One per screen,
@@ -177,7 +189,7 @@ body {
 .qr .panel {
   width: 224px;
   height: 224px;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-2xl);
   overflow: hidden;
   background: var(--night);
   box-shadow: var(--shadow-panel);
@@ -264,7 +276,7 @@ body {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
 }
 .link:hover { background: rgba(255, 211, 180, 0.35); }   /* Peach hover tint */
 
@@ -298,7 +310,7 @@ body {
   gap: 12px;
   width: min(100%, 420px);
   background: #fff;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-2xl);
   padding: 24px 20px 16px;
   box-shadow: var(--shadow-panel), 0 24px 48px rgba(17, 24, 39, 0.18);
   animation: rise var(--base) var(--ease) both;
@@ -309,16 +321,44 @@ body {
 .askfine { font-size: 13px; line-height: 18px; color: var(--ink-2); }   /* Utility */
 @keyframes rise { from { transform: translateY(16px); opacity: 0; } }
 
-/* 3 — Night panels provide contrast for camera and video. */
+/* 12 — Light first, in a session too. The room is Mist; the picture is a
+   rounded frame in it, with gnsis above and the switches below, so nothing
+   has to be laid over the picture and every word and icon is Night on light
+   — no shading, no scrims. The same arrangement on a phone and a desktop;
+   only the frame's shape changes. */
+/* `display` is set on purpose: the section ships with `hidden` so a page
+   whose script never ran shows only the landing, and the view attribute
+   decides from here on. */
+.camera { position: absolute; inset: 0; z-index: 1; display: block; }
+[data-view="camera"] .bar { display: none; }
 .stage {
-  position: relative;
-  min-height: 0;
-  border-radius: var(--r-xl);
+  /* Room kept clear above and below the frame: gnsis and End on top; the
+     status line and the switches underneath, plus three lines of captions
+     while you are muted. The frame grows and shrinks with it. */
+  --top: calc(max(16px, calc(env(safe-area-inset-top) + 8px)) + 56px + 12px);
+  --dock: calc(max(20px, env(safe-area-inset-bottom)) + 76px + 16px + 20px + 16px);
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  background: var(--night);
-  display: grid;
-  place-items: center;
-  box-shadow: var(--shadow-panel);
+  background: var(--mist);
+  isolation: isolate;
+}
+[data-muted] .stage {
+  --dock: calc(max(20px, env(safe-area-inset-bottom)) + 76px + 16px + 20px + 12px + 78px + 16px);
+}
+/* The picture's frame: nearly the whole phone, soft-cornered, on the room.
+   Empty or letterboxed, it is a faint Night tint, so its shape stays when
+   the camera is off. On a desktop it becomes 16:9 (see the end). */
+.frame {
+  position: absolute;
+  top: var(--top);
+  bottom: var(--dock);
+  left: 12px;
+  right: 12px;
+  overflow: hidden;
+  border-radius: var(--r-frame);
+  background: rgba(17, 24, 39, 0.05);
+  transition: bottom var(--base) var(--ease);
 }
 .preview {
   position: absolute;
@@ -332,8 +372,107 @@ body {
 .scratch { display: none; }
 [data-state="live"] .preview,
 [data-state="connecting"] .preview { opacity: 1; }
+/* Camera off (or a share stopped) is a real off: the track is stopped, so the
+   stage goes back to Night, and gnsis goes on listening. */
+[data-source="none"] .preview { opacity: 0; }
+/* A shared screen is shown whole, never cropped: the point of sharing it is
+   what is on it, edge to edge. A camera fills its frame. */
+[data-source="screen"] .preview { object-fit: contain; }
+/* The last frame before Camera off, blurred and held at 2% — a trace of the
+   scene, not a picture of it. It arrives by blurring out of the live image
+   over 600 ms rather than cutting to black. `--ghost` is the resting
+   visibility, kept in one place so it is easy to change. */
+.ghost {
+  --ghost: 0.02;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  filter: blur(40px);
+  scale: 1.2;   /* pushes the blur's soft edge past the frame */
+  pointer-events: none;
+}
+[data-source="none"] .ghost { opacity: var(--ghost); animation: ghost-out 600ms var(--ease) both; }
+@keyframes ghost-out {
+  from { opacity: 1; filter: blur(0); }
+  to   { opacity: var(--ghost); filter: blur(40px); }
+}
+/* Ending. From the moment End is pressed until the session is really closed:
+   the picture fades to Night, the voice light sinks, and gnsis closes its
+   eyes — still breathing — so "ended" is something you see, not a jump cut
+   back to the landing. */
+[data-state="ending"] .preview { opacity: 0; }
+[data-state="ending"] .voice .light {
+  opacity: 0.18;
+  translate: 0 60%;
+  transition: opacity var(--slow) var(--ease), translate var(--slow) var(--ease);
+}
+[data-state="ending"] .controls { opacity: 0.4; transition: opacity var(--base) var(--ease); }
 
-.readout { min-height: 68px; display: grid; gap: 8px; justify-items: start; }
+/* Top: gnsis in the middle, with room above it — the character is who you
+   are talking to, so it sits where a call screen puts the other person —
+   and End at the right, on the same line. */
+.top {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: max(16px, calc(env(safe-area-inset-top) + 8px)) 16px 0;
+}
+.top .mark { grid-column: 2; width: 56px; height: 56px; }
+
+/* End: a hung-up handset and the word, straight on the picture like
+   everything else in a session — no pill. The handset is coral because coral
+   is this page's colour for "stopped" (the error dot, a switched-off
+   control), and it is a line, never a fill, so the warm colour stays small.
+   The button keeps a 44 px tap area; only its box is invisible. */
+.endcall {
+  grid-column: 3;
+  justify-self: end;
+  appearance: none;
+  border: 0;
+  height: 44px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--r-pill);
+  color: var(--night);
+  font: 700 14px/20px var(--body);   /* Label */
+  background: transparent;
+  cursor: pointer;
+  transition: transform var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+/* The word carries the meaning, so the coral handset can be the accent. */
+.endcall .icon { color: var(--coral); }
+/* A soft, edgeless light under the pointer instead of a box. */
+@media (hover: hover) {
+  .endcall:hover { background: radial-gradient(closest-side, rgba(17, 24, 39, 0.07), rgba(17, 24, 39, 0)); }
+}
+.endcall:active { transform: scale(0.96); }
+.endcall:disabled { cursor: default; opacity: 0.6; }
+
+/* Bottom: what gnsis is saying, then the switches either side of the voice
+   light. */
+.dock {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  gap: 20px;
+  justify-items: center;
+  padding: 0 16px max(20px, env(safe-area-inset-bottom));
+}
+.readout { width: 100%; display: grid; gap: 12px; justify-items: center; }
+
 /* 8 — The status is the guideline's own pattern: the flat mark beside a short
    line, on a white pill. Hidden rather than empty when there is nothing to
    say, so an empty pill never reads as a stalled session; `.readout` holds
@@ -381,10 +520,201 @@ body {
   background: var(--orange);
 }
 [data-tone="bad"] .status::before { background: var(--coral); }
+/* During a session gnsis is already at the top of the screen, so the pill
+   drops its mark and keeps only the words. The dots for waiting and for
+   something wrong stay. */
+.live:not([data-tone="busy"]):not([data-tone="bad"]) .camera .status::before { display: none; }
+/* In a session the status is plain words under the picture, not a white
+   pill: "Camera off.", "Session ended." and the rest sit in the same open
+   space as the captions. The waiting and error dots stay, and lead the
+   words. */
+.camera .status {
+  padding: 0 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--night);
+}
+.live[data-tone="busy"] .camera .status::before,
+.live[data-tone="bad"] .camera .status::before { margin: -2px 10px 0 0; }
 
-.says { font-size: 16px; line-height: 24px; min-height: 24px; }
+/* The landing's line about how the last session ended, when it was not End. */
+.notice {
+  font-size: 13px;
+  line-height: 18px;   /* Utility */
+  color: var(--ink-2);
+  max-width: 32ch;
+}
+.notice[hidden] { display: none; }
+.notice[data-tone="bad"]::before,
+.notice[data-tone="busy"]::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 8px 1px 0;
+  border-radius: 50%;
+  background: var(--orange);
+}
+.notice[data-tone="bad"]::before { background: var(--coral); }
 
-.controls { display: grid; }
+/* What gnsis is saying, in plain words between the picture and the switches
+   — no card. Three lines at most, newest at the bottom, older lines
+   dissolving upward. Each piece arrives the way
+   the landing headline does (Spell UI's WordsStagger values: from faded and
+   blurred to rest over 0.5 s ease-out). */
+.says {
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(26px * 3);
+  overflow: hidden;
+  padding: 0 4px;
+  color: var(--night);
+  font: 500 20px/26px var(--body);   /* Subhead size */
+}
+/* Once older lines are scrolling away, they fade out under the top edge
+   instead of being sliced through. */
+.says.full {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 30px);
+}
+/* Captions follow the microphone: while you are muted they show, so what
+   gnsis says can still be read; the rest of the time the picture stays
+   clear. Text keeps collecting either way, so muting mid-reply shows the
+   reply so far. */
+.says { display: none; }
+[data-muted] .says { display: block; }
+.says[hidden] { display: none; }
+.says .bit { animation: word-in 0.5s ease-out both; }
+
+/* Three columns — what you hear, the light, what gnsis sees — so the light
+   stays in the middle however many switches sit either side of it. */
+.controls {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  column-gap: 16px;
+}
+.group { display: flex; gap: 16px; }
+.group.hear { justify-content: flex-end; }
+.group.see { justify-content: flex-start; }
+.control[hidden] { display: none; }
+
+/* 13 — The signature gradient, as a free light the height of
+   the switches, feathered so it has no edge. `--gnsis` (0–1, gnsis's speech
+   level) lifts and brightens the light; `--you` (0–1, your microphone level)
+   brightens a pale core. Both
+   are set from the real audio every frame, so the light is still when
+   nobody is speaking. It breathes on the character's own 4 s cycle
+   underneath; `scale` and `translate` are separate properties so the
+   breathing and the level never override each other. */
+.voice {
+  --gnsis: 0;
+  --you: 0;
+  position: relative;
+  width: 168px;
+  height: 64px;
+  margin-top: -6px;   /* centred on the icons' row, not on icon + word */
+  overflow: hidden;
+  isolation: isolate;
+  /* No pill: the light is feathered out to nothing at every edge, so it
+     reads as light on the picture rather than a shape holding light. */
+  -webkit-mask-image: radial-gradient(ellipse closest-side, #000 40%, transparent 100%);
+  mask-image: radial-gradient(ellipse closest-side, #000 40%, transparent 100%);
+}
+.voice .light {
+  position: absolute;
+  left: -25%;
+  right: -25%;
+  top: 0;
+  height: 150%;
+  background:
+    radial-gradient(closest-side, var(--coral), rgba(255, 102, 118, 0) 100%) 50% 70% / 70% 70% no-repeat,
+    radial-gradient(closest-side, var(--orange), rgba(255, 170, 61, 0) 100%) 25% 60% / 55% 60% no-repeat,
+    radial-gradient(closest-side, var(--orange), rgba(255, 170, 61, 0) 100%) 75% 62% / 55% 60% no-repeat,
+    radial-gradient(closest-side, var(--glow), rgba(255, 230, 177, 0) 100%) 50% 40% / 80% 50% no-repeat;
+  filter: blur(9px);
+  opacity: calc(0.85 + var(--gnsis) * 0.15);
+  translate: 0 calc(26% - var(--gnsis) * 22%);
+  transform-origin: 50% 100%;
+  animation: light-breathe 4s ease-in-out infinite alternate;
+}
+@keyframes light-breathe { from { scale: 1 1; } to { scale: 1.05 1.1; } }
+/* Your voice: a peach core, brightening at the centre. (Peach rather than
+   the glow colour, which disappears on a light room.) */
+.voice::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse closest-side, rgba(255, 211, 180, 0.95), rgba(255, 211, 180, 0) 100%);
+  opacity: calc(var(--you) * 0.8);
+  pointer-events: none;
+}
+/* At rest an ember shows along the bottom, so the light reads as on and
+   listening even with the camera off. Waking up or connecting: lower still,
+   only breathing. */
+[data-state="connecting"] .voice .light { opacity: 0.35; }
+/* The switches are an icon and a word on the picture — no discs. The
+   72 x 52 area is still the tap target; it simply has no fill. A soft
+   shadow under the strokes and letters keeps them off bright scenes. */
+.control {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  color: var(--night);
+  font: 700 14px/20px var(--body);   /* Label */
+  cursor: pointer;
+}
+.disc {
+  position: relative;
+  width: 72px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--night);
+  transition: color var(--fast) var(--ease), transform var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.disc .icon { width: 28px; height: 28px; }
+/* Only with a real pointer: on a phone, :hover sticks after a tap and would
+   leave a light behind the last thing touched. */
+@media (hover: hover) {
+  .control:hover .disc { background: radial-gradient(closest-side, rgba(17, 24, 39, 0.07), rgba(17, 24, 39, 0)); }
+}
+.control:active .disc { transform: scale(0.94); }
+.control .off { display: none; }
+/* Off: the slashed icon, in Night so it reads on light, with a coral dot at
+   its corner — coral is this page's "stopped" colour, and on light it lives
+   on a dot, never on a line or a word (12). The word changes where it has a
+   better one (Mute → Unmute). */
+.control[data-off] .disc::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  right: 17px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--coral);
+}
+.control[data-off] .on { display: none; }
+.control[data-off] .off { display: block; }
+/* Share screen is an action, not something that is normally on, so it never
+   turns coral. While a screen is shared its icon and word say how to stop. */
+.control .stop { display: none; }
+.control[data-active] .on { display: none; }
+.control[data-active] .stop { display: block; }
+.control:disabled { cursor: default; opacity: 0.45; }
+.control:focus-visible { outline: none; }
+/* With no boxes to lean on, keyboard focus draws its own ring. */
+.control:focus-visible .disc,
+.endcall:focus-visible { outline: 2px solid var(--night); outline-offset: 2px; }
+
 .action {
   appearance: none;
   border: 0;
@@ -404,13 +734,33 @@ body {
 .start { background: var(--night); color: #fff; box-shadow: var(--shadow-card); }
 .start:hover { box-shadow: var(--shadow-panel); transform: translateY(-1px); }
 .start:active { transform: scale(0.985); }
-.end {
-  background: #fff;
-  color: var(--night);
-  box-shadow: var(--shadow-card), inset 0 0 0 1px rgba(17, 24, 39, 0.08);
-}
-.end:hover { background: var(--mist); }
 .action:disabled { opacity: 0.45; }
+
+/* Desktop. Not the phone layout on a bigger screen: a window is landscape and
+   a shared screen is landscape, so the picture becomes a 16:9 frame in the
+   middle of the light room, shown whole, with gnsis above it and the switches
+   in a row below it — nothing floats over what is being shared. Same
+   open, container-free language as the phone; only the arrangement
+   changes. Keyed on a fine pointer as well as width, so a phone turned
+   sideways keeps its full-screen camera. */
+@media (min-width: 900px) and (pointer: fine) {
+  .frame {
+    inset: auto;
+    left: 50%;
+    top: 108px;
+    translate: -50% 0;
+    width: min(calc(100% - 96px), calc((100dvh - 108px - 252px) * 16 / 9));
+    bottom: auto;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--r-frame-wide);
+  }
+  .top { padding: 28px 32px 0; }
+  .dock { gap: 16px; padding: 0 32px 28px; }
+  .readout { max-width: 720px; }
+  .says { max-width: 720px; }
+  .controls { max-width: 720px; column-gap: 28px; }
+  .group { gap: 28px; }
+}
 
 /* 10 — Motion basics. gnsis moves like something breathing, not something
    bouncing: the body scales 1.00 → 1.02 over 4 s, ease-in-out, and loops; the
@@ -437,12 +787,20 @@ body {
   97.5%          { transform: scaleY(0.1); }
 }
 .gnsis-rim { transition: stroke-opacity 900ms var(--ease); }
+[data-state="ending"] .gnsis-eyes path {
+  animation: none;
+  transform: scaleY(0.1);
+  transition: transform var(--slow) var(--ease);
+}
 [data-state="live"] .mark { transform: translateY(-2%); }
 [data-state="live"] .mark .gnsis-rim { stroke-opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
   .preview, .action, .mark, .gnsis-rim { transition: none; }
-  .sheet-card, .gnsis-body, .gnsis-eyes path { animation: none; }
+  .sheet-card, .gnsis-body, .gnsis-eyes path, .voice .light, .says .bit, .ghost { animation: none; }
+  .endcall, .disc, .voice .light, .controls, .frame { transition: none; }
+  /* No level-following: the light is simply brighter while gnsis speaks. */
+  [data-voice="speaking"] .voice { --gnsis: 1; }
   /* The words are simply there. */
   .headline.stagger .word { animation: none; }
 }
