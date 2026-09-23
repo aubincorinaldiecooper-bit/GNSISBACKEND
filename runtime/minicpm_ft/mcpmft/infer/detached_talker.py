@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from mcpmft.infer import startup_timing
 from mcpmft.modeling.load import load_prefixed_submodule_state_dict
 
 
@@ -152,21 +153,24 @@ class DetachedTalkerRuntime:
             tts_config.attn_implementation = "eager"
 
         dtype = next(thinker_model.parameters()).dtype
+        gpu_index = target.index if target.index is not None else 0
         with torch.cuda.device(target):
             tts = tts_class(config=tts_config, audio_tokenizer=None)
             tts.to(device=target, dtype=dtype)
-            base_loaded = load_prefixed_submodule_state_dict(
-                tts,
-                base_model_checkpoint,
-                prefix="tts.",
-                strict=True,
-            )
-            overlay_loaded = load_prefixed_submodule_state_dict(
-                tts,
-                talker_checkpoint,
-                prefix="tts.",
-                strict=False,
-            )
+            with startup_timing.stage("detached_talker_base_load", gpu=gpu_index):
+                base_loaded = load_prefixed_submodule_state_dict(
+                    tts,
+                    base_model_checkpoint,
+                    prefix="tts.",
+                    strict=True,
+                )
+            with startup_timing.stage("detached_talker_finetune_load", gpu=gpu_index):
+                overlay_loaded = load_prefixed_submodule_state_dict(
+                    tts,
+                    talker_checkpoint,
+                    prefix="tts.",
+                    strict=False,
+                )
             if overlay_loaded <= 0:
                 raise RuntimeError(f"No Talker tensors loaded from {talker_checkpoint}")
             LOGGER.info(
@@ -183,11 +187,13 @@ class DetachedTalkerRuntime:
                     "Detached Talker requires stepaudio2/Token2wav from minicpmo-utils"
                 ) from exc
             tts.config.audio_tokenizer_type = "s3tokenizer_step_audio"
-            tts.audio_tokenizer = Token2wav(
-                str(token2wav_dir),
-                float16=bool(enable_float16),
-                n_timesteps=int(n_timesteps),
-            )
+            with startup_timing.stage("token2wav_init", gpu=gpu_index):
+                tts.audio_tokenizer = Token2wav(
+                    str(token2wav_dir),
+                    float16=bool(enable_float16),
+                    n_timesteps=int(n_timesteps),
+                )
+            startup_timing.mark("token2wav_ready", "ready", gpu=gpu_index)
 
         return cls(
             tts=tts,
@@ -629,6 +635,10 @@ class AsyncTalkerWorker:
             )
             queued = _QueuedRequest(request=request, cancel_event=self._cancel_event)
             self._pending += 1
+        # The instant a generation is accepted is the session's
+        # "Talker started" timestamp; the session layer reads it back when it
+        # reports first-session timings.
+        startup_timing.observe_once("talker_generation_submit")
         self._requests.put(queued)
         return request
 

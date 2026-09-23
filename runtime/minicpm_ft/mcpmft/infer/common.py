@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from mcpmft.args import ModelArguments
+from mcpmft.infer import startup_timing
 from mcpmft.modeling.load import (
     load_composed_minicpmo_model,
     load_minicpmo_model,
@@ -38,10 +39,11 @@ def load_for_infer(
     # Inference retains the model's streaming embedding path.
     inference_args = replace(model_args, train_disable_stream_input=False)
     if load_processor:
-        tokenizer, processor = load_tokenizer_and_processor(
-            inference_args,
-            tokenizer_path=checkpoint,
-        )
+        with startup_timing.stage("tokenizer_processor_load"):
+            tokenizer, processor = load_tokenizer_and_processor(
+                inference_args,
+                tokenizer_path=checkpoint,
+            )
     else:
         # Offline duplex replay can use the native streaming audio processor directly.
         from transformers import AutoTokenizer
@@ -51,19 +53,23 @@ def load_for_infer(
             trust_remote_code=inference_args.trust_remote_code,
         )
         processor = None
-    if checkpoint:
-        model = load_composed_minicpmo_model(
-            inference_args,
-            checkpoint,
-            tokenizer_size=len(tokenizer),
-            init_token2wav=init_token2wav,
-            strict=strict,
-        )
-    else:
-        model = load_minicpmo_model(
-            inference_args,
-            init_token2wav=init_token2wav,
-        )
+    # One composed load covers the base model read, the Thinker checkpoint
+    # overlay, and model construction — instrumented as a single honest stage
+    # rather than manufactured sub-stages.
+    with startup_timing.stage("thinker_model_load", gpu=0):
+        if checkpoint:
+            model = load_composed_minicpmo_model(
+                inference_args,
+                checkpoint,
+                tokenizer_size=len(tokenizer),
+                init_token2wav=init_token2wav,
+                strict=strict,
+            )
+        else:
+            model = load_minicpmo_model(
+                inference_args,
+                init_token2wav=init_token2wav,
+            )
     from mcpmft.modeling.load import add_native_frontbrain_tokens
 
     add_native_frontbrain_tokens(model, tokenizer)
@@ -85,7 +91,9 @@ def load_for_infer(
     if not torch.cuda.is_available():
         raise RuntimeError("GNSIS inference requires CUDA")
     if inference_args.device_map is None:
-        model.to("cuda")
+        with startup_timing.stage("thinker_move_to_gpu", gpu=0):
+            model.to("cuda")
+    startup_timing.mark("thinker_ready", "ready", gpu=0)
     return InferBundle(model=model, tokenizer=tokenizer, processor=processor)
 
 
