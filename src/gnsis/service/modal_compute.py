@@ -42,6 +42,8 @@ class ModalCompute:
         *,
         token_id: str,
         token_secret: str,
+        proxy_key: Optional[str] = None,
+        proxy_secret: Optional[str] = None,
         environment: str = "main",
         gnsis_app_name: str = GNSIS_APP_NAME,
         gnsis_function_name: str = "gnsis_server",
@@ -53,6 +55,11 @@ class ModalCompute:
             raise ValueError("Modal credentials are incomplete")
         self.token_id = token_id
         self.token_secret = token_secret
+        # Endpoint proxy credentials are deliberately separate from the Modal
+        # workspace API token. They are sent only to the protected gnsis web
+        # endpoint and are never copied into the deployed runtime.
+        self.proxy_key = proxy_key
+        self.proxy_secret = proxy_secret
         self.ref = ModalRuntimeRef(
             app_name=gnsis_app_name,
             function_name=gnsis_function_name,
@@ -140,6 +147,17 @@ class ModalCompute:
         """
         return self._web_url(self.ornith_ref)
 
+    def _proxy_headers(self) -> dict[str, str]:
+        """Headers required by Modal proxy-authenticated web endpoints."""
+        key = (self.proxy_key or "").strip()
+        secret = (self.proxy_secret or "").strip()
+        if not key or not secret:
+            raise RuntimeError(
+                "GNSISWORKER is missing MODAL_PROXY_KEY or MODAL_PROXY_SECRET; "
+                "the gnsis-voice web endpoint requires Modal proxy auth"
+            )
+        return {"Modal-Key": key, "Modal-Secret": secret}
+
     def gnsis_health(
         self,
         *,
@@ -171,9 +189,12 @@ class ModalCompute:
                 )
 
             try:
-                with urllib.request.urlopen(
-                    f"{url}/health", timeout=remaining
-                ) as response:
+                request = urllib.request.Request(
+                    f"{url}/health",
+                    headers=self._proxy_headers(),
+                    method="GET",
+                )
+                with urllib.request.urlopen(request, timeout=remaining) as response:
                     payload = json.loads(response.read().decode("utf-8"))
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 raise RuntimeError(f"GNSIS health check failed: {exc}") from exc
@@ -285,6 +306,8 @@ def from_settings(settings) -> ModalCompute:
     return ModalCompute(
         token_id=settings.modal_token_id,
         token_secret=settings.modal_token_secret,
+        proxy_key=getattr(settings, "modal_proxy_key", None),
+        proxy_secret=getattr(settings, "modal_proxy_secret", None),
         environment=settings.modal_environment,
         gnsis_app_name=settings.gnsis_modal_app_name,
         gnsis_function_name=settings.gnsis_modal_function_name,
