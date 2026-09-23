@@ -120,6 +120,7 @@ class ModalComputeTests(unittest.TestCase):
                 repo_root="/repo",
                 models_volume="weights",
                 secret_name="ornith",
+                edge_secret="edge-test",
             )
         args, kwargs = run.call_args
         self.assertEqual(args[0][-1], "modal/gnsis_voice.py")
@@ -129,6 +130,29 @@ class ModalComputeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_SECRET"], "secret-test")
         self.assertEqual(kwargs["env"]["GNSIS_MODELS_VOLUME"], "weights")
         self.assertEqual(kwargs["env"]["GNSIS_SECRET_NAME"], "ornith")
+        self.assertEqual(kwargs["env"]["GNSIS_EDGE_SECRET"], "edge-test")
+
+    def test_deploy_refuses_to_switch_the_front_door_off(self):
+        """modal/gnsis_voice.py reads the edge secret from the deploying
+        process and an empty one disables the runtime's check, so a worker
+        without the secret must not deploy (Codex on #90)."""
+
+        compute = ModalCompute(token_id="id-test", token_secret="secret-test")
+        for missing in (None, "", "   "):
+            with patch("gnsis.service.modal_compute.subprocess.run") as run:
+                with self.assertRaisesRegex(RuntimeError, "GNSIS_EDGE_SECRET is not set"):
+                    compute.deploy_gnsis(repo_root="/repo", edge_secret=missing)
+            run.assert_not_called()
+
+    def test_settings_keep_the_edge_secret_out_of_repr(self):
+        from gnsis.service.settings import Settings
+
+        settings = Settings(
+            database_url="sqlite://",
+            redis_url="redis://localhost:6379/0",
+            gnsis_edge_secret="edge-value",
+        )
+        self.assertNotIn("edge-value", repr(settings))
 
     def test_ornith_is_looked_up_as_its_own_app(self):
         """The brain is a separate app, so it must not resolve through GNSIS's ref."""

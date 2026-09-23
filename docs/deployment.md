@@ -247,6 +247,7 @@ Required variables for `GNSISBEAT`:
 - `GNSIS_MODAL_FUNCTION_NAME=gnsis_server` (optional)
 - `GNSIS_MODELS_VOLUME=gnsis-model-weights` (optional override)
 - `GNSIS_SECRET_NAME=gnsis-ornith-key` (optional override)
+- `GNSIS_EDGE_SECRET` (required to deploy the runtime: the same value as GNSISFRONTEND's, set there first; without it the worker refuses to deploy rather than switch the runtime's front-door check off)
 
 `GNSISWORKER` owns the Modal workspace relationship. It can discover the live
 GNSIS URL, smoke `/health`, and explicitly deploy the checked-in runtime through

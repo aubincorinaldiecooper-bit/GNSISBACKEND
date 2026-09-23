@@ -54,6 +54,7 @@ Required worker configuration:
 | `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
 | `MODAL_ENVIRONMENT` | Optional Modal environment; defaults to `main`. |
 | `GNSIS_MODELS_VOLUME` | Optional model-volume override; defaults to `gnsis-model-weights`. |
+| `GNSIS_EDGE_SECRET` | Required to deploy. The same value as the site's `GNSIS_EDGE_SECRET`; set the site's first. The runtime takes its front-door secret from whoever deploys it, so the worker passes this one in and refuses to deploy without it rather than switch the check off. |
 | `GNSIS_MODAL_APP_NAME` | Leave unset. It defaults to `gnsis-voice`, the only app the worker deploys; any other name is refused, so status and deploy cannot describe different apps. |
 | `GNSIS_MODAL_FUNCTION_NAME` | Optional function override; defaults to `gnsis_server`. |
 

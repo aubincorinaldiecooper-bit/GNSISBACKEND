@@ -63,6 +63,11 @@ class Settings:
     gnsis_models_volume: str = "gnsis-model-weights"
     # Optional action-layer secret used only when the Ornith service is deployed.
     gnsis_secret_name: str = "gnsis-ornith-key"
+    # The site's front-door secret (GNSISFRONTEND's GNSIS_EDGE_SECRET, same
+    # value). modal/gnsis_voice.py takes the runtime's copy from whoever runs
+    # the deploy, so the worker must hold it to deploy without switching the
+    # runtime's check off. Kept out of repr.
+    gnsis_edge_secret: Optional[str] = field(default=None, repr=False)
     # Optional delegated-task service, outside the realtime MVP critical path.
     ornith_modal_app_name: str = "gnsis-ornith"
     ornith_cache_volume: str = "gnsis-ornith-cache"
@@ -446,6 +451,7 @@ class Settings:
             gnsis_modal_function_name=os.environ.get("GNSIS_MODAL_FUNCTION_NAME", "gnsis_server"),
             gnsis_models_volume=os.environ.get("GNSIS_MODELS_VOLUME", "gnsis-model-weights"),
             gnsis_secret_name=os.environ.get("GNSIS_SECRET_NAME", "gnsis-ornith-key"),
+            gnsis_edge_secret=os.environ.get("GNSIS_EDGE_SECRET") or None,
             ornith_modal_app_name=os.environ.get("ORNITH_MODAL_APP_NAME", "gnsis-ornith"),
             ornith_cache_volume=os.environ.get("ORNITH_CACHE_VOLUME", "gnsis-ornith-cache"),
             github_app_id=os.environ.get("GITHUB_APP_ID"),

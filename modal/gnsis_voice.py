@@ -63,7 +63,8 @@ models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 #
 # from_dict passes the value to containers as an environment variable at run
 # time; it is never written into an image layer. It is read from whoever runs
-# the deploy.
+# the deploy. The worker's deploy passes its own GNSIS_EDGE_SECRET and refuses
+# to run without one, so a worker deploy cannot switch the check off.
 #
 # THIS side is the switch. Unset here the runtime's check is off, it accepts
 # anything, and it says so at startup — so deploying this code before the value

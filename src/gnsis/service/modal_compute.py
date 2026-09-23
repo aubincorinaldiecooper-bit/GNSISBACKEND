@@ -202,16 +202,31 @@ class ModalCompute:
         repo_root: str = "/app",
         models_volume: str = "gnsis-model-weights",
         secret_name: str = "gnsis-ornith-key",
+        edge_secret: Optional[str] = None,
     ) -> None:
         """Deploy the checked-in runtime (modal/gnsis_voice.py) from the worker image.
 
         Deliberately explicit: callers choose when to deploy.  The worker does
         not mutate production infrastructure merely because it restarted.
+
+        The runtime's front-door secret is read from the deploying process, and
+        an empty one switches its check off. So the site's secret is passed in
+        explicitly, and without it the deploy refuses rather than replace a
+        protected runtime with one that anyone who finds its address can use.
         """
         self._require_managed_gnsis_app()
+        if not (edge_secret or "").strip():
+            raise RuntimeError(
+                "GNSIS_EDGE_SECRET is not set on the worker. The runtime takes its "
+                "front-door secret from whoever deploys it, so this deploy would "
+                "switch the check off and let anyone who finds the runtime's address "
+                "start its GPUs. Set GNSIS_EDGE_SECRET on the worker to the same "
+                "value as the site's (set the site's first), then deploy."
+            )
         env = self._credential_env()
         env["GNSIS_MODELS_VOLUME"] = models_volume
         env["GNSIS_SECRET_NAME"] = secret_name
+        env["GNSIS_EDGE_SECRET"] = edge_secret
         subprocess.run(
             [
                 "modal",

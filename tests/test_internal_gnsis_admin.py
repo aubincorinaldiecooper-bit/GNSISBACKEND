@@ -69,6 +69,28 @@ class InternalGNSISAdminTests(unittest.TestCase):
         self.assertEqual(r.json()["task_id"], "task-deploy")
         delay.assert_called_once_with(smoke=True)
 
+    def test_the_deploy_task_carries_the_site_secret_from_settings(self):
+        from gnsis.service import tasks
+
+        settings = SimpleNamespace(
+            gnsis_models_volume="weights",
+            gnsis_secret_name="ornith",
+            gnsis_edge_secret="edge-from-settings",
+        )
+        compute = Mock()
+        compute.ref = SimpleNamespace(app_name="gnsis-voice", environment="main")
+        compute.gnsis_web_url.return_value = "https://gnsis-voice.example"
+        with patch.object(tasks, "get_settings", return_value=settings), patch(
+            "gnsis.service.modal_compute.from_settings", return_value=compute
+        ):
+            result = tasks.deploy_live_runtime(smoke=False)
+        compute.deploy_gnsis.assert_called_once_with(
+            models_volume="weights",
+            secret_name="ornith",
+            edge_secret="edge-from-settings",
+        )
+        self.assertNotIn("edge-from-settings", repr(result))
+
     def test_poll_success_projects_only_safe_fields(self):
         async_result = Mock()
         async_result.state = "SUCCESS"
