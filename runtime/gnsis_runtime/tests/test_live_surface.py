@@ -1084,7 +1084,12 @@ def test_a_stale_first_ack_cannot_announce_ready(harness):
     with TestClient(h.app) as client:
         source = client.get("/assets/live.js").text
 
-    first = source.split("live.stats.accepted === 1")[1].split("else if (live.awaitingSight)")[0]
+    ack = source.split("payload.type === 'screen.frame.accepted'")[1]
+    # An ACK at or below `sightSeq` can only be from an ended source: it is
+    # dropped before it can count or consume first-acceptance state.
+    assert ack.index("<= live.sightSeq") < ack.index("live.stats.accepted += 1")
+
+    first = ack.split("live.stats.accepted === 1")[1].split("else if (live.awaitingSight)")[0]
     assert "live.source && !live.pendingSource" in first
     assert "syncSourceControls(session)" in first
     assert "setSwitchesDisabled(false)" not in first

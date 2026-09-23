@@ -769,13 +769,16 @@ function attachScreen(session, ready) {
       return;
     }
     if (payload.type === 'screen.frame.accepted') {
+      // Acknowledgements outlive their source. `sightSeq` is the last frame
+      // sent before the latest negotiation, so an ACK at or below it can only
+      // belong to a source that is already gone — it must not consume
+      // first-acceptance state or count as a seen frame.
+      const ackSeq = /^live-(\d+)$/.exec(String(payload.frame_id || ''));
+      if (ackSeq && Number(ackSeq[1]) <= live.sightSeq) return;
       live.stats.accepted += 1;
       if (live.stats.accepted === 1) {
         // The first proof that a real frame arrived — and only while that
-        // frame's source is still the live one. Acknowledgements outlive
-        // their source: a delayed first ACK landing after the track ended
-        // (or while a replacement picker is open) says nothing about the
-        // session being ready.
+        // frame's source is still the live one.
         if (live.source && !live.pendingSource) {
           show('Session ready.', { state: 'live', tone: 'live' });
           haptics.play('success');
