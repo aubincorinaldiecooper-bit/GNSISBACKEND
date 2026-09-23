@@ -479,7 +479,7 @@ function setSwitchesDisabled(off) {
  */
 function syncSourceControls(session) {
   if (live !== session) return;
-  const busy = Boolean(session.pendingSource || session.awaitingSight);
+  const busy = Boolean(session.sourceBusy || session.pendingSource || session.awaitingSight);
   setSwitchesDisabled(busy);
   if (!busy) {
     ui.camToggle.removeAttribute('aria-busy');
@@ -1093,9 +1093,8 @@ function goDark(session, message) {
   show(message, { tone: null });
   // A track that ends mid-wait clears `awaitingSight` here — without the
   // resync the controls would stay locked on a source that is gone. While a
-  // `setSource` await is still open its `finally` owns the resync, so the
-  // buttons are not flashed enabled while clicks are still rejected.
-  if (!session.sourceBusy) syncSourceControls(session);
+  // `setSource` await is still open, `sourceBusy` keeps them locked.
+  syncSourceControls(session);
 }
 
 /**
