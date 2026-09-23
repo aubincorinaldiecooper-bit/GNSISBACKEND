@@ -85,8 +85,14 @@ unaffected; its path is unchanged.
 
 Order matters. Do the rename and set the variable **before** the first
 `deploy_live_runtime` from this branch. Merging is safe on its own: nothing
-deploys the runtime automatically, and `cache_gnsis_models` fails loudly with
-the missing path if a deploy runs against a volume that has not been migrated.
+deploys the runtime automatically. A deploy does not check the volume by
+itself, so check it first, naming the same volume the deploy will use; it fails
+loudly with the missing path on a volume that has not been migrated:
+
+```bash
+GNSIS_MODELS_VOLUME=<the existing volume> \
+modal run modal/gnsis_voice.py::cache_gnsis_models
+```
 
 ## Validation
 
