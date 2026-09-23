@@ -1,12 +1,12 @@
-# GNSIS isolated voice (Path B) runtime: the same live surface as
-# gnsis-live.yaml plus spoken responses through the detached Talker.
+# GNSIS realtime runtime (production): the live surface plus spoken responses
+# through the detached Talker.
 #
 # GPU 0 runs the Thinker; GPU 1 runs the detached Talker + Token2wav, so
 # synthesis never blocks perception and playback.cancel can interrupt.
-# Deployed only through the separate `gnsis-voice` Modal app — the
-# production `gnsis-live` runtime is untouched. Model/Talker pairing
-# verified against Gander-v63-Unit8 on the model volume (release manifest
-# unit_contract: 8 text tokens / 50 speech tokens per 1-second unit).
+# Deployed as the `gnsis-voice` Modal app (modal/gnsis_voice.py), which the
+# site sends every live session to. Model/Talker pairing verified against
+# Gander-v63-Unit8 on the model volume (release manifest unit_contract: 8
+# text tokens / 50 speech tokens per 1-second unit).
 
 model:
   model_name_or_path: /models/MiniCPM-o-4_5

@@ -174,8 +174,9 @@ Claude Code web sessions.
 
 Besides the service, this repository carries the GNSIS live runtime: the phone
 page a scanned QR code opens, and the model behind it (MiniCPM-o 4.5 with the
-GNSIS Thinker), under `runtime/`, deployed to Modal as `gnsis-live` from
-`modal/gnsis.py`. The **Railway GNSISWORKER owns the Modal workspace credentials
+GNSIS Thinker, answering aloud through a Talker on a second GPU), under
+`runtime/`, deployed to Modal as `gnsis-voice` from `modal/gnsis_voice.py`. The
+**Railway GNSISWORKER owns the Modal workspace credentials
 and runtime operations**; GitHub Actions validates source but is not the
 production Modal credential holder. The live GPU runtime stays isolated from the
 HTTP API while GNSIS remains its orchestration authority. See

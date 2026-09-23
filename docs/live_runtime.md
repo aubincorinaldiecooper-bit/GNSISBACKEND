@@ -1,6 +1,6 @@
 # GNSIS realtime runtime
 
-The realtime runtime is the part of GNSIS a phone or browser talks to. Open `/live`, allow camera and microphone access, and GNSIS watches and listens in real time while returning text and haptic feedback.
+The realtime runtime is the part of GNSIS a phone or browser talks to. Open `/live`, allow camera and microphone access, and GNSIS watches and listens in real time and answers aloud, with captions and haptic feedback.
 
 It is deployed as a GPU service on Modal and lives in this repository under `runtime/`.
 
@@ -10,14 +10,18 @@ It is deployed as a GPU service on Modal and lives in this repository under `run
 | --- | --- |
 | `runtime/gnsis_runtime/` | Realtime server, duplex websocket, screen/camera transport, native tools, and tests. |
 | `runtime/minicpm_ft/` | MiniCPM-o inference core plus the live web surface and brand assets. |
-| `runtime/configs/gnsis-live.yaml` | Production realtime configuration. |
-| `modal/gnsis.py` | Modal definition for app `gnsis-live` and function `gnsis_server`. |
+| `runtime/configs/gnsis-voice.yaml` | Production realtime configuration: the Thinker on GPU 0, the detached Talker and Token2wav on GPU 1. |
+| `modal/gnsis_voice.py` | Modal definition for app `gnsis-voice` and function `gnsis_server` (two L40S GPUs). |
 | `scripts/verify-modal-gnsis.py` | Deployment/address verification and optional health smoke test. |
 | `runtime/PROVENANCE.md` | Runtime source and licensing provenance. |
 
+The text-only `gnsis-live` app (`modal/gnsis.py`, one GPU, no voice) was retired
+on 2026-09-23, once the site was sending every session to `gnsis-voice`. If it is
+still deployed, stop it with `modal app stop gnsis-live`.
+
 ## MVP contract
 
-The MVP is perception-first and intentionally has no external action worker:
+The runtime sees, hears and speaks, and intentionally has no external action worker:
 
 ```yaml
 worker:
@@ -35,6 +39,9 @@ The production configuration expects:
 ```text
 /models/MiniCPM-o-4_5
 /models/GNSIS/thinker
+/models/Gander/talker                        (model.safetensors, talker_config.json)
+/models/Gander/talker/assets/token2wav
+/models/Gander/talker/assets/ref_audio.wav
 ```
 
 The Railway worker owns the Modal workspace credentials. GitHub Actions performs validation only.
@@ -47,7 +54,8 @@ Required worker configuration:
 | `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
 | `MODAL_ENVIRONMENT` | Optional Modal environment; defaults to `main`. |
 | `GNSIS_MODELS_VOLUME` | Optional model-volume override; defaults to `gnsis-model-weights`. |
-| `GNSIS_MODAL_APP_NAME` | Optional app override; defaults to `gnsis-live`. |
+| `GNSIS_EDGE_SECRET` | Required to deploy. The same value as the site's `GNSIS_EDGE_SECRET`; set the site's first. The runtime takes its front-door secret from whoever deploys it, so the worker passes this one in and refuses to deploy without it rather than switch the check off. |
+| `GNSIS_MODAL_APP_NAME` | Leave unset. It defaults to `gnsis-voice`, the only app the worker deploys; any other name is refused, so status and deploy cannot describe different apps. |
 | `GNSIS_MODAL_FUNCTION_NAME` | Optional function override; defaults to `gnsis_server`. |
 
 ## Migrating an existing deployment to this layout

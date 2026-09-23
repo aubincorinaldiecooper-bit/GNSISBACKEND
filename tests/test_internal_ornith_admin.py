@@ -65,7 +65,7 @@ class InternalOrnithAdminTests(unittest.TestCase):
             r = self.client.post(
                 "/internal/compute/ornith/deploy",
                 headers=self.auth,
-                json={"confirm": "gnsis-live"},
+                json={"confirm": "gnsis-voice"},
             )
         self.assertEqual(r.status_code, 409)
         delay.assert_not_called()

@@ -20,6 +20,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
+# The runtime this worker deploys, and the only one it manages. The Modal file
+# fixes its own app name (APP_NAME in modal/gnsis_voice.py), and the site sends
+# every live session to that app. The text-only gnsis-live app is retired.
+GNSIS_APP_NAME = "gnsis-voice"
+GNSIS_MODAL_DEFINITION = "modal/gnsis_voice.py"
+
 
 @dataclass(frozen=True)
 class ModalRuntimeRef:
@@ -37,7 +43,7 @@ class ModalCompute:
         token_id: str,
         token_secret: str,
         environment: str = "main",
-        gnsis_app_name: str = "gnsis-live",
+        gnsis_app_name: str = GNSIS_APP_NAME,
         gnsis_function_name: str = "gnsis_server",
         ornith_app_name: str = "gnsis-ornith",
         ornith_function_name: str = "ornith_server_v2",
@@ -104,8 +110,25 @@ class ModalCompute:
             raise RuntimeError(f"{ref.app_name}/{ref.function_name} has no web address")
         return str(url).rstrip("/")
 
+    def _require_managed_gnsis_app(self) -> None:
+        """Refuse to act on any runtime app but the one this worker deploys.
+
+        The name looked up comes from settings (GNSIS_MODAL_APP_NAME); the name
+        a deploy creates is fixed inside the Modal file. If they disagree, a
+        status check would describe one app while a deploy rebuilt another, and
+        both would report success. Say so instead.
+        """
+        if self.ref.app_name != GNSIS_APP_NAME:
+            raise RuntimeError(
+                f"GNSIS_MODAL_APP_NAME is {self.ref.app_name!r}, but the runtime this "
+                f"worker deploys is published as {GNSIS_APP_NAME!r} "
+                f"({GNSIS_MODAL_DEFINITION}). Unset GNSIS_MODAL_APP_NAME so status "
+                "and deploy refer to the app the site sends sessions to."
+            )
+
     def gnsis_web_url(self) -> str:
         """Return the deployed GNSIS web-server URL without starting a GPU."""
+        self._require_managed_gnsis_app()
         return self._web_url(self.ref)
 
     def ornith_web_url(self) -> str:
@@ -179,22 +202,38 @@ class ModalCompute:
         repo_root: str = "/app",
         models_volume: str = "gnsis-model-weights",
         secret_name: str = "gnsis-ornith-key",
+        edge_secret: Optional[str] = None,
     ) -> None:
-        """Deploy the checked-in live runtime from the worker image.
+        """Deploy the checked-in runtime (modal/gnsis_voice.py) from the worker image.
 
         Deliberately explicit: callers choose when to deploy.  The worker does
         not mutate production infrastructure merely because it restarted.
+
+        The runtime's front-door secret is read from the deploying process, and
+        an empty one switches its check off. So the site's secret is passed in
+        explicitly, and without it the deploy refuses rather than replace a
+        protected runtime with one that anyone who finds its address can use.
         """
+        self._require_managed_gnsis_app()
+        if not (edge_secret or "").strip():
+            raise RuntimeError(
+                "GNSIS_EDGE_SECRET is not set on the worker. The runtime takes its "
+                "front-door secret from whoever deploys it, so this deploy would "
+                "switch the check off and let anyone who finds the runtime's address "
+                "start its GPUs. Set GNSIS_EDGE_SECRET on the worker to the same "
+                "value as the site's (set the site's first), then deploy."
+            )
         env = self._credential_env()
         env["GNSIS_MODELS_VOLUME"] = models_volume
         env["GNSIS_SECRET_NAME"] = secret_name
+        env["GNSIS_EDGE_SECRET"] = edge_secret
         subprocess.run(
             [
                 "modal",
                 "deploy",
                 "-e",
                 self.ref.environment,
-                "modal/gnsis.py",
+                GNSIS_MODAL_DEFINITION,
             ],
             cwd=repo_root,
             env=env,

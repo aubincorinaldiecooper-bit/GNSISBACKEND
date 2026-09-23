@@ -729,10 +729,10 @@ def test_the_live_prompt_teaches_recent_visual_context():
     assert "Do not invent continuity" in GNSIS_DUPLEX_SYSTEM_PROMPT
 
 
-def test_gnsis_live_mvp_has_no_external_worker_dependency():
-    """The deployable MVP is GNSIS perception itself, not the Ornith action layer."""
+def test_the_runtime_has_no_external_worker_dependency():
+    """The deployed runtime is GNSIS itself, not the Ornith action layer."""
 
-    config_path = Path(__file__).resolve().parents[2] / "configs" / "gnsis-live.yaml"
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "gnsis-voice.yaml"
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert document["worker"] == {"provider": "none"}
     assert document["duplex"]["allow_client_video"] is True
@@ -889,8 +889,8 @@ def test_health_distinguishes_configured_voice_assets_from_loaded(harness):
 
 
 def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
-    """gnsis-voice.yaml is the isolated Path B runtime: speech on, nothing
-    else changed.
+    """gnsis-voice.yaml is the production runtime: speech on through the
+    detached Talker, every other subsystem pinned.
 
     Each subsystem's state is asserted explicitly so a default can never
     silently decide it — the Gander pair was verified against the release
@@ -913,7 +913,7 @@ def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
     assert config.duplex.talker_emit_speech_tokens == 25
     assert config.server.cuda_visible_devices == "0,1"
 
-    # Everything else exactly as production: raw audio into the model (no
+    # Everything else pinned: raw audio into the model (no
     # ASR), no worker, no memory layer, camera negotiated as before.
     assert config.asr.mode == "disabled"
     assert config.worker.provider == "none"
@@ -1126,4 +1126,3 @@ def test_the_voice_config_profiles_startup_but_the_default_does_not():
 
     assert DuplexConfig().startup_probe is False
     assert load_config("runtime/configs/gnsis-voice.yaml").duplex.startup_probe is True
-    assert load_config("runtime/configs/gnsis-live.yaml").duplex.startup_probe is False

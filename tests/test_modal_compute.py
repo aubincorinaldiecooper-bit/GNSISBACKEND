@@ -11,7 +11,7 @@ class _FakeFunction:
 
     @classmethod
     def from_name(cls, app_name, function_name, environment_name=None):
-        assert app_name == "gnsis-live"
+        assert app_name == "gnsis-voice"
         assert function_name == "gnsis_server"
         assert environment_name == "main"
         return cls()
@@ -20,7 +20,7 @@ class _FakeFunction:
         type(self).hydrated += 1
 
     def get_web_url(self):
-        return "https://gnsis-live.example/"
+        return "https://gnsis-voice.example/"
 
 
 class _FakeModal:
@@ -37,7 +37,7 @@ class ModalComputeTests(unittest.TestCase):
                 token_secret="secret-test",
                 modal_module=_FakeModal,
             )
-            self.assertEqual(compute.gnsis_web_url(), "https://gnsis-live.example")
+            self.assertEqual(compute.gnsis_web_url(), "https://gnsis-voice.example")
             self.assertNotIn("MODAL_TOKEN_ID", os.environ)
             self.assertNotIn("MODAL_TOKEN_SECRET", os.environ)
         finally:
@@ -120,15 +120,39 @@ class ModalComputeTests(unittest.TestCase):
                 repo_root="/repo",
                 models_volume="weights",
                 secret_name="ornith",
+                edge_secret="edge-test",
             )
         args, kwargs = run.call_args
-        self.assertEqual(args[0][-1], "modal/gnsis.py")
+        self.assertEqual(args[0][-1], "modal/gnsis_voice.py")
         self.assertEqual(kwargs["cwd"], "/repo")
         self.assertTrue(kwargs["check"])
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_ID"], "id-test")
         self.assertEqual(kwargs["env"]["MODAL_TOKEN_SECRET"], "secret-test")
         self.assertEqual(kwargs["env"]["GNSIS_MODELS_VOLUME"], "weights")
         self.assertEqual(kwargs["env"]["GNSIS_SECRET_NAME"], "ornith")
+        self.assertEqual(kwargs["env"]["GNSIS_EDGE_SECRET"], "edge-test")
+
+    def test_deploy_refuses_to_switch_the_front_door_off(self):
+        """modal/gnsis_voice.py reads the edge secret from the deploying
+        process and an empty one disables the runtime's check, so a worker
+        without the secret must not deploy (Codex on #90)."""
+
+        compute = ModalCompute(token_id="id-test", token_secret="secret-test")
+        for missing in (None, "", "   "):
+            with patch("gnsis.service.modal_compute.subprocess.run") as run:
+                with self.assertRaisesRegex(RuntimeError, "GNSIS_EDGE_SECRET is not set"):
+                    compute.deploy_gnsis(repo_root="/repo", edge_secret=missing)
+            run.assert_not_called()
+
+    def test_settings_keep_the_edge_secret_out_of_repr(self):
+        from gnsis.service.settings import Settings
+
+        settings = Settings(
+            database_url="sqlite://",
+            redis_url="redis://localhost:6379/0",
+            gnsis_edge_secret="edge-value",
+        )
+        self.assertNotIn("edge-value", repr(settings))
 
     def test_ornith_is_looked_up_as_its_own_app(self):
         """The brain is a separate app, so it must not resolve through GNSIS's ref."""
@@ -202,7 +226,7 @@ class ModalComputeTests(unittest.TestCase):
             modal_token_id="id",
             modal_token_secret="secret",
             modal_environment="main",
-            gnsis_modal_app_name="gnsis-live",
+            gnsis_modal_app_name="gnsis-voice",
             gnsis_modal_function_name="gnsis_server",
             ornith_modal_app_name="adopted-app",
             ornith_modal_function_name="not_a_real_function",
@@ -210,7 +234,7 @@ class ModalComputeTests(unittest.TestCase):
         compute = from_settings(settings)
         self.assertEqual(compute.ornith_ref.app_name, "adopted-app")
         self.assertEqual(compute.ornith_ref.function_name, "ornith_server_v2")
-        self.assertEqual(compute.ref.app_name, "gnsis-live")
+        self.assertEqual(compute.ref.app_name, "gnsis-voice")
 
     def test_the_looked_up_function_is_the_one_the_definition_publishes(self):
         """Tie the name we look up to the name Modal will actually create.
@@ -230,12 +254,54 @@ class ModalComputeTests(unittest.TestCase):
         compute = ModalCompute(token_id="id-test", token_secret="secret-test")
         self.assertIn(compute.ornith_ref.function_name, published)
 
+    def test_a_stale_app_name_is_refused_before_anything_runs(self):
+        """gnsis-live is retired. A worker still configured with its name must
+        not describe that app while a deploy rebuilds gnsis-voice: both would
+        report success about different apps."""
+
+        compute = ModalCompute(
+            token_id="id-test",
+            token_secret="secret-test",
+            gnsis_app_name="gnsis-live",
+            modal_module=_FakeModal,
+        )
+        with patch("gnsis.service.modal_compute.subprocess.run") as run:
+            with self.assertRaisesRegex(RuntimeError, "Unset GNSIS_MODAL_APP_NAME"):
+                compute.deploy_gnsis(repo_root="/repo")
+        run.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "Unset GNSIS_MODAL_APP_NAME"):
+            compute.gnsis_web_url()
+
+    def test_the_deployed_app_is_the_one_the_definition_publishes(self):
+        """Tie the app the worker looks up to the app its deploy creates.
+
+        The name lives in modal/gnsis_voice.py and in modal_compute; nothing but
+        this check keeps them equal.
+        """
+
+        import ast
+        from pathlib import Path
+
+        from gnsis.service.modal_compute import GNSIS_APP_NAME, GNSIS_MODAL_DEFINITION
+
+        definition = Path(__file__).resolve().parents[1] / GNSIS_MODAL_DEFINITION
+        published = {
+            node.targets[0].id: node.value.value
+            for node in ast.parse(definition.read_text()).body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+        }
+        self.assertEqual(published["APP_NAME"], GNSIS_APP_NAME)
+        compute = ModalCompute(token_id="id-test", token_secret="secret-test")
+        self.assertEqual(compute.ref.app_name, GNSIS_APP_NAME)
+
     def test_settings_boundary_requires_both_modal_values(self):
         settings = SimpleNamespace(
             modal_token_id=None,
             modal_token_secret=None,
             modal_environment="main",
-            gnsis_modal_app_name="gnsis-live",
+            gnsis_modal_app_name="gnsis-voice",
             gnsis_modal_function_name="gnsis_server",
         )
         with self.assertRaisesRegex(RuntimeError, "missing Modal credentials"):
