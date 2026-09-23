@@ -57,9 +57,11 @@ MODELS_VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME") or "gnsis-model-weigh
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 
 # The shared secret the site's proxy stamps on every socket it forwards. The
-# runtime refuses sockets without it, so reaching this app's public .modal.run
-# address directly — going around the site, and around everything applied
-# there — gets a close rather than a GPU.
+# runtime refuses the two live sockets (/ws/duplex, /ws/screen) without it, so
+# reaching this app's public .modal.run address directly — going around the
+# site, and around everything applied there — cannot open a session on the
+# model. It does not stop the GPUs waking: plain requests such as /health are
+# not checked, and any request that reaches the address starts the container.
 #
 # from_dict passes the value to containers as an environment variable at run
 # time; it is never written into an image layer. It is read from whoever runs
