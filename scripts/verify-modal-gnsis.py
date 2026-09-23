@@ -7,7 +7,8 @@ With ``GNSIS_SMOKE=1`` it also opens ``/health``, which does: the model loads
 on a GPU first, so that is a cold start of several minutes, and it costs money.
 The address is printed so the cutover in docs/live_runtime.md can use it.
 With ``GNSIS_HEALTH_URL`` set, only ``/health`` at that address is opened, with
-no Modal lookup and no token, so the app being replaced can be read the same way.
+no Modal SDK lookup. The endpoint still requires ``MODAL_PROXY_KEY`` and
+``MODAL_PROXY_SECRET`` because gnsis-voice is protected by Modal proxy auth.
 """
 
 from __future__ import annotations
@@ -21,12 +22,14 @@ import urllib.request
 import modal
 
 # Set to any runtime's address to run only the /health check against it, with
-# no Modal lookup and no token: this is how the app being replaced is read.
+# no Modal SDK lookup. The web endpoint itself remains proxy-authenticated.
 HEALTH_URL = os.environ.get("GNSIS_HEALTH_URL", "").strip()
 APP_NAME = os.environ.get("MODAL_APP_NAME", "gnsis-voice")
 FUNCTION_NAME = os.environ.get("MODAL_FUNCTION_NAME", "gnsis_server")
 ENVIRONMENT = os.environ.get("MODAL_ENVIRONMENT", "main")
 SMOKE = os.environ.get("GNSIS_SMOKE", "").strip().lower() not in {"", "0", "false", "no"}
+PROXY_KEY = os.environ.get("MODAL_PROXY_KEY", "").strip()
+PROXY_SECRET = os.environ.get("MODAL_PROXY_SECRET", "").strip()
 # A cold start loads MiniCPM-o on the GPU before the server answers.
 SMOKE_TIMEOUT_SEC = float(os.environ.get("GNSIS_SMOKE_TIMEOUT_SEC", "1800"))
 
@@ -86,8 +89,21 @@ def main() -> int:
 def smoke(url: str) -> int:
     """Open /health on the deployed runtime and check what it says about itself."""
 
+    if not PROXY_KEY or not PROXY_SECRET:
+        print(
+            "ERROR: MODAL_PROXY_KEY and MODAL_PROXY_SECRET are required to smoke "
+            "the proxy-authenticated gnsis-voice endpoint",
+            file=sys.stderr,
+        )
+        return 1
+
+    request = urllib.request.Request(
+        f"{url}/health",
+        headers={"Modal-Key": PROXY_KEY, "Modal-Secret": PROXY_SECRET},
+        method="GET",
+    )
     try:
-        with urllib.request.urlopen(f"{url}/health", timeout=SMOKE_TIMEOUT_SEC) as response:
+        with urllib.request.urlopen(request, timeout=SMOKE_TIMEOUT_SEC) as response:
             body = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError, OSError) as exc:
         print(f"ERROR: {url}/health did not answer: {exc}", file=sys.stderr)
