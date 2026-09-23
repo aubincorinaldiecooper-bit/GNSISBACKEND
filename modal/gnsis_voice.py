@@ -183,7 +183,7 @@ def cache_gnsis_models() -> dict[str, str]:
 # enough for duplex + screen + a control request + headroom; this is session
 # plumbing, not throughput.
 @modal.concurrent(max_inputs=4)
-@modal.web_server(PORT, startup_timeout=1800)
+@modal.web_server(PORT, startup_timeout=1800, requires_proxy_auth=True)
 def gnsis_server() -> None:
     """Serve the GNSIS realtime runtime from the source under runtime/."""
     env = os.environ.copy()

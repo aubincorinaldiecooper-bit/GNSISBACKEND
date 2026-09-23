@@ -52,6 +52,8 @@ Required worker configuration:
 | --- | --- |
 | `MODAL_TOKEN_ID` | Modal workspace token id. |
 | `MODAL_TOKEN_SECRET` | Modal workspace token secret. |
+| `MODAL_PROXY_KEY` | Modal proxy-token key used only when the worker opens the protected runtime web endpoint. Distinct from `MODAL_TOKEN_ID`. |
+| `MODAL_PROXY_SECRET` | Modal proxy-token secret paired with `MODAL_PROXY_KEY`; required for `/health` smoke checks and never logged. |
 | `MODAL_ENVIRONMENT` | Optional Modal environment; defaults to `main`. |
 | `GNSIS_MODELS_VOLUME` | Optional model-volume override; defaults to `gnsis-model-weights`. |
 | `GNSIS_EDGE_SECRET` | Required to deploy. The same value as the site's `GNSIS_EDGE_SECRET`; set the site's first. The runtime takes its front-door secret from whoever deploys it, so the worker passes this one in and refuses to deploy without it rather than switch the check off. |
@@ -102,6 +104,6 @@ python -m pip install --no-deps -e ./runtime/minicpm_ft -e ./runtime/gnsis_runti
 pytest -q runtime/gnsis_runtime/tests
 ```
 
-After deployment, use `scripts/verify-modal-gnsis.py` to resolve the public address. Set `GNSIS_SMOKE=1` to call `/health`; that cold-starts the GPU.
+After deployment, use `scripts/verify-modal-gnsis.py` to resolve the public address. The runtime web server requires Modal proxy auth, so a smoke check also needs `MODAL_PROXY_KEY` and `MODAL_PROXY_SECRET`. Set `GNSIS_SMOKE=1` to call `/health`; that cold-starts the GPU.
 
 The final MVP check is a real `/live` session: camera permission succeeds, the session reaches `Session ready.`, the model receives frames, and GNSIS answers.
