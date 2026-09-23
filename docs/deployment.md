@@ -252,6 +252,14 @@ Required variables for `GNSISBEAT`:
 `GNSISWORKER` owns the Modal workspace relationship. It can discover the live
 GNSIS URL, smoke `/health`, and explicitly deploy the checked-in runtime through
 the `gnsis.modal_gnsis_status` and `gnsis.deploy_live_runtime` Celery tasks.
+
+The live runtime is protected at two layers. `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`
+let the worker manage the Modal workspace; they do **not** authenticate HTTP or
+WebSocket traffic to the runtime. `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` are a
+separate Modal proxy token used when the worker opens the protected `/health`
+endpoint. The site proxy needs the same proxy-token pair for `/ws/*`, while
+`GNSIS_EDGE_SECRET` remains the GNSIS application-layer proof that a socket passed
+through the approved frontend.
 Neither task runs automatically on worker startup; GitHub Actions is CI only.
 
 ### Internal GNSIS compute admin API
