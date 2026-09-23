@@ -215,8 +215,9 @@ class OnlineDuplexSettings:
     # while it is unset, so "off" is never silent.
     edge_secret: str = ""
     # RMS floor for the diagnostic `input_has_speech` flag — a value under
-    # this reads as silence in `duplex chunk` logs. Diagnostic only: the
-    # model's speak decisions come from its own tokens, not this flag.
+    # this reads as silence in `duplex chunk` logs. Speak decisions are the
+    # model's own tokens, but the flag does drive `awaiting_reply`, i.e. how
+    # long silence processing drains after input ends.
     input_speech_rms: float = 1e-4
     # Which voice assets the loader was asked for — exposed on /health so the
     # task layer can tell "voice disabled by config" from "load failed".
