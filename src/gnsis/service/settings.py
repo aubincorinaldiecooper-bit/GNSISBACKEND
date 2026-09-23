@@ -57,6 +57,11 @@ class Settings:
     # Modal compute is owned by the Railway worker. GitHub Actions remains CI-only.
     modal_token_id: Optional[str] = None
     modal_token_secret: Optional[str] = None
+    # Separate credentials for reaching a Modal web endpoint protected with
+    # requires_proxy_auth=True. These are not the workspace API token above and
+    # must never appear in logs or reprs.
+    modal_proxy_key: Optional[str] = field(default=None, repr=False)
+    modal_proxy_secret: Optional[str] = field(default=None, repr=False)
     modal_environment: str = "main"
     gnsis_modal_app_name: str = "gnsis-voice"
     gnsis_modal_function_name: str = "gnsis_server"
@@ -446,6 +451,8 @@ class Settings:
             openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
             modal_token_id=os.environ.get("MODAL_TOKEN_ID"),
             modal_token_secret=os.environ.get("MODAL_TOKEN_SECRET"),
+            modal_proxy_key=os.environ.get("MODAL_PROXY_KEY") or None,
+            modal_proxy_secret=os.environ.get("MODAL_PROXY_SECRET") or None,
             modal_environment=os.environ.get("MODAL_ENVIRONMENT", "main"),
             gnsis_modal_app_name=os.environ.get("GNSIS_MODAL_APP_NAME", "gnsis-voice"),
             gnsis_modal_function_name=os.environ.get("GNSIS_MODAL_FUNCTION_NAME", "gnsis_server"),
