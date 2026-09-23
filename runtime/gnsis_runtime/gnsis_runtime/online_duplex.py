@@ -1647,40 +1647,37 @@ def create_online_duplex_app(
         # with no such record is "warm" by the documented rule — the runtime
         # was already ready when it was accepted.
         ws_timing = websocket.scope.get("gnsis.session_timing")
-        if isinstance(ws_timing, dict):
-            session_timing_t0 = float(ws_timing.get("t0") or time.monotonic())
-            session_timing_class = str(ws_timing.get("startup_class") or "warm")
-            session_marks = ws_timing.get("marks")
-            if not isinstance(session_marks, set):
-                session_marks = set()
-                ws_timing["marks"] = session_marks
-        else:
+        if not isinstance(ws_timing, dict):
             ws_timing = {}
             websocket.scope["gnsis.session_timing"] = ws_timing
-            session_timing_t0 = time.monotonic()
-            ws_timing["t0"] = session_timing_t0
-            session_timing_class = (
-                "warm"
-                if startup_timing.first_event_at("runtime_ready") is not None
-                else "cold"
-            )
-            ws_timing["startup_class"] = session_timing_class
-            session_marks = set()
-            ws_timing["marks"] = session_marks
+        ws_timing.setdefault("t0", time.monotonic())
+        ws_timing.setdefault(
+            "startup_class",
+            "warm"
+            if startup_timing.first_event_at("runtime_ready") is not None
+            else "cold",
+        )
+        if not isinstance(ws_timing.get("marks"), set):
+            ws_timing["marks"] = set()
+        # One mutable record for the whole handler. Nested coroutines only
+        # ever mutate it in place, never rebind it, so the closure below stays
+        # valid on both the fresh-session and resume paths.
+        timing_record: dict[str, Any] = ws_timing
 
         def _session_mark(event: str, *, at: float | None = None) -> None:
-            if event in session_marks:
+            marks = timing_record["marks"]
+            if event in marks:
                 return
-            session_marks.add(event)
+            marks.add(event)
             now = at if at is not None else time.monotonic()
             LOGGER.info(
                 "gnsis_session_timing session_id=%s startup_attempt=%s "
                 "startup_class=%s event=%s elapsed_ms=%d proc_ms=%d",
                 session_id,
                 startup_timing.attempt_id(),
-                session_timing_class,
+                timing_record["startup_class"],
                 event,
-                round((now - session_timing_t0) * 1000),
+                round((now - timing_record["t0"]) * 1000),
                 startup_timing.process_ms(),
             )
 
@@ -1698,7 +1695,7 @@ def create_online_duplex_app(
                 at=(
                     submit_at
                     if submit_at is not None
-                    and submit_at >= session_timing_t0
+                    and submit_at >= timing_record["t0"]
                     else None
                 ),
             )
@@ -2092,9 +2089,9 @@ def create_online_duplex_app(
                     active.resumed.set()
                     # The resume continues the session's own timing record, so
                     # a re-bind cannot re-emit first-event lines.
-                    session_marks = active.session_marks
-                    session_timing_t0 = active.session_timing_t0
-                    session_timing_class = active.startup_class
+                    timing_record["marks"] = active.session_marks
+                    timing_record["t0"] = active.session_timing_t0
+                    timing_record["startup_class"] = active.startup_class
                     if runtime.detached_talker is not None:
                         speech_output_stop, speech_output_task = (
                             start_speech_output_pump(session)
@@ -2117,9 +2114,9 @@ def create_online_duplex_app(
                     active = _ActiveSession(
                         duplex=session,
                         screen_token=secrets.token_urlsafe(32),
-                        session_marks=session_marks,
-                        session_timing_t0=session_timing_t0,
-                        startup_class=session_timing_class,
+                        session_marks=timing_record["marks"],
+                        session_timing_t0=timing_record["t0"],
+                        startup_class=timing_record["startup_class"],
                         codex_frame_gate=ScreenFrameRateGate(
                             _codex_frame_interval_ms(runtime)
                         ),

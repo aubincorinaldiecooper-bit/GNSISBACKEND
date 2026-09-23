@@ -81,17 +81,16 @@ def test_covered_ms_uses_interval_union_not_naive_sum():
 
 
 def test_overlap_does_not_inflate_unexplained_time():
-    now = max(0, startup_timing.process_ms() - 500)
+    # Two fully-parallel 100ms stages inside a 300ms boot: the naive serial
+    # sum (200) would leave 100ms "unexplained"; the union leaves 200.
     startup_timing._STAGES.extend(
-        [_Stage("a", None, now, now + 100), _Stage("b", None, now, now + 100)]
+        [_Stage("a", None, 50, 150), _Stage("b", None, 50, 150)]
     )
-    covered, _serial, _overlap = startup_timing.covered_ms()
-    total = startup_timing.process_ms()
-    unexplained = max(0, total - covered)
-    # Unexplained can only be the time outside the union — never negative
-    # double-counted inflation.
-    assert unexplained >= 0
-    assert covered <= total
+    covered, serial, overlap = startup_timing.covered_ms()
+    total = 300
+    assert total - covered == 200
+    assert total - serial == 100  # the wrong answer, for contrast
+    assert overlap == 100
 
 
 def test_open_stage_excluded_from_covered():
