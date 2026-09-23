@@ -51,6 +51,8 @@ class ModalComputeTests(unittest.TestCase):
         compute = ModalCompute(
             token_id="id-test",
             token_secret="secret-test",
+            proxy_key="wk-test",
+            proxy_secret="ws-test",
             modal_module=_FakeModal,
         )
 
@@ -87,12 +89,31 @@ class ModalComputeTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(urlopen.call_count, 2)
+        for call in urlopen.call_args_list:
+            request = call.args[0]
+            self.assertEqual(request.get_header("Modal-key"), "wk-test")
+            self.assertEqual(request.get_header("Modal-secret"), "ws-test")
+            self.assertNotIn("wk-test", repr(compute))
+            self.assertNotIn("ws-test", repr(compute))
         sleep.assert_called_once()
+
+    def test_gnsis_health_refuses_missing_proxy_credentials_before_opening(self):
+        compute = ModalCompute(
+            token_id="id-test",
+            token_secret="secret-test",
+            modal_module=_FakeModal,
+        )
+        with patch("gnsis.service.modal_compute.urllib.request.urlopen") as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "MODAL_PROXY_KEY"):
+                compute.gnsis_health(timeout_seconds=30, poll_interval_seconds=0.01)
+        urlopen.assert_not_called()
 
     def test_gnsis_health_rejects_failed_runtime(self):
         compute = ModalCompute(
             token_id="id-test",
             token_secret="secret-test",
+            proxy_key="wk-test",
+            proxy_secret="ws-test",
             modal_module=_FakeModal,
         )
 
@@ -144,15 +165,20 @@ class ModalComputeTests(unittest.TestCase):
                     compute.deploy_gnsis(repo_root="/repo", edge_secret=missing)
             run.assert_not_called()
 
-    def test_settings_keep_the_edge_secret_out_of_repr(self):
+    def test_settings_keep_security_secrets_out_of_repr(self):
         from gnsis.service.settings import Settings
 
         settings = Settings(
             database_url="sqlite://",
             redis_url="redis://localhost:6379/0",
             gnsis_edge_secret="edge-value",
+            modal_proxy_key="wk-secret-value",
+            modal_proxy_secret="ws-secret-value",
         )
-        self.assertNotIn("edge-value", repr(settings))
+        rendered = repr(settings)
+        self.assertNotIn("edge-value", rendered)
+        self.assertNotIn("wk-secret-value", rendered)
+        self.assertNotIn("ws-secret-value", rendered)
 
     def test_ornith_is_looked_up_as_its_own_app(self):
         """The brain is a separate app, so it must not resolve through GNSIS's ref."""
