@@ -1062,7 +1062,7 @@ def test_every_switch_attempt_is_timed(harness):
         source = client.get("/assets/live.js").text
 
     assert "session.switchAttempt += 1" in source
-    assert "session.switchTiming.requestedAt = performance.now()" in source
+    assert "timing.requestedAt = performance.now()" in source
     assert "live.switchTiming.doneAt = performance.now()" in source
     log = source.split("console.debug('source_switch'")[1]
     for field in ("attempt", "from", "to", "request_ms",

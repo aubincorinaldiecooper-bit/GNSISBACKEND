@@ -1091,6 +1091,9 @@ function goDark(session, message) {
     duplex.send(JSON.stringify({ type: 'media.mode', video: false }));
   }
   show(message, { tone: null });
+  // A track that ends mid-wait clears `awaitingSight` here — without the
+  // resync the controls would stay locked on a source that is gone.
+  syncSourceControls(session);
 }
 
 /**
@@ -1117,7 +1120,10 @@ async function setSource(kind) {
   show(kind === 'screen' ? 'Starting to share…' : 'Turning the camera on…', { tone: 'busy' });
   (kind === 'screen' ? ui.share : ui.camToggle).setAttribute('aria-busy', 'true');
   session.switchAttempt += 1;
-  session.switchTiming = {
+  // Kept local across the permission await: `goDark` can clear the session's
+  // copy while the picker is open, and instrumentation must never abort the
+  // switch it is measuring.
+  const timing = {
     attempt: session.switchAttempt,
     from: session.source,
     to: kind,
@@ -1125,6 +1131,7 @@ async function setSource(kind) {
     requestedAt: null,
     doneAt: null,
   };
+  session.switchTiming = timing;
   setSwitchesDisabled(true);
   try {
     let stream;
@@ -1160,7 +1167,8 @@ async function setSource(kind) {
     session.pendingSource = kind;
     session.awaitingSight = false;
     setSourceUi(kind);
-    session.switchTiming.requestedAt = performance.now();
+    session.switchTiming = timing;
+    timing.requestedAt = performance.now();
     duplex.send(JSON.stringify({ type: 'media.mode', video: true, source: kind }));
   } finally {
     session.sourceBusy = false;
