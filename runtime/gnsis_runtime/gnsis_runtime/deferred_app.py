@@ -244,9 +244,10 @@ class DeferredRuntimeApp:
             )
 
             router = getattr(inner, "router", None)
-            startup = getattr(router, "startup", None)
-            if startup is not None:
-                await startup()
+            for handler in getattr(router, "on_startup", ()) or ():
+                result = handler()
+                if inspect.isawaitable(result):
+                    await result
 
             self._inner = inner
             self._runtime_ready_at = time.time()
@@ -285,9 +286,10 @@ class DeferredRuntimeApp:
         if inner is None:
             return
         router = getattr(inner, "router", None)
-        shutdown = getattr(router, "shutdown", None)
-        if shutdown is not None:
-            await shutdown()
+        for handler in getattr(router, "on_shutdown", ()) or ():
+            result = handler()
+            if inspect.isawaitable(result):
+                await result
 
     async def _lifespan(self, receive: Any, send: Any) -> None:
         while True:

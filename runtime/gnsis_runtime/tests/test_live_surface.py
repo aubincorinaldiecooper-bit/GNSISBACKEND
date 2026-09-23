@@ -810,3 +810,58 @@ def test_screen_rejects_are_logged_without_the_token(harness, caplog):
     seen = "\n".join(messages)
     assert "reason=inactive_session" in seen
     assert "reason=voice_mode" in seen
+
+
+def test_the_mic_journal_is_written_only_when_a_worker_exists(tmp_path):
+    """The audio twin of the camera problem.
+
+    Every session's raw microphone PCM went to `<key>.input.pcm` under
+    media_dir, and nothing deleted it unless the session was reset. The file
+    exists so a worker provider can attach the turn's audio to `turn.final`
+    media; with `worker.provider: none` nothing ever reads it, so it must not
+    be written.
+    """
+
+    from gnsis_runtime.task_tools_online import TaskToolsRealtimeCoordinator
+
+    class _Ledger:
+        def list_realtime_context(self, _owner):
+            return []
+
+    class _Gateway:
+        providers: dict = {}
+        ledger = _Ledger()
+
+        async def close(self):
+            pass
+
+    lean = TaskToolsRealtimeCoordinator(
+        _Gateway(), "owner", "s1", session=None,
+        provider_name=None, media_dir=tmp_path / "lean",
+    )
+    lean.record_pcm16(b"\x00\x01" * 8)
+
+    served = TaskToolsRealtimeCoordinator(
+        _Gateway(), "owner", "s2", session=None,
+        provider_name="stub", media_dir=tmp_path / "worker",
+    )
+    served.record_pcm16(b"\x00\x01" * 8)
+
+    written = list(tmp_path.rglob("*.input.pcm"))
+    assert len(written) == 1
+    assert written[0].parent.name == "worker"
+
+
+def test_the_speech_rms_diagnostic_can_actually_be_set(tmp_path):
+    """Same reachable-opt-in shape as `persist_camera_frames`.
+
+    `input_speech_rms` lived only on the Python config; unknown YAML keys are
+    rejected, so no deployment could tune the `input_has_speech` flag.
+    """
+
+    from gnsis_runtime.cli import _duplex_settings, load_config
+
+    config = load_config(_config(tmp_path, "none", "rms", input_speech_rms=0.01))
+    assert _duplex_settings(config).input_speech_rms == 0.01
+    default = _duplex_settings(load_config(_config(tmp_path, "none", "rmsd")))
+    assert default.input_speech_rms == 1e-4

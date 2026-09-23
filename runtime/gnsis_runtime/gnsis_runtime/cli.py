@@ -95,6 +95,9 @@ class DuplexConfig:
     top_p: float = 0.8
     top_k: int = 20
     warm_first_unit: bool = True
+    # RMS floor for the `input_has_speech` flag in `duplex chunk` logs.
+    # Diagnostic only — it does not drive speak decisions.
+    input_speech_rms: float = 1e-4
 
 
 @dataclass(frozen=True)
@@ -457,6 +460,9 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
         system_prompt=duplex.system_prompt,
         ref_audio_path=duplex.ref_audio_path,
         trailing_silence_sec=duplex.trailing_silence_sec,
+        input_speech_rms=duplex.input_speech_rms,
+        talker_checkpoint=duplex.talker_checkpoint,
+        token2wav_dir=config.model.token2wav_dir,
         asr_base_url=asr_base_url(config.asr),
         asr_timeout_sec=config.asr.request_timeout_sec,
         turn_bind_grace_sec=duplex.turn_bind_grace_sec,
