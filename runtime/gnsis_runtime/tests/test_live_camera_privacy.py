@@ -7,6 +7,7 @@ these tests are the record of it.
 from __future__ import annotations
 
 import json
+import time
 
 from starlette.testclient import TestClient
 
@@ -31,13 +32,22 @@ def _written(media_dir) -> list:
     return [path for path in media_dir.rglob("*") if path.is_file()]
 
 
-def _send(client, h, header: dict) -> dict:
+def _send(client, h, header: dict, *, await_write: bool = False) -> dict:
     with connect(client, "/ws/duplex?session_id=s1") as ws:
         with _open_screen(client, ws) as screen:
             _drain_until(screen, "screen.ready")
             screen.send_text(json.dumps(header))
             screen.send_bytes(_jpeg())
-            return _drain_until(screen, "screen.frame.accepted")
+            accepted = _drain_until(screen, "screen.frame.accepted")
+            # Persistence deliberately happens after the ACK and off the event
+            # loop, so a test that closes the socket here can cancel the write
+            # it is about to assert on. Tests expecting a file wait for it
+            # while the socket is still open.
+            if await_write:
+                deadline = time.monotonic() + 5.0
+                while not _written(h.media_dir) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+            return accepted
 
 
 def test_a_lean_server_writes_no_camera_frame(harness):
@@ -86,7 +96,7 @@ def test_a_camera_frame_is_written_when_asked_for(harness):
 
     h = harness(media_mode="omni", persist_camera_frames=True)
     with TestClient(h.app) as client:
-        _send(client, h, _camera_header("f1"))
+        _send(client, h, _camera_header("f1"), await_write=True)
     assert _written(h.media_dir), "explicit opt-in should still persist"
 
 
@@ -99,5 +109,5 @@ def test_screen_sharing_to_a_back_brain_is_unchanged(harness):
 
     h = harness(media_mode="omni")
     with TestClient(h.app) as client:
-        _send(client, h, _screen_header("f1"))
+        _send(client, h, _screen_header("f1"), await_write=True)
     assert _written(h.media_dir), "screen frames still reach the back brain"

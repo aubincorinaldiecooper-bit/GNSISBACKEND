@@ -202,6 +202,12 @@ class OnlineDuplexSettings:
     tool_schemas: tuple[dict[str, Any], ...] = ()
     expose_task_slate_to_model: bool = False
     warm_first_unit: bool = True
+    # Startup profiling aid, off in normal operation. When on, the boot pays
+    # two extra measurements before serving: a trivial GPU op that attributes
+    # CUDA context creation on its own, and a second identical prefill whose
+    # duration separates one-off kernel/autotune cost from the prefill's real
+    # recurring compute. Both change timing only, never the prepared prefix.
+    startup_probe: bool = False
     # See MAX_SESSION_SEC. Zero removes the ceiling, which is what the runtime
     # did before this existed; only set it there for an operator-run session on
     # a machine nobody else can reach.
@@ -407,6 +413,26 @@ def _build_session(
     )
 
 
+def _probe_cuda_context(runtime: _Runtime) -> None:
+    """Time one trivial GPU op so CUDA context creation is its own number.
+
+    Context creation, kernel module loading and cuBLAS init are paid by
+    whichever operation touches the device first. Without this the whole bill
+    silently lands on the prefill and makes it look like compute.
+    """
+
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        device = getattr(runtime.bundle.model, "device", "cuda:0")
+        with startup_timing.stage("cuda_context_probe", sync=True):
+            torch.ones(1, device=device).mul_(2)
+    except Exception:  # pragma: no cover - a probe must never break startup
+        LOGGER.warning("startup CUDA probe skipped", exc_info=True)
+
+
 def _prepare_static_prefix(runtime: _Runtime) -> None:
     """Prefill the process-static system/tool prefix once for all live sessions."""
     from mcpmft.infer.online import OnlineRunner
@@ -415,18 +441,32 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
     runner_params = runtime.params
     if runtime.detached_talker is not None:
         runner_params = replace(runner_params, generate_audio=False)
-    runner = OnlineRunner(runtime.bundle, runner_params)
+    if runtime.settings.startup_probe:
+        _probe_cuda_context(runtime)
+    with startup_timing.stage("prefix_runner_construct"):
+        runner = OnlineRunner(runtime.bundle, runner_params)
+    prepare_kwargs = {
+        "system_prompt": (
+            runtime.settings.system_prompt or GNSIS_DUPLEX_SYSTEM_PROMPT
+        ),
+        "ref_audio_path": (
+            None
+            if runtime.detached_talker is not None
+            else runtime.settings.ref_audio_path
+        ),
+        "tools": _model_tool_schemas(runtime),
+    }
     with startup_timing.stage("prefix_prepare"):
-        runner.prepare(
-            system_prompt=(
-                runtime.settings.system_prompt or GNSIS_DUPLEX_SYSTEM_PROMPT
-            ),
-            ref_audio_path=(
-                None if runtime.detached_talker is not None else runtime.settings.ref_audio_path
-            ),
-            tools=_model_tool_schemas(runtime),
-        )
-        runtime.prefix_snapshot = runner.capture_prefix_snapshot()
+        runner.prepare(**prepare_kwargs)
+        if runtime.settings.startup_probe:
+            # Identical work, everything now warm. The gap between this and
+            # prefix_duplex_prefill is the one-off initialisation cost; what
+            # remains is the prefill compute we would pay on every boot even
+            # with a perfectly warm process.
+            with startup_timing.stage("prefix_prefill_repeat", sync=True):
+                runner.prepare(**prepare_kwargs)
+        with startup_timing.stage("prefix_snapshot_capture"):
+            runtime.prefix_snapshot = runner.capture_prefix_snapshot()
         runtime.prefix_prepare_seconds = time.perf_counter() - started
         runtime.prefix_cache_status = "ready"
         startup_timing.mark(

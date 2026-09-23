@@ -20,6 +20,7 @@ from mcpmft.infer.pinned_context import (
     install_context_memory,
     install_context_slate,
 )
+from mcpmft.infer import startup_timing
 from mcpmft.infer.streaming_text import DuplexStreamingText
 from mcpmft.tool_protocol import (
     MAX_TOOL_CALLS_PER_UNIT,
@@ -323,12 +324,13 @@ class OnlineRunner:
         tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         self._streaming_text.reset()
-        self.tool_schemas = validate_realtime_tool_context(
-            tools,
-            self.bundle.tokenizer,
-            max_tools=self.params.max_tool_schemas,
-            max_schema_tokens=self.params.max_tool_schema_tokens,
-        )
+        with startup_timing.stage("prefix_tool_validate", startup_only=True):
+            self.tool_schemas = validate_realtime_tool_context(
+                tools,
+                self.bundle.tokenizer,
+                max_tools=self.params.max_tool_schemas,
+                max_schema_tokens=self.params.max_tool_schema_tokens,
+            )
         base_system_prompt = system_prompt or "Streaming Omni Conversation."
         if self.params.inject_search_time_context and any(
             tool["name"] == "search" for tool in self.tool_schemas
@@ -347,10 +349,16 @@ class OnlineRunner:
         if ref_audio_path:
             kwargs["prompt_wav_path"] = ref_audio_path
         # Reset the base model's streaming audio KV before prefilling a new session.
-        _reset_shared_model_streaming_session(self.duplex.model)
-        self.duplex.prepare(**kwargs)
+        with startup_timing.stage("prefix_session_reset", startup_only=True):
+            _reset_shared_model_streaming_session(self.duplex.model)
+        # The prefill itself: the upstream duplex tokenizes the system/tool
+        # prompt and runs it through the Thinker. sync=True keeps its GPU cost
+        # inside this stage instead of leaking into the snapshot copy below.
+        with startup_timing.stage("prefix_duplex_prefill", sync=True, startup_only=True):
+            self.duplex.prepare(**kwargs)
         if self.pinned_context is not None:
-            self.pinned_context.refresh()
+            with startup_timing.stage("prefix_pinned_refresh", startup_only=True):
+                self.pinned_context.refresh()
 
     def capture_prefix_snapshot(self) -> DuplexPrefixSnapshot:
         """Capture the prepared system/tool KV prefix without sharing mutable session state."""

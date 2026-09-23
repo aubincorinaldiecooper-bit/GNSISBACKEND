@@ -96,14 +96,60 @@ def mark(stage: str, event: str, *, gpu: int | None = None, **fields: Any) -> in
     return elapsed
 
 
-@contextmanager
-def stage(name: str, *, gpu: int | None = None, **end_fields: Any) -> Iterator[None]:
-    """Instrument a ``start``/``end`` stage pair around a block."""
+def cuda_sync(device: Any = None) -> None:
+    """Block until queued CUDA work finishes, when CUDA is present.
 
+    GPU work is enqueued asynchronously, so a stage that submits kernels and
+    returns would otherwise donate its real cost to whichever later stage
+    happens to touch the result. Synchronising at stage boundaries is what
+    makes per-stage GPU durations mean what they say.
+    """
+
+    try:
+        import torch  # noqa: PLC0415 - lazy, optional
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+    except Exception:  # pragma: no cover - diagnostics must never break startup
+        pass
+
+
+def startup_finished() -> bool:
+    """True once ``runtime_ready`` fired for this process."""
+
+    return "runtime_ready" in _FIRST_EVENTS
+
+
+@contextmanager
+def stage(
+    name: str,
+    *,
+    gpu: int | None = None,
+    sync: bool = False,
+    startup_only: bool = False,
+    **end_fields: Any,
+) -> Iterator[None]:
+    """Instrument a ``start``/``end`` stage pair around a block.
+
+    ``sync=True`` drains the CUDA queue on both boundaries so the duration is
+    the stage's own GPU time rather than an arbitrary slice of the pipeline.
+
+    ``startup_only=True`` marks a block that also runs per session on some
+    paths: after ``runtime_ready`` it is not recorded at all, so the stage
+    table stays a boot record and cannot grow with session count.
+    """
+
+    if startup_only and startup_finished():
+        yield
+        return
+    if sync:
+        cuda_sync()
     mark(name, "start", gpu=gpu)
     try:
         yield
     finally:
+        if sync:
+            cuda_sync()
         mark(name, "end", gpu=gpu, **end_fields)
 
 
@@ -231,6 +277,10 @@ _HEALTH_STAGE_KEYS = {
     "detached_talker_init": "talker",
     "token2wav_init": "token2wav",
     "prefix_prepare": "prefix_prepare",
+    "prefix_duplex_prefill": "prefix_duplex_prefill",
+    "prefix_snapshot_capture": "prefix_snapshot_capture",
+    "cuda_context_probe": "cuda_context_probe",
+    "prefix_prefill_repeat": "prefix_prefill_repeat",
     "first_unit_warmup": "first_unit_warmup",
     "detached_speech_warmup": "detached_speech_warmup",
 }

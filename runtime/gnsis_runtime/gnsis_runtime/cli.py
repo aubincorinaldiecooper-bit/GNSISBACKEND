@@ -97,6 +97,11 @@ class DuplexConfig:
     top_p: float = 0.8
     top_k: int = 20
     warm_first_unit: bool = True
+    # Startup profiling only: adds a CUDA-context probe and one repeated
+    # prefill so first-call initialisation can be told apart from real
+    # prefill compute. Costs a second prefill on boot; keep it off in
+    # production and turn it on for a profiling deploy.
+    startup_probe: bool = False
     # RMS floor for the `input_has_speech` flag in `duplex chunk` logs.
     # It does not drive speak decisions (those are the model's own tokens),
     # but it does drive `awaiting_reply`, i.e. how long silence processing
@@ -491,6 +496,7 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
         tool_schemas=_tool_schemas(duplex.tools_path),
         expose_task_slate_to_model=duplex.expose_task_slate_to_model,
         warm_first_unit=duplex.warm_first_unit,
+        startup_probe=duplex.startup_probe,
         max_session_sec=(
             OnlineDuplexSettings.max_session_sec
             if duplex.max_session_sec is None

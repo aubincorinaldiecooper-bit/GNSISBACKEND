@@ -1107,3 +1107,23 @@ def test_the_tap_is_answered_before_the_server_replies(harness):
     assert body.index("'Starting to share…'") < request_at
     assert body.index("'Turning the camera on…'") < request_at
     assert body.index("aria-busy") < request_at
+
+def test_the_voice_runtime_keeps_containers_warm_for_five_minutes():
+    """A cold boot is ~115s. A 60s idle window made a user returning minutes
+    later pay it again; 300s covers the gap between two sessions without
+    pinning a warm pool."""
+
+    source = Path("modal/gnsis_voice.py").read_text(encoding="utf-8")
+    assert "scaledown_window=300," in source
+    assert "min_containers" not in source
+
+
+def test_the_voice_config_profiles_startup_but_the_default_does_not():
+    """The probe costs a second prefill on boot, so it is opt-in and must
+    never be the default a normal deployment inherits."""
+
+    from gnsis_runtime.cli import DuplexConfig, load_config
+
+    assert DuplexConfig().startup_probe is False
+    assert load_config("runtime/configs/gnsis-voice.yaml").duplex.startup_probe is True
+    assert load_config("runtime/configs/gnsis-live.yaml").duplex.startup_probe is False
