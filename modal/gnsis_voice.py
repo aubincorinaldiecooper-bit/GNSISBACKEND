@@ -73,7 +73,11 @@ image = (
         "fastapi>=0.110",
         "uvicorn[standard]>=0.29",
         "websockets>=12",
+        # Token2wav deps. torchaudio must match the torch pin: the
+        # unbounded torchaudio wheel resolves to the cu13 build and fails
+        # to load libcudart.so.13 under torch 2.6 (cu124).
         "minicpmo-utils[tts]>=1.0.6,<2",
+        "torchaudio==2.6.0",
     )
     .add_local_dir(SOURCE_DIR, remote_path="/workspace/runtime", copy=True)
     .run_commands(
