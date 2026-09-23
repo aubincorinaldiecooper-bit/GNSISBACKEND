@@ -469,6 +469,18 @@ function setSwitchesDisabled(off) {
   ui.share.disabled = off;
 }
 
+/**
+ * The switches follow the negotiation, not the click. While a source change
+ * is waiting on the runtime's answer (`pendingSource`), both stay off: a
+ * second switch may not overlap the one in flight. And a switch that was
+ * refused, or that lost its channel, must hand the controls back rather than
+ * leave them dead.
+ */
+function syncSourceControls(session) {
+  if (live !== session) return;
+  setSwitchesDisabled(Boolean(session.pendingSource));
+}
+
 /** Back to how a session starts: everything on, nothing in flight. */
 function resetControls(kind = 'camera') {
   setMuted(false);
@@ -656,7 +668,6 @@ function startFrames(session, hints) {
   const canvas = ui.scratch;
   const context = canvas.getContext('2d', { alpha: false });
   const rate = Math.min(Math.max(Number(hints.recommended_frame_rate) || 2, 0.5), 10);
-  let sequence = 0;
   let inFlight = false;
 
   const tick = async () => {
@@ -683,10 +694,13 @@ function startFrames(session, hints) {
       if (live.source !== kind || live.pendingSource) return;
       const screen = live.screen;
       if (!screen || screen.readyState !== WebSocket.OPEN) return;
-      sequence += 1;
+      // The sequence lives on the session, not this timer: `screen.ready`
+      // re-arms the timer on a reconnect, and a restarted counter would send
+      // ids the source generation below can no longer tell apart.
+      session.frameSeq += 1;
       screen.send(JSON.stringify({
         type: 'screen.frame',
-        frame_id: `live-${sequence}`,
+        frame_id: `live-${session.frameSeq}`, 
         captured_at_ms: Date.now(),
         encoding: 'jpeg',
         video_source: kind,
@@ -757,16 +771,34 @@ function attachScreen(session, ready) {
         setSwitchesDisabled(false);
         settle('Session ready.');
       } else if (live.awaitingSight) {
-        // The same rule after a switch: seen, not just sent.
-        live.awaitingSight = false;
-        const line = live.source === 'screen' ? 'Sharing your screen.' : 'Camera on.';
-        show(line, { tone: 'live' });
-        settle(line);
+        // The same rule after a switch — but only a frame sent under the new
+        // source counts. `sightSeq` is the last frame sent from the previous
+        // source, so a delayed acknowledgement for an older frame can never
+        // declare the new one seen.
+        const seq = /^live-(\d+)$/.exec(String(payload.frame_id || ''));
+        if (seq && Number(seq[1]) > live.sightSeq) {
+          live.awaitingSight = false;
+          const line = live.source === 'screen' ? 'Sharing your screen.' : 'Camera on.';
+          show(line, { tone: 'live' });
+          settle(line);
+          syncSourceControls(session);
+        }
       }
       return;
     }
     if (payload.type === 'screen.frame.dropped') live.stats.dropped += 1;
   });
+  const dropped = () => {
+    // The channel carrying frames is gone — a refused upgrade or a dropped
+    // socket. Hand the picture back the same way Camera off does, so the
+    // camera light goes out and the switches are left usable.
+    if (live !== session || session.stopped || session.screen !== socket) return;
+    if (!session.source && !session.pendingSource) return;
+    goDark(session, 'The video link dropped.');
+    setSwitchesDisabled(false);
+  };
+  socket.addEventListener('close', dropped);
+  socket.addEventListener('error', dropped);
   return socket;
 }
 
@@ -803,6 +835,8 @@ function handleDuplex(session, event) {
         }));
         show(live.pendingSource === 'screen' ? 'Starting to share…' : 'Turning the camera on…', { state: 'connecting' });
       } else {
+        live.pendingSource = null;
+        syncSourceControls(session);
         show('Video is off on this server.', { tone: 'busy' });
       }
       void startMicrophone(session).then((mic) => { if (live) live.mic = mic; });
@@ -810,19 +844,40 @@ function handleDuplex(session, event) {
     case 'media.mode.done':
       // Back to voice after Camera off: nothing to attach, frames already
       // paused.
-      if (payload.video === false) break;
+      if (payload.video === false) {
+        live.pendingSource = null;
+        syncSourceControls(session);
+        break;
+      }
+      // A `done` answers the switch that asked for it: the source it names
+      // must be the one still pending, or it belongs to a negotiation this
+      // page has already moved on from.
+      if (live.pendingSource && payload.source && payload.source !== live.pendingSource) break;
       if (live.pendingSource) {
         live.source = live.pendingSource;
         live.pendingSource = null;
         // The very first frame has its own line ("Session ready."); after
-        // that, a switch waits for its own proof.
+        // that, a switch waits for a frame sent under the new source —
+        // `sightSeq` remembers where the old source's frames ended.
         live.awaitingSight = live.stats.accepted > 0;
+        live.sightSeq = live.frameSeq;
       }
       // Only now is the server willing to look at a frame.
       if ((!live.screen || live.screen.readyState > WebSocket.OPEN) && live.ready) {
         live.screen = attachScreen(session, live.ready);
-        if (live.stats.accepted === 0) show('Waiting for the first frame…', { state: 'connecting' });
+        if (!live.screen) {
+          // No video channel to send frames down: undo the switch rather
+          // than leave the camera on and the controls locked.
+          for (const track of live.media.video.getTracks()) track.stop();
+          ui.preview.srcObject = null;
+          live.source = null;
+          live.awaitingSight = false;
+          setSourceUi(null);
+        } else if (live.stats.accepted === 0) {
+          show('Waiting for the first frame…', { state: 'connecting' });
+        }
       }
+      syncSourceControls(session);
       break;
     case 'media.mode.rejected': {
       const refused = live.pendingSource;
@@ -835,6 +890,7 @@ function handleDuplex(session, event) {
         setSourceUi(null);
       }
       show(refused === 'screen' ? 'This session cannot see your screen.' : 'This session cannot use the camera.', { tone: 'busy' });
+      syncSourceControls(session);
       break;
     }
     case 'audio.chunk':
@@ -935,9 +991,14 @@ async function start(kind = 'camera') {
     muted: false,
     micLevel: 0,
     // What frames are being sent from, and what a switch is waiting on.
+    // `frameSeq` counts every frame sent; `sightSeq` marks the last frame
+    // of the previous source, so only a newer frame's acknowledgement may
+    // declare the new source seen.
     source: null,
     pendingSource: kind,
     awaitingSight: false,
+    frameSeq: 0,
+    sightSeq: 0,
     stopped: false,
     stats: { sent: 0, accepted: 0, dropped: 0, audio: 0 },
   };
@@ -1007,7 +1068,7 @@ function goDark(session, message) {
  */
 async function setSource(kind) {
   const session = live;
-  if (!session || session.stopped || session.sourceBusy) return;
+  if (!session || session.stopped || session.sourceBusy || session.pendingSource) return;
   const duplex = session.duplex;
   if (!duplex || duplex.readyState !== WebSocket.OPEN) return;
   const current = session.pendingSource || session.source;
@@ -1053,7 +1114,9 @@ async function setSource(kind) {
     duplex.send(JSON.stringify({ type: 'media.mode', video: true, source: kind }));
   } finally {
     session.sourceBusy = false;
-    if (live === session) setSwitchesDisabled(false);
+    // If the request was sent, `pendingSource` now owns the lock until
+    // `media.mode.done` or `media.mode.rejected` answers it.
+    syncSourceControls(session);
   }
 }
 

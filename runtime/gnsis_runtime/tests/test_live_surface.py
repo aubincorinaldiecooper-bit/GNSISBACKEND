@@ -921,3 +921,87 @@ def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
     assert config.duplex.allow_client_video is True
     assert config.duplex.client_video_mode == "omni"
     assert config.duplex.persist_camera_frames is False
+
+
+def test_a_refused_switch_hands_the_controls_back(harness):
+    """A negotiation that ends in `media.mode.rejected` is terminal.
+
+    The switches were locked when the request went out; if the refusal does
+    not unlock them, a camera the server cannot use leaves the page dead until
+    End. The lock is released by re-resolving `pendingSource` — which the
+    rejection clears — through `syncSourceControls`.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+
+    rejected = source.split("case 'media.mode.rejected':")[1].split("break;")[0]
+    assert "live.pendingSource = null" in rejected
+    assert "syncSourceControls(session)" in rejected
+
+
+def test_a_switch_stays_locked_until_the_runtime_answers(harness):
+    """The controls unlock on the answer, not on the request leaving.
+
+    Re-enabling in `setSource`'s `finally` let a second switch overlap the
+    first negotiation, and whichever `media.mode.done` landed last decided
+    what the page believed it was showing. The lock now follows
+    `pendingSource`, which only the matching `done`/`rejected` clears.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+
+    helper = source.split("function syncSourceControls(session) {")[1].split("}")[0]
+    assert "session.pendingSource" in helper
+    assert "setSwitchesDisabled" in helper
+
+    set_source = source.split("async function setSource(kind) {")[1]
+    # No second negotiation while one is in flight.
+    assert "session.pendingSource" in set_source.split("const duplex")[0]
+    # The finally no longer unlocks unconditionally.
+    finally_block = set_source.rsplit("} finally {", 1)[1].split("}")[0]
+    assert "setSwitchesDisabled(false)" not in finally_block
+    assert "syncSourceControls(session)" in finally_block
+
+    done = source.split("case 'media.mode.done':")[1].split("break;")[0]
+    assert "syncSourceControls(session)" in done
+
+
+def test_sight_is_bound_to_a_frame_of_the_new_source(harness):
+    """A delayed ACK for an old-source frame must not declare the switch seen.
+
+    `sightSeq` marks the last frame sent before `media.mode.done` resolved the
+    switch; `awaitingSight` only clears on a `live-N` acknowledgement with N
+    beyond it. The sequence lives on the session so a `screen.ready` re-arm of
+    the frame timer cannot restart it.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+
+    assert "live.sightSeq = live.frameSeq" in source
+    assert "session.frameSeq += 1" in source
+    ack = source.split("payload.type === 'screen.frame.accepted'")[1]
+    assert "live-(\\d+)" in ack
+    assert "> live.sightSeq" in ack
+
+
+def test_a_dead_screen_channel_releases_the_session(harness):
+    """A screen socket that fails after the switch is a terminal failure too.
+
+    Without a close/error path the page kept the camera live and the switches
+    locked on a channel that would never carry a frame again.
+    """
+
+    h = harness()
+    with TestClient(h.app) as client:
+        source = client.get("/assets/live.js").text
+
+    attach = source.split("function attachScreen(session, ready) {")[1]
+    assert "socket.addEventListener('close', dropped)" in attach
+    assert "socket.addEventListener('error', dropped)" in attach
+    assert "The video link dropped." in attach
