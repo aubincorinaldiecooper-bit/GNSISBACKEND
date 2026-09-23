@@ -118,6 +118,13 @@ class DuplexLiveConfig:
             raise ValueError("max_slice_nums must be a positive integer")
         if not isinstance(self.batch_vision_feed, bool):
             raise TypeError("batch_vision_feed must be a bool")
+        if (
+            isinstance(self.input_speech_rms, bool)
+            or not isinstance(self.input_speech_rms, (int, float))
+            or not math.isfinite(self.input_speech_rms)
+            or self.input_speech_rms < 0
+        ):
+            raise ValueError("input_speech_rms must be a finite non-negative number")
 
 
 @dataclass

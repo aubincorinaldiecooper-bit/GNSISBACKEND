@@ -214,6 +214,15 @@ class OnlineDuplexSettings:
     # the secret is set on both ends. `create_online_duplex_app` logs a warning
     # while it is unset, so "off" is never silent.
     edge_secret: str = ""
+    # RMS floor for the diagnostic `input_has_speech` flag — a value under
+    # this reads as silence in `duplex chunk` logs. Speak decisions are the
+    # model's own tokens, but the flag does drive `awaiting_reply`, i.e. how
+    # long silence processing drains after input ends.
+    input_speech_rms: float = 1e-4
+    # Which voice assets the loader was asked for — exposed on /health so the
+    # task layer can tell "voice disabled by config" from "load failed".
+    talker_checkpoint: str | None = None
+    token2wav_dir: str | None = None
 
 
 @dataclass
@@ -340,6 +349,7 @@ def _build_session(
         config=DuplexLiveConfig(
             trailing_silence_sec=runtime.settings.trailing_silence_sec,
             send_listen_audio=runtime.settings.send_listen_audio,
+            input_speech_rms=runtime.settings.input_speech_rms,
             media_mode=(
                 media_mode if media_mode is not None else runtime.settings.media_mode
             ),
@@ -1168,6 +1178,23 @@ def create_online_duplex_app(
             "audio_input_protocol": AUDIO_INPUT_PROTOCOL,
             "input_sample_rate": runtime.settings.input_sample_rate,
             "output_sample_rate": runtime.settings.output_sample_rate,
+            "input_speech_rms": runtime.settings.input_speech_rms,
+            # Configured (what the loader was asked for) vs loaded (verified
+            # present on the live model): the Path B checks need both to
+            # tell "voice off by config" from "asked for and missing".
+            "talker_checkpoint_configured": bool(runtime.settings.talker_checkpoint),
+            "token2wav_configured": bool(runtime.settings.token2wav_dir),
+            "tts_loaded": getattr(runtime.bundle.model, "tts", None) is not None,
+            "token2wav_loaded": (
+                runtime.detached_talker is not None
+                or getattr(
+                    getattr(runtime.bundle.model, "tts", None),
+                    "audio_tokenizer",
+                    None,
+                )
+                is not None
+            ),
+            "git_commit": os.environ.get("GNSIS_GIT_COMMIT") or None,
             "generate_audio": bool(
                 runtime.params.generate_audio or runtime.detached_talker is not None
             ),

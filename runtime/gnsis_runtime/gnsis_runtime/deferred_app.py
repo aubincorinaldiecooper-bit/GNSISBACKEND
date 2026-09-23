@@ -71,6 +71,7 @@ class DeferredRuntimeApp:
         self._loader = loader
         self._heartbeat_interval_s = heartbeat_interval_s
         self._inner: Any | None = None
+        self._inner_lifespan: Any | None = None
         self._load_task: asyncio.Task[None] | None = None
         self._ready_event: asyncio.Event | None = None
         self._state = "loading"
@@ -244,9 +245,20 @@ class DeferredRuntimeApp:
             )
 
             router = getattr(inner, "router", None)
-            startup = getattr(router, "startup", None)
-            if startup is not None:
-                await startup()
+            lifespan_context = getattr(router, "lifespan_context", None)
+            if lifespan_context is not None:
+                # FastAPI's APIRouter always exposes lifespan_context: a
+                # custom `lifespan=` CM when configured, otherwise its
+                # _DefaultLifespan that runs on_startup/on_shutdown. Entering
+                # it covers both shapes; the CM is exited at shutdown.
+                cm = lifespan_context(inner)
+                await cm.__aenter__()
+                self._inner_lifespan = cm
+            else:
+                for handler in getattr(router, "on_startup", ()) or ():
+                    result = handler()
+                    if inspect.isawaitable(result):
+                        await result
 
             self._inner = inner
             self._runtime_ready_at = time.time()
@@ -284,10 +296,15 @@ class DeferredRuntimeApp:
         inner = self._inner
         if inner is None:
             return
+        if self._inner_lifespan is not None:
+            await self._inner_lifespan.__aexit__(None, None, None)
+            self._inner_lifespan = None
+            return
         router = getattr(inner, "router", None)
-        shutdown = getattr(router, "shutdown", None)
-        if shutdown is not None:
-            await shutdown()
+        for handler in getattr(router, "on_shutdown", ()) or ():
+            result = handler()
+            if inspect.isawaitable(result):
+                await result
 
     async def _lifespan(self, receive: Any, send: Any) -> None:
         while True:

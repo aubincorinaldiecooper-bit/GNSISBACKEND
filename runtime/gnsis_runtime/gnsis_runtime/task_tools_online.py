@@ -133,7 +133,11 @@ class TaskToolsRealtimeCoordinator:
         self._model_jobs_stopped = False
         self._audio_fd: int | None = None
         self._audio_path: Path | None = None
-        if media_dir is not None:
+        # The journal only exists so a worker provider can attach the turn's
+        # raw audio to `turn.final` media. With no provider nothing reads it,
+        # so writing every visitor's microphone to disk is the same privacy
+        # cost persist_camera_frames is kept off for.
+        if media_dir is not None and provider_name is not None:
             root = Path(media_dir).expanduser().resolve()
             root.mkdir(parents=True, exist_ok=True)
             self._audio_path = root / f"{storage_key(session_id)}.input.pcm"

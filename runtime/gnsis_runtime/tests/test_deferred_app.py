@@ -203,3 +203,69 @@ def test_a_non_ascii_edge_secret_does_not_crash_the_check(monkeypatch):
                 assert ws.receive_json()["status"] == "loading"
     finally:
         release.set()
+
+
+def test_registered_app_hooks_run_around_the_inner_app():
+    """Starlette 1.6 has no `router.startup()`; handlers live on `on_startup`.
+
+    Reading the old attribute meant the real app's startup hooks — the
+    static-prefix preparation among them — were never run: production sat at
+    `prefix_cache_status: pending` and every session prefilled the system
+    prompt live.
+    """
+
+    calls: list[str] = []
+
+    def loader():
+        app = _inner_app()
+
+        async def startup():
+            calls.append("startup")
+
+        def shutdown():
+            calls.append("shutdown")
+
+        app.router.add_event_handler("startup", startup)
+        app.router.add_event_handler("shutdown", shutdown)
+        return app
+
+    app = create_deferred_app(loader, heartbeat_interval_s=0.05)
+    with TestClient(app) as client:
+        _wait_for_state(client, "ready")
+        assert calls == ["startup"]
+    assert calls == ["startup", "shutdown"]
+
+
+def test_a_lifespan_context_manager_on_the_inner_app_runs():
+    """Legacy handlers are not the only startup path.
+
+    A FastAPI app built with `lifespan=` has no `on_startup` handlers at
+    all — Starlette 1.6 runs `router.lifespan_context` instead. Entering it
+    covers both shapes; a wrapper that only reads `on_startup` would silently
+    skip a real app's startup entirely.
+    """
+
+    from contextlib import asynccontextmanager
+
+    calls: list[str] = []
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        calls.append("enter")
+        yield
+        calls.append("exit")
+
+    def loader():
+        app = FastAPI(lifespan=lifespan)
+
+        @app.get("/health")
+        async def health():
+            return {"status": "ok"}
+
+        return app
+
+    app = create_deferred_app(loader, heartbeat_interval_s=0.05)
+    with TestClient(app) as client:
+        _wait_for_state(client, "ready")
+        assert calls == ["enter"]
+    assert calls == ["enter", "exit"]

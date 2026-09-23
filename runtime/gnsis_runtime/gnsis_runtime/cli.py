@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import logging
+import math
 import os
 import shutil
 import traceback
@@ -95,6 +96,11 @@ class DuplexConfig:
     top_p: float = 0.8
     top_k: int = 20
     warm_first_unit: bool = True
+    # RMS floor for the `input_has_speech` flag in `duplex chunk` logs.
+    # It does not drive speak decisions (those are the model's own tokens),
+    # but it does drive `awaiting_reply`, i.e. how long silence processing
+    # drains after input ends.
+    input_speech_rms: float = 1e-4
 
 
 @dataclass(frozen=True)
@@ -202,6 +208,13 @@ def validate_release_config(config: ReleaseConfig) -> None:
         raise ValueError("managed ASR and the GNSIS server must use different ports")
     if not duplex.checkpoint:
         raise ValueError("duplex.checkpoint is required")
+    if (
+        isinstance(duplex.input_speech_rms, bool)
+        or not isinstance(duplex.input_speech_rms, (int, float))
+        or not math.isfinite(duplex.input_speech_rms)
+        or duplex.input_speech_rms < 0
+    ):
+        raise ValueError("duplex.input_speech_rms must be a finite non-negative number")
     if duplex.generate_audio and not config.model.init_tts:
         raise ValueError("duplex.generate_audio requires model.init_tts=true")
     if duplex.generate_audio and not duplex.ref_audio_path:
@@ -457,6 +470,9 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
         system_prompt=duplex.system_prompt,
         ref_audio_path=duplex.ref_audio_path,
         trailing_silence_sec=duplex.trailing_silence_sec,
+        input_speech_rms=duplex.input_speech_rms,
+        talker_checkpoint=duplex.talker_checkpoint,
+        token2wav_dir=config.model.token2wav_dir,
         asr_base_url=asr_base_url(config.asr),
         asr_timeout_sec=config.asr.request_timeout_sec,
         turn_bind_grace_sec=duplex.turn_bind_grace_sec,

@@ -41,11 +41,14 @@ jobs:
           # than exempting itself and going blind to the file most likely to
           # mention the old names.
           RETIRED='(g[a]nder|cl[i]pit)'
-          if git ls-files | grep -iE "$RETIRED"; then
+          # Source naming only: docs/ is exempt. Design docs and audits have
+          # to name the upstream project and the retired products to discuss
+          # provenance — the gate exists for code, configs and APIs.
+          if git ls-files -- . ':!docs/' | grep -iE "$RETIRED"; then
             echo "Retired product naming found in a tracked path." >&2
             exit 1
           fi
-          if git grep -nIiE "$RETIRED" -- .; then
+          if git grep -nIiE "$RETIRED" -- . ':!docs/'; then
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi
