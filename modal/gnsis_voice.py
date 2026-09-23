@@ -1,17 +1,22 @@
-"""Modal definition for the isolated GNSIS voice (Path B) realtime runtime.
+"""Modal definition for the GNSIS realtime runtime, published as `gnsis-voice`.
 
-Same live surface as `modal/gnsis.py`, served as a separate `gnsis-voice`
-app so the production `gnsis-live` deployment is untouched while the
-full-duplex path is acceptance-tested. Differences from gnsis-live:
+This is the runtime the site sends every live session to. It serves the live
+surface and the realtime model from the source under `runtime/`, and it
+answers aloud:
 
 - two L40S GPUs: GPU 0 runs the Thinker, GPU 1 the detached Talker +
-  Token2wav (the runtime splits devices itself from
+  Token2wav, so speech is synthesised without pausing perception and an
+  interruption cancels playback (the runtime splits devices itself from
   `server.cuda_visible_devices` + `duplex.detached_talker_device` — config
   validation refuses same-device Thinker/Talker);
 - `minicpmo-utils[tts]` in the image (Token2wav dependencies);
 - `gnsis-voice.yaml` config: GNSIS Thinker + verified Gander Talker pair;
-- `cache_gnsis_models` also asserts the Talker checkpoint, its bundled
-  Token2wav assets, and the reference WAV — all on the model volume.
+- `cache_gnsis_models` asserts the base model, the Thinker, the Talker
+  checkpoint, its bundled Token2wav assets, and the reference WAV — all on
+  the model volume.
+
+It replaced the text-only `gnsis-live` app, which is retired. The worker's
+deploy route (`POST /internal/compute/gnsis/deploy`) publishes this file.
 """
 
 from __future__ import annotations
@@ -26,8 +31,17 @@ APP_NAME = "gnsis-voice"
 PORT = 7975
 CONFIG_PATH = "/workspace/runtime/configs/gnsis-voice.yaml"
 
-# See modal/gnsis.py: checked only where the repository exists; inside the
-# container this file sits alone at /root.
+# The directory this repository keeps the realtime source in, relative to its
+# root. Modal resolves it lazily, at deploy time and not at import, so a wrong
+# name here would build a perfectly valid image with no source in it and fail
+# only once someone deployed. Checked on import instead, so the CI import of
+# this file catches a move of the source tree.
+#
+# Only checked where the repository exists. Modal imports this same file a
+# second time, inside the container, to find gnsis_server — and there it sits
+# alone at /root with no repository around it; the source is already baked into
+# the image at /workspace/runtime. Run there, this check would fail every
+# container start.
 SOURCE_DIR = "runtime"
 _source = Path(__file__).resolve().parent.parent / SOURCE_DIR
 if modal.is_local() and not _source.is_dir():
@@ -36,12 +50,27 @@ if modal.is_local() and not _source.is_dir():
         "the realtime source tree has moved and this definition would package nothing"
     )
 
+# The model volume holds MiniCPM-o, the GNSIS Thinker and the Gander Talker. A
+# wrong name fails the deploy rather than creating a fresh empty volume.
 MODELS_VOLUME_NAME = os.environ.get("GNSIS_MODELS_VOLUME") or "gnsis-model-weights"
 
 models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 
-# One GPU container exactly — the same two-socket/process-local
-# runtime.sessions constraint as gnsis-live. See modal/gnsis.py.
+# The shared secret the site's proxy stamps on every socket it forwards. The
+# runtime refuses sockets without it, so reaching this app's public .modal.run
+# address directly — going around the site, and around everything applied
+# there — gets a close rather than a GPU.
+#
+# from_dict passes the value to containers as an environment variable at run
+# time; it is never written into an image layer. It is read from whoever runs
+# the deploy.
+#
+# THIS side is the switch. Unset here the runtime's check is off, it accepts
+# anything, and it says so at startup — so deploying this code before the value
+# exists cannot take the site down. Setting it here FIRST can: the site would
+# still be sending an empty header, and every session would be refused. Set the
+# site's GNSIS_EDGE_SECRET first and this one second; on a rollback, clear this
+# one first and the site's last.
 edge_secret = modal.Secret.from_dict(
     {"GNSIS_EDGE_SECRET": os.environ.get("GNSIS_EDGE_SECRET", "")}
 )
@@ -87,12 +116,17 @@ image = (
     )
 )
 
+# include_source=True: Modal ships this file into the container and imports it
+# there to find gnsis_server. With it off, every container died at that import
+# with "ModuleNotFoundError: No module named 'gnsis'" — before gnsis-serve, the
+# config or the checkpoint were ever touched. modal/ is a bare directory, not a
+# package, so the only thing shipped is this file.
 app = modal.App(APP_NAME, image=image, include_source=True)
 
 
 @app.function(volumes={"/models": models}, timeout=600)
 def cache_gnsis_models() -> dict[str, str]:
-    """Validate that the model volume holds the voice runtime's assets."""
+    """Validate that the model volume holds every asset this runtime loads."""
     from pathlib import Path
 
     required = {
@@ -109,12 +143,29 @@ def cache_gnsis_models() -> dict[str, str]:
     return {label: str(path) for label, path in required.items()}
 
 
+# Exactly one GPU container.
+#
+# A live session is two WebSockets that share state — /ws/duplex creates the
+# session in process-local runtime.sessions and /ws/screen looks it up there.
+# With more than one container Modal can route the two sockets to different
+# processes, and /ws/screen 500s on a session it cannot see: the phone sits on
+# "Waiting for the first frame…" forever. Sticky routing is not a fix —
+# correctness cannot depend on which backend a load balancer happens to pick.
+# One container keeps the state and both sockets in one process; multi-user
+# routing is designed after a single session is proven end to end.
+#
+# This is a literal 1 on the decorator, not an env default: a deployment that
+# still sets GNSIS_MAX_CONTAINERS=5 would override a default and split the
+# channels again.
 @app.function(
     gpu="L40S:2",
     volumes={"/models": models},
     secrets=[edge_secret],
-    # See modal/gnsis.py: the session ceiling belongs to the runtime's own
-    # max_session_sec, not to this opaque web-server timeout.
+    # The session ceiling that actually bounds cost is the runtime's own
+    # (OnlineDuplexSettings.max_session_sec), which is enforced where a session
+    # is a known thing and can be tested. What this parameter bounds for a
+    # web_server is not something the deploy can verify, and guessing at it
+    # would risk cutting a live session short to no benefit.
     timeout=24 * 60 * 60,
     # A cold boot costs ~115s (32s Modal provisioning + ~84s runtime init,
     # measured in the startup profile), so an idle window shorter than a
@@ -124,12 +175,14 @@ def cache_gnsis_models() -> dict[str, str]:
     scaledown_window=300,
     max_containers=1,
 )
-# One long-lived /ws/duplex must not hold the container's only input slot.
-# See modal/gnsis.py.
+# One long-lived /ws/duplex must not hold the container's only input slot, or
+# /ws/screen — and health traffic — would queue behind it forever. Four is
+# enough for duplex + screen + a control request + headroom; this is session
+# plumbing, not throughput.
 @modal.concurrent(max_inputs=4)
 @modal.web_server(PORT, startup_timeout=1800)
 def gnsis_server() -> None:
-    """Serve the isolated voice runtime from the source under runtime/."""
+    """Serve the GNSIS realtime runtime from the source under runtime/."""
     env = os.environ.copy()
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     subprocess.Popen(

@@ -8,7 +8,6 @@ on:
   pull_request:
     paths:
       - 'runtime/**'
-      - 'modal/gnsis.py'
       - 'modal/gnsis_voice.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-gnsis.py'
@@ -19,7 +18,6 @@ on:
       - main
     paths:
       - 'runtime/**'
-      - 'modal/gnsis.py'
       - 'modal/gnsis_voice.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-gnsis.py'
@@ -88,7 +86,6 @@ jobs:
           GNSIS_MODELS_VOLUME: placeholder-existing-volume
           GNSIS_SECRET_NAME: placeholder-existing-secret
         run: |
-          python -c "import runpy; m = runpy.run_path('modal/gnsis.py'); assert m['app'].name == 'gnsis-live', m['app'].name; assert 'gnsis_server' in m"
           python -c "import runpy; m = runpy.run_path('modal/gnsis_voice.py'); assert m['app'].name == 'gnsis-voice', m['app'].name; assert 'gnsis_server' in m"
           python -m py_compile scripts/verify-modal-gnsis.py
           # The brain, under its own name. The assertion is what keeps a

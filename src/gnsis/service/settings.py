@@ -58,7 +58,7 @@ class Settings:
     modal_token_id: Optional[str] = None
     modal_token_secret: Optional[str] = None
     modal_environment: str = "main"
-    gnsis_modal_app_name: str = "gnsis-live"
+    gnsis_modal_app_name: str = "gnsis-voice"
     gnsis_modal_function_name: str = "gnsis_server"
     gnsis_models_volume: str = "gnsis-model-weights"
     # Optional action-layer secret used only when the Ornith service is deployed.
@@ -442,7 +442,7 @@ class Settings:
             modal_token_id=os.environ.get("MODAL_TOKEN_ID"),
             modal_token_secret=os.environ.get("MODAL_TOKEN_SECRET"),
             modal_environment=os.environ.get("MODAL_ENVIRONMENT", "main"),
-            gnsis_modal_app_name=os.environ.get("GNSIS_MODAL_APP_NAME", "gnsis-live"),
+            gnsis_modal_app_name=os.environ.get("GNSIS_MODAL_APP_NAME", "gnsis-voice"),
             gnsis_modal_function_name=os.environ.get("GNSIS_MODAL_FUNCTION_NAME", "gnsis_server"),
             gnsis_models_volume=os.environ.get("GNSIS_MODELS_VOLUME", "gnsis-model-weights"),
             gnsis_secret_name=os.environ.get("GNSIS_SECRET_NAME", "gnsis-ornith-key"),

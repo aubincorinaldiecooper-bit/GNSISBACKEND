@@ -63,7 +63,7 @@ class InternalGNSISAdminTests(unittest.TestCase):
             r = self.client.post(
                 "/internal/compute/gnsis/deploy",
                 headers=self.auth,
-                json={"confirm": "gnsis-live", "smoke": True},
+                json={"confirm": "gnsis-voice", "smoke": True},
             )
         self.assertEqual(r.status_code, 202, r.text)
         self.assertEqual(r.json()["task_id"], "task-deploy")
@@ -75,7 +75,7 @@ class InternalGNSISAdminTests(unittest.TestCase):
         async_result.ready.return_value = True
         async_result.successful.return_value = True
         async_result.result = {
-            "app": "gnsis-live",
+            "app": "gnsis-voice",
             "environment": "main",
             "url": "https://example.modal.run",
             "health": {"status": "ok"},
@@ -87,7 +87,7 @@ class InternalGNSISAdminTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         data = r.json()
         self.assertNotIn("secret", data["result"])
-        self.assertEqual(data["result"]["app"], "gnsis-live")
+        self.assertEqual(data["result"]["app"], "gnsis-voice")
 
     def test_poll_failure_does_not_return_exception_text(self):
         async_result = Mock()

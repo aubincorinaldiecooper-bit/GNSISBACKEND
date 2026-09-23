@@ -243,7 +243,7 @@ Required variables for `GNSISBEAT`:
 - `MODAL_TOKEN_ID`
 - `MODAL_TOKEN_SECRET`
 - `MODAL_ENVIRONMENT=main` (optional; defaults to `main`)
-- `GNSIS_MODAL_APP_NAME=gnsis-live` (optional)
+- `GNSIS_MODAL_APP_NAME` (leave unset: it defaults to `gnsis-voice`, and the worker refuses any other name)
 - `GNSIS_MODAL_FUNCTION_NAME=gnsis_server` (optional)
 - `GNSIS_MODELS_VOLUME=gnsis-model-weights` (optional override)
 - `GNSIS_SECRET_NAME=gnsis-ornith-key` (optional override)
@@ -268,7 +268,7 @@ GET  /internal/compute/tasks/<task_id>
 ```
 
 All of them require `Authorization: Bearer <GNSIS_API_KEY>`. Each deploy also requires
-a JSON body naming the app it will publish, `{"confirm":"gnsis-live","smoke":false}` and
+a JSON body naming the app it will publish, `{"confirm":"gnsis-voice","smoke":false}` and
 `{"confirm":"gnsis-ornith"}`; the explicit confirmation prevents an accidental POST from
 mutating production infrastructure. The API only returns a bounded task result (app,
 environment, URL and optional health document) and never returns provider exception text
