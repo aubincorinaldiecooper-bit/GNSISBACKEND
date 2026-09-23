@@ -1092,8 +1092,10 @@ function goDark(session, message) {
   }
   show(message, { tone: null });
   // A track that ends mid-wait clears `awaitingSight` here — without the
-  // resync the controls would stay locked on a source that is gone.
-  syncSourceControls(session);
+  // resync the controls would stay locked on a source that is gone. While a
+  // `setSource` await is still open its `finally` owns the resync, so the
+  // buttons are not flashed enabled while clicks are still rejected.
+  if (!session.sourceBusy) syncSourceControls(session);
 }
 
 /**
