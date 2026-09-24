@@ -65,10 +65,9 @@ duplex:
   top_p: 0.8
   top_k: 20
   warm_first_unit: true
-  # Startup profiling: attribute CUDA context creation and separate one-off
-  # kernel/autotune cost from the prefill's recurring compute. Costs one extra
-  # prefill on boot. Turn off once prefix_prepare is understood.
-  startup_probe: true
+  # Real-edge pass: no profiling prefill. The warm container should expose
+  # user-facing startup and live-vision behavior without benchmark-only work.
+  startup_probe: false
 
 # The MVP has no action layer. Native task tools remain protocol-compatible,
 # but there is intentionally no worker to dispatch them to.
