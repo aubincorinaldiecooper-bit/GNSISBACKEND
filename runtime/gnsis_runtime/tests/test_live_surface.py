@@ -1108,14 +1108,17 @@ def test_the_tap_is_answered_before_the_server_replies(harness):
     assert body.index("'Turning the camera on…'") < request_at
     assert body.index("aria-busy") < request_at
 
-def test_the_voice_runtime_keeps_containers_warm_for_five_minutes():
-    """A cold boot is ~115s. A 60s idle window made a user returning minutes
-    later pay it again; 300s covers the gap between two sessions without
-    pinning a warm pool."""
+def test_the_voice_runtime_keeps_one_gpu_container_warm_for_benchmarking():
+    """The live-vision benchmark must not include the ~115s cold-boot penalty.
+
+    Keep exactly the one container the two live sockets already require, while
+    retaining the existing idle window setting for the later rollback path.
+    """
 
     source = Path("modal/gnsis_voice.py").read_text(encoding="utf-8")
+    assert "min_containers=1," in source
     assert "scaledown_window=300," in source
-    assert "min_containers" not in source
+    assert "max_containers=1," in source
 
 
 def test_the_voice_config_profiles_startup_but_the_default_does_not():
