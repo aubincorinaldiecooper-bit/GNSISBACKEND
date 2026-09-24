@@ -56,7 +56,9 @@ duplex:
     - camera
     - screen
   vision_max_slice_nums: 1
-  vision_batch_feed: false
+  # Benchmark pass: batch queued vision input so we can measure live visual
+  # throughput/latency against the current one-frame-at-a-time baseline.
+  vision_batch_feed: true
   context_max_units: 128
   memory_slate_max_tokens: 256
   temperature: 0.7
