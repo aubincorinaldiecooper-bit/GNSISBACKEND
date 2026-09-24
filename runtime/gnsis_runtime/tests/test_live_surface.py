@@ -1121,11 +1121,10 @@ def test_the_voice_runtime_keeps_one_gpu_container_warm_for_benchmarking():
     assert "max_containers=1," in source
 
 
-def test_the_voice_config_profiles_startup_but_the_default_does_not():
-    """The probe costs a second prefill on boot, so it is opt-in and must
-    never be the default a normal deployment inherits."""
+def test_the_voice_config_does_not_add_a_startup_probe():
+    """The real-edge pass must not spend an extra prefill on profiling."""
 
     from gnsis_runtime.cli import DuplexConfig, load_config
 
     assert DuplexConfig().startup_probe is False
-    assert load_config("runtime/configs/gnsis-voice.yaml").duplex.startup_probe is True
+    assert load_config("runtime/configs/gnsis-voice.yaml").duplex.startup_probe is False
