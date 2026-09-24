@@ -170,11 +170,11 @@ def cache_gnsis_models() -> dict[str, str]:
     # web_server is not something the deploy can verify, and guessing at it
     # would risk cutting a live session short to no benefit.
     timeout=24 * 60 * 60,
-    # A cold boot costs ~115s (32s Modal provisioning + ~84s runtime init,
-    # measured in the startup profile), so an idle window shorter than a
-    # coffee break makes a user who returns minutes later pay it again. Five
-    # minutes keeps repeat sessions warm; the container still exits on its
-    # own, this is not a warm pool.
+    # Benchmark pass: keep the one allowed 2xL40S container resident so a
+    # session never pays the ~115s cold boot while we measure live-vision
+    # performance. max_containers=1 still preserves the single-process socket
+    # routing requirement; this intentionally carries idle GPU cost.
+    min_containers=1,
     scaledown_window=300,
     max_containers=1,
 )
