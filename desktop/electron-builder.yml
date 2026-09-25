@@ -1,0 +1,48 @@
+appId: com.gnsis.desktop
+productName: GNSIS
+copyright: Copyright © 2026
+
+directories:
+  # esbuild emits the runnable app into dist/; packaged artifacts go to
+  # release/ so the two outputs never collide.
+  output: release
+  buildResources: build
+
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+
+mac:
+  category: public.app-category.productivity
+  # Temporary icon — electron-builder converts the PNG to .icns at package
+  # time. Replace with a real .icns when brand assets are produced.
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: GNSIS uses the microphone for realtime voice interaction.
+    NSCameraUsageDescription: GNSIS uses the camera for realtime visual perception when enabled.
+    NSScreenCaptureUsageDescription: GNSIS captures screen frames for realtime visual perception when enabled.
+
+dmg:
+  artifactName: GNSIS-${version}-${arch}.${ext}
+  contents:
+    - x: 130
+      y: 200
+      type: file
+    - x: 390
+      y: 200
+      type: link
+      path: /Applications
+
+# Signing/notarization: enabled automatically when credentials exist.
+#   CSC_LINK / CSC_KEY_PASSWORD            — Developer ID certificate
+#   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarization API key
+# For an unsigned development DMG run with CSC_IDENTITY_AUTO_DISCOVERY=false.
+# NEVER commit certificates, keys, or Apple credentials to this repo.

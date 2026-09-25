@@ -1,6 +1,8 @@
 // Minimal build: bundle main/preload/renderer with esbuild into dist/.
+// The preload must be emitted as .mjs — Electron parses .js preloads as
+// CommonJS regardless of package.json "type": "module".
 import { build } from "esbuild";
-import { cpSync, mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 
 const shared = {
   bundle: true,
@@ -11,11 +13,12 @@ const shared = {
   sourcemap: false,
 };
 
+rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist/main", { recursive: true });
 mkdirSync("dist/renderer", { recursive: true });
 
 await build({ ...shared, entryPoints: ["src/main/main.ts"], outfile: "dist/main/main.js" });
-await build({ ...shared, entryPoints: ["src/preload.ts"], outfile: "dist/main/preload.js" });
+await build({ ...shared, entryPoints: ["src/preload.ts"], outfile: "dist/main/preload.mjs" });
 await build({
   ...shared,
   platform: "browser",
