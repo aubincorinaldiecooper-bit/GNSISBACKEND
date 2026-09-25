@@ -3,6 +3,7 @@
  * Context isolation stays on; everything crosses as IPC data.
  */
 import { contextBridge, ipcRenderer } from "electron";
+import type { ScreenFrameMetadata } from "./shared/protocol.js";
 
 contextBridge.exposeInMainWorld("gnsis", {
   mediaPermissions: () => ipcRenderer.invoke("media:permissions"),
@@ -13,7 +14,7 @@ contextBridge.exposeInMainWorld("gnsis", {
   startCall: () => ipcRenderer.send("call:start"),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>
     ipcRenderer.send("duplex:audioFrame", header, pcm),
-  sendScreenFrame: (metadata: unknown, payload: Uint8Array) =>
+  sendScreenFrame: (metadata: ScreenFrameMetadata, payload: Uint8Array) =>
     ipcRenderer.send("screen:frame", metadata, payload),
   callTool: (tool: string, args: Record<string, unknown>) =>
     ipcRenderer.invoke("tool:call", tool, args),

@@ -9,9 +9,11 @@
 import { DuplexClient, ScreenClient } from "../main/wsClient.js";
 import {
   HOST_PROTOCOL_VERSION,
+  type AudioFrameHeader,
   type HostCapabilities,
   type HostEvent,
 } from "./protocol.js";
+import type { ScreenFrameMetadata } from "../shared/protocol.js";
 
 export interface HostSessionOptions {
   runtimeUrl: string;
@@ -108,12 +110,12 @@ export class HostSession {
     this.duplex?.sendControl({ type: "host.event", event } as never);
   }
 
-  sendAudioFrame(header: unknown, pcm: Buffer): void {
-    this.duplex?.sendAudioFrame(header as never, pcm);
+  sendAudioFrame(header: AudioFrameHeader, pcm: Buffer): void {
+    this.duplex?.sendAudioFrame(header, pcm);
   }
 
-  sendScreenFrame(metadata: unknown, payload: Buffer): void {
-    this.screen?.sendFrame(metadata as object, payload);
+  sendScreenFrame(metadata: ScreenFrameMetadata, payload: Buffer): void {
+    this.screen?.sendFrame(metadata, payload);
   }
 
   interrupt(reason: string): void {

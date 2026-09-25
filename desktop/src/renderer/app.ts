@@ -5,6 +5,8 @@
  * permission.changed. The daemon never sees a DOM or Electron API.
  */
 
+import type { ScreenFrameMetadata } from "../shared/protocol.js";
+
 declare const gnsis: {
   mediaPermissions(): Promise<Record<string, unknown>>;
   requestPermission(kind: string): Promise<string>;
@@ -13,7 +15,7 @@ declare const gnsis: {
   sendHostEvent(event: unknown): void;
   startCall(): void;
   sendAudioFrame(header: unknown, pcm: Uint8Array): void;
-  sendScreenFrame(metadata: unknown, payload: Uint8Array): void;
+  sendScreenFrame(metadata: ScreenFrameMetadata, payload: Uint8Array): void;
   callTool(tool: string, args: Record<string, unknown>): Promise<unknown>;
   onControl(fn: (control: unknown) => void): void;
   onAudio(fn: (pcm: Uint8Array) => void): void;
