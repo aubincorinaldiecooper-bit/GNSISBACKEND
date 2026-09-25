@@ -41,14 +41,15 @@ jobs:
           # than exempting itself and going blind to the file most likely to
           # mention the old names.
           RETIRED='(g[a]nder|cl[i]pit)'
-          # Source naming only: docs/ is exempt. Design docs and audits have
-          # to name the upstream project and the retired products to discuss
-          # provenance — the gate exists for code, configs and APIs.
+          # Source naming only: docs/ and the root AGENTS.md design brief are
+          # exempt. Design docs and audits have to name the upstream project
+          # and the retired products to discuss provenance — the gate exists
+          # for code, configs and APIs.
           if git ls-files -- . ':!docs/' | grep -iE "$RETIRED"; then
             echo "Retired product naming found in a tracked path." >&2
             exit 1
           fi
-          if git grep -nIiE "cl[i]pit" -- . ':!docs/'; then
+          if git grep -nIiE "cl[i]pit" -- . ':!docs/' ':!AGENTS.md'; then
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi
@@ -56,7 +57,7 @@ jobs:
           # directory on the Modal volume, so the two Path B files that
           # address it may name it; the retired product name stays banned
           # everywhere else, including in every other file here.
-          if git grep -nIiE "g[a]nder" -- . ':!docs/' ':!modal/gnsis_voice.py' ':!runtime/configs/gnsis-voice.yaml' ':!runtime/gnsis_runtime/tests/test_live_surface.py'; then
+          if git grep -nIiE "g[a]nder" -- . ':!docs/' ':!AGENTS.md' ':!modal/gnsis_voice.py' ':!runtime/configs/gnsis-voice.yaml' ':!runtime/gnsis_runtime/tests/test_live_surface.py'; then
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi
