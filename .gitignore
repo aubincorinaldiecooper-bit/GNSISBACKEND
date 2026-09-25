@@ -18,3 +18,5 @@ venv/
 .mypy_cache/
 .coverage
 htmlcov/
+desktop/node_modules/
+desktop/dist/
