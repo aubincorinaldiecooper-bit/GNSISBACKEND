@@ -1,0 +1,26 @@
+{
+  "name": "gnsis-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GNSIS desktop shell — local perception (mic/screen/camera), playback ACKs, and the tools seam",
+  "main": "dist/main/main.js",
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.8",
+    "@types/ws": "^8.18.1",
+    "electron": "^39.2.7",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.0.0"
+  }
+}
