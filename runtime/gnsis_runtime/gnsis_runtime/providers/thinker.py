@@ -1,4 +1,4 @@
-"""Gander baseline provider — thin adapter over GNSISDuplexSession.
+"""Thinker baseline provider — thin adapter over GNSISDuplexSession.
 
 Keeps the current Thinker/Talker stack (raw audio+vision in, detached speech
 synthesis) behind the same RealtimeSession contract Venus implements, so the
@@ -19,11 +19,11 @@ from ..realtime_provider import (
     RealtimeSession,
 )
 
-LOGGER = logging.getLogger("gnsis_runtime.providers.gander")
+LOGGER = logging.getLogger("gnsis_runtime.providers.thinker")
 
 
-class GanderRealtimeProvider:
-    """Opens Gander sessions via the runtime's existing session builder."""
+class ThinkerRealtimeProvider:
+    """Opens Thinker sessions via the runtime's existing session builder."""
 
     def __init__(
         self,
@@ -35,15 +35,15 @@ class GanderRealtimeProvider:
 
     @property
     def provider_name(self) -> str:
-        return "gander"
+        return "thinker"
 
     async def open_session(
         self, config: ProviderSessionConfig
-    ) -> "GanderRealtimeSession":
+    ) -> "ThinkerRealtimeSession":
         session = await asyncio.to_thread(
             self._session_factory, config.session_id, config
         )
-        return GanderRealtimeSession(session)
+        return ThinkerRealtimeSession(session)
 
     async def health(self) -> dict[str, Any]:
         return {"ready": True, "provider": self.provider_name}
@@ -52,8 +52,8 @@ class GanderRealtimeProvider:
         return None
 
 
-class GanderRealtimeSession:
-    """One live Gander session behind the normalized contract."""
+class ThinkerRealtimeSession:
+    """One live Thinker session behind the normalized contract."""
 
     def __init__(self, session: GNSISDuplexSession) -> None:
         self._session = session
@@ -61,7 +61,7 @@ class GanderRealtimeSession:
     @property
     def session_id(self) -> str:
         live = getattr(self._session.live, "session_id", None)
-        return str(live or "gander")
+        return str(live or "thinker")
 
     async def push_audio(
         self, pcm16: bytes, *, capture_ts_ms: int | None = None
@@ -100,7 +100,7 @@ class GanderRealtimeSession:
                 self._session.feed_tool_response, control.get("response")
             )
             return
-        raise ValueError(f"unsupported gander control kind: {kind!r}")
+        raise ValueError(f"unsupported thinker control kind: {kind!r}")
 
     async def next_event(self, timeout_s: float | None = None) -> ProviderEvent:
         deadline = None if timeout_s is None else asyncio.get_running_loop().time() + timeout_s
@@ -116,11 +116,11 @@ class GanderRealtimeSession:
             if self._session.closed:
                 return ProviderEvent(kind="closed", payload={})
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError("no gander output within timeout")
+                raise TimeoutError("no thinker output within timeout")
             await asyncio.sleep(0.01)
 
     async def acknowledge_playback(self, output_id: str, *, chunks_played: int) -> bool:
-        # Gander's send-receipt path finalizes delivery server-side; the
+        # Thinker's send-receipt path finalizes delivery server-side; the
         # playback-ACK truth lives in the delivery gate, not the model.
         return True
 

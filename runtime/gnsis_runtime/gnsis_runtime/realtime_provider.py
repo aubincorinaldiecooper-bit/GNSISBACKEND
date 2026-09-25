@@ -1,9 +1,9 @@
 """Model-agnostic realtime provider contract.
 
-Every foreground realtime model (Gander Thinker/Talker baseline,
+Every foreground realtime model (Thinker Thinker/Talker baseline,
 Realtime-Venus, any future native-Omni model) hides behind this surface so
 the session/timeline/delivery plumbing stays identical when the model
-changes. The contract is deliberately not shaped around Gander's detached
+changes. The contract is deliberately not shaped around Thinker's detached
 Talker: a provider that generates speech natively inside one realtime loop
 fits it without pretending to have a separate talker.
 
@@ -19,7 +19,7 @@ timeline event kinds so every provider reports into the same event plane:
 - ``closed``      session ended
 
 ``epoch`` is the model's output/generation epoch when it has one
-(Venus ``generation_epoch``, Gander response unit), else ``None``. The
+(Venus ``generation_epoch``, Thinker response unit), else ``None``. The
 delivery gate's output-epoch invalidation applies the same way regardless
 of provider.
 """

@@ -15,7 +15,7 @@ from gnsis_runtime.providers.venus import (
     VenusUnavailable,
     _normalize_step,
 )
-from gnsis_runtime.providers.gander import _normalize_output
+from gnsis_runtime.providers.thinker import _normalize_output
 from gnsis_runtime.realtime_provider import (
     ProviderSessionConfig,
     RealtimeSession,
@@ -112,7 +112,7 @@ def test_normalize_step_prefill_and_turn_events():
     assert turn.payload["token_count"] == 2
 
 
-def test_gander_normalize_output_variants():
+def test_thinker_normalize_output_variants():
     event = _normalize_output({"kind": "audio", "pcm": b"x"})
     assert event.kind == "audio"
     event = _normalize_output(type("O", (), {"kind": "text", "value": "hi"})())

@@ -2,7 +2,7 @@
 
 Drives one provider through a fixed scenario — stream mic audio, optionally
 interrupt mid-response — while every normalized provider event lands on a
-SessionTimeline. The summary makes Gander vs Venus comparable:
+SessionTimeline. The summary makes Thinker vs Venus comparable:
 
 - session open latency;
 - first-audio latency (open -> first ``audio`` event);
@@ -17,8 +17,8 @@ Usage:
         --audio /path/to/utterance.wav --interrupt-after-ms 400 \
         --out /tmp/compare/venus
 
-Gander needs a session factory — pass a callable as
-``module:function`` via --gander-factory that returns a GNSISDuplexSession.
+Thinker needs a session factory — pass a callable as
+``module:function`` via --thinker-factory that returns a GNSISDuplexSession.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "runtime/gnsis_runtime"))
 
-from gnsis_runtime.providers.gander import GanderRealtimeProvider  # noqa: E402
+from gnsis_runtime.providers.thinker import ThinkerRealtimeProvider  # noqa: E402
 from gnsis_runtime.providers.venus import VenusRealtimeProvider  # noqa: E402
 from gnsis_runtime.realtime_provider import ProviderSessionConfig  # noqa: E402
 from gnsis_runtime.timeline import SessionTimeline  # noqa: E402
@@ -138,19 +138,19 @@ async def run_scenario(provider, args) -> dict:
 def _load_provider(args):
     if args.provider == "venus":
         return VenusRealtimeProvider(args.venus_url, timeout_s=args.timeout_s)
-    module_name, _, func = args.gander_factory.partition(":")
+    module_name, _, func = args.thinker_factory.partition(":")
     if not module_name or not func:
-        raise ValueError("--gander-factory must be module:function")
+        raise ValueError("--thinker-factory must be module:function")
     factory = getattr(importlib.import_module(module_name), func)
-    return GanderRealtimeProvider(factory)
+    return ThinkerRealtimeProvider(factory)
 
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
-    p = argparse.ArgumentParser(description="Gander vs Venus realtime comparison")
-    p.add_argument("--provider", choices=["gander", "venus"], required=True)
+    p = argparse.ArgumentParser(description="Thinker vs Venus realtime comparison")
+    p.add_argument("--provider", choices=["thinker", "venus"], required=True)
     p.add_argument("--venus-url", default="http://127.0.0.1:8077")
-    p.add_argument("--gander-factory", default="")
+    p.add_argument("--thinker-factory", default="")
     p.add_argument("--audio", required=True, help="16kHz mono pcm16 or .wav file")
     p.add_argument("--interrupt-after-ms", type=int, default=0)
     p.add_argument("--tail-s", type=float, default=5.0)
