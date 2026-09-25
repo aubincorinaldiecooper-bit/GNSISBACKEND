@@ -131,12 +131,14 @@ class SimpleMemProvider(MemoryProvider):
         timeout_s: float = 30.0,
         max_response_bytes: int = 8 * 1024 * 1024,
     ) -> None:
+        import os
+
         url = (url or "").strip()
         if not url:
-            import os
-
             url = os.environ.get("GNSIS_SIMPLEMEM_URL", "").strip()
-            token = token or os.environ.get("GNSIS_SIMPLEMEM_INTERNAL_TOKEN", "").strip()
+        token = (token or "").strip() or os.environ.get(
+            "GNSIS_SIMPLEMEM_INTERNAL_TOKEN", ""
+        ).strip()
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError(
