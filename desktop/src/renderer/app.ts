@@ -1,16 +1,17 @@
 /**
- * GNSIS desktop renderer — owns the actual devices.
- *
- * Mic: getUserMedia -> AudioWorklet resample -> 16 kHz PCM16 chunks ->
- * `audio.frame` header + binary on /ws/duplex.
- * Screen/camera: capture -> JPEG -> `screen.frame` metadata + binary on
- * /ws/screen. Playback: model PCM plays at 24 kHz; each utterance's
- * start/finish sends playback.ack — the device's word that audio happened.
+ * GNSIS desktop renderer — owns the actual devices (Electron implementation
+ * of the capture/playback adapters). It reports only neutral HostEvents
+ * upstream: playback.started/completed/cancelled, device.changed,
+ * permission.changed. The daemon never sees a DOM or Electron API.
  */
 
 declare const gnsis: {
   mediaPermissions(): Promise<Record<string, unknown>>;
+  requestPermission(kind: string): Promise<string>;
+  captureScreenshot(): Promise<Uint8Array>;
   sendControl(control: unknown): void;
+  sendHostEvent(event: unknown): void;
+  startCall(): void;
   sendAudioFrame(header: unknown, pcm: Uint8Array): void;
   sendScreenFrame(metadata: unknown, payload: Uint8Array): void;
   callTool(tool: string, args: Record<string, unknown>): Promise<unknown>;
@@ -25,13 +26,14 @@ const log = (m: string) => {
   el.textContent += `${new Date().toISOString().slice(11, 19)} ${m}\n`;
   el.scrollTop = el.scrollHeight;
 };
-const setStatus = (m: string) => (document.getElementById("status")!.textContent = m);
+const setStatus = (m: string) =>
+  (document.getElementById("status")!.textContent = m);
 
-// ---- playback + ACK truth -------------------------------------------------
+// ---- playback + ACK truth ---------------------------------------------------
 
 const playbackCtx = new AudioContext({ sampleRate: 24000 });
-let playbackId = 0;
-let currentEpoch = 0;
+let playbackSeq = 0;
+let outputEpoch = 0;
 let currentSource: AudioBufferSourceNode | null = null;
 
 async function playPcm(pcm: Uint8Array): Promise<void> {
@@ -42,33 +44,46 @@ async function playPcm(pcm: Uint8Array): Promise<void> {
   const src = playbackCtx.createBufferSource();
   src.buffer = buf;
   src.connect(playbackCtx.destination);
-  const id = `pb-${++playbackId}`;
-  gnsis.sendControl({ type: "playback.ack", playback_id: id, phase: "started", epoch: currentEpoch });
+  const playback_id = `pb-${++playbackSeq}`;
+  gnsis.sendHostEvent({ type: "playback.started", playback_id, output_epoch: outputEpoch, ts_ms: Date.now() });
   src.onended = () => {
     if (currentSource === src) currentSource = null;
-    gnsis.sendControl({ type: "playback.ack", playback_id: id, phase: "finished", epoch: currentEpoch });
+    gnsis.sendHostEvent({ type: "playback.completed", playback_id, output_epoch: outputEpoch, ts_ms: Date.now() });
   };
   currentSource = src;
   src.start();
 }
 
-function interruptPlayback(): void {
+function interruptPlayback(reason = "user_interrupt"): void {
   try {
     currentSource?.stop();
   } catch {
     /* already ended */
   }
-  gnsis.sendControl({ type: "break", reason: "user_interrupt" });
+  gnsis.sendHostEvent({
+    type: "playback.cancelled",
+    playback_id: `pb-${playbackSeq}`,
+    output_epoch: outputEpoch,
+    reason,
+    ts_ms: Date.now(),
+  });
 }
 
-// ---- mic -------------------------------------------------------------------
+// ---- mic --------------------------------------------------------------------
 
 let seq = 0;
 let startSample = 0;
 let micStream: MediaStream | null = null;
+let micDevice = "";
 
 async function startMic(): Promise<void> {
   micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const label = micStream.getAudioTracks()[0]?.label ?? "default";
+  if (micDevice !== label) {
+    micDevice = label;
+    gnsis.sendHostEvent({ type: "device.changed", device_kind: "microphone", detail: label, ts_ms: Date.now() });
+  }
+  gnsis.startCall();
   const ctx = new AudioContext();
   await ctx.audioWorklet.addModule("./pcm-worklet.js");
   const src = ctx.createMediaStreamSource(micStream);
@@ -95,25 +110,32 @@ async function startMic(): Promise<void> {
 function stopMic(): void {
   micStream?.getTracks().forEach((t) => t.stop());
   micStream = null;
+  gnsis.sendControl({ type: "stop" });
   log("mic off");
 }
 
 // ---- screen / camera ---------------------------------------------------------
 
 async function shareFrames(source: "screen" | "camera"): Promise<void> {
-  let stream: MediaStream;
-  if (source === "camera") {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  } else {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-  }
+  const stream =
+    source === "camera"
+      ? await navigator.mediaDevices.getUserMedia({ video: true })
+      : await navigator.mediaDevices.getDisplayMedia({ video: true });
   const track = stream.getVideoTracks()[0];
+  gnsis.sendHostEvent({
+    type: "device.changed",
+    device_kind: source,
+    detail: track.label ?? source,
+    ts_ms: Date.now(),
+  });
   const canvas = document.createElement("canvas");
   const c2d = canvas.getContext("2d")!;
   const grab = async () => {
-    if (!micStream && false) return;
-    // Reuse getDisplayMedia's track via ImageCapture where available.
-    const capture = new (ImageCapture as unknown as { new (t: MediaStreamTrack): { grabFrame(): Promise<ImageBitmap> } })(track);
+    const capture = new (
+      ImageCapture as unknown as {
+        new (t: MediaStreamTrack): { grabFrame(): Promise<ImageBitmap> };
+      }
+    )(track);
     const bmp = await capture.grabFrame();
     canvas.width = bmp.width;
     canvas.height = bmp.height;
@@ -141,19 +163,26 @@ async function shareFrames(source: "screen" | "camera"): Promise<void> {
 // ---- wire up ----------------------------------------------------------------
 
 gnsis.onControl((c: any) => {
-  if (c?.type === "playback.ack.done") return;
+  if (c?.type === "playback.ack.done" || c?.type === "host.event.done") return;
   log(`<- ${c?.type ?? "?"} ${JSON.stringify(c).slice(0, 160)}`);
   if (c?.type === "ready") setStatus(`session ${c.session_id}`);
 });
 gnsis.onAudio((pcm) => void playPcm(pcm));
 gnsis.onClosed((code) => setStatus(`closed ${code}`));
-gnsis.onInterrupted(interruptPlayback);
+gnsis.onInterrupted(() => interruptPlayback("global_shortcut"));
 
-document.getElementById("mic")!.onclick = () =>
-  micStream ? stopMic() : startMic();
+void gnsis.mediaPermissions().then((p) => {
+  for (const [k, v] of Object.entries(p ?? {})) {
+    if (v === "granted" || v === "denied") {
+      gnsis.sendHostEvent({ type: "permission.changed", permission: k, state: v, ts_ms: Date.now() });
+    }
+  }
+});
+
+document.getElementById("mic")!.onclick = () => (micStream ? stopMic() : startMic());
 document.getElementById("screen")!.onclick = () => void shareFrames("screen");
 document.getElementById("camera")!.onclick = () => void shareFrames("camera");
-document.getElementById("interrupt")!.onclick = interruptPlayback;
+document.getElementById("interrupt")!.onclick = () => interruptPlayback();
 document.getElementById("search")!.onclick = async () => {
   const q = (document.getElementById("query") as HTMLInputElement).value;
   const res = await gnsis.callTool("internet_search", { query: q });

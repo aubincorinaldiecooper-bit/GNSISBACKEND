@@ -41,6 +41,7 @@ export type ClientControl =
       epoch: number;
       source_ts_ms?: number;
     }
+  | { type: "host.event"; event: Record<string, unknown> }
   | {
       type: "tool.call";
       tool: string;

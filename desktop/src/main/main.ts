@@ -1,57 +1,56 @@
 /**
- * GNSIS desktop main process: window lifecycle, OS capture permissions,
- * global shortcut, and the IPC boundary between the renderer's device access
- * (getUserMedia/desktopCapturer live in the renderer) and the runtime sockets
- * (held here so there is exactly one).
+ * GNSIS desktop main process — Electron edge only.
+ *
+ * Windows, permission prompts, global shortcuts, and IPC live here; call
+ * epochs, protocol events, and socket ownership live in HostSession. The
+ * renderer owns devices; the daemon never sees an Electron object.
  */
-import {
-  app,
-  BrowserWindow,
-  globalShortcut,
-  ipcMain,
-  session as electronSession,
-  systemPreferences,
-} from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DuplexClient, ScreenClient } from "./wsClient.js";
+import { HostSession } from "../host/hostSession.js";
+import {
+  ElectronNotifications,
+  ElectronPermissions,
+  ElectronScreenshots,
+  ElectronShortcuts,
+} from "../host/electronMain.js";
+import type { HostEvent } from "../host/protocol.js";
 import { ToolRegistry } from "../tools/registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const RUNTIME_URL = process.env.GNSIS_RUNTIME_URL ?? "http://127.0.0.1:8080";
-const SESSION_ID = process.env.GNSIS_SESSION_ID ?? `desktop-${process.pid}`;
+const HOST_ID = process.env.GNSIS_HOST_ID ?? `host-${process.pid}`;
+const SESSION_ID = process.env.GNSIS_SESSION_ID ?? HOST_ID;
 
 let win: BrowserWindow | null = null;
-let duplex: DuplexClient | null = null;
-let screenWs: ScreenClient | null = null;
+const permissions = new ElectronPermissions();
+const shortcuts = new ElectronShortcuts();
+const notifications = new ElectronNotifications();
+const screenshots = new ElectronScreenshots();
 const tools = new ToolRegistry({ runtimeUrl: RUNTIME_URL });
 
-function sendToRenderer(channel: string, ...args: unknown[]): void {
+const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
-}
 
-function connect(): void {
-  duplex?.close();
-  screenWs?.close();
-  duplex = new DuplexClient({ url: RUNTIME_URL, sessionId: SESSION_ID });
-  screenWs = new ScreenClient({ url: RUNTIME_URL, sessionId: SESSION_ID });
-  duplex.on("control", (c) => sendToRenderer("duplex:control", c));
-  duplex.on("audio", (pcm) => sendToRenderer("duplex:audio", pcm));
-  duplex.on("close", (code, reason) => sendToRenderer("duplex:closed", code, reason));
-  duplex.on("error", (e) => sendToRenderer("duplex:error", String(e)));
-  duplex.connect();
-  screenWs.connect();
-}
-
-async function checkMediaPermissions(): Promise<Record<string, unknown>> {
-  if (process.platform !== "darwin") return { platform: process.platform };
-  return {
-    mic: systemPreferences.getMediaAccessStatus("microphone"),
-    camera: systemPreferences.getMediaAccessStatus("camera"),
-    screen: systemPreferences.getMediaAccessStatus("screen"),
-  };
-}
+const host = new HostSession({
+  runtimeUrl: RUNTIME_URL,
+  hostId: HOST_ID,
+  chassis: "electron",
+  capabilities: {
+    mic: true,
+    camera: true,
+    screen: true,
+    playback_ack: true,
+    screenshots: true,
+    global_shortcuts: true,
+    notifications: true,
+  },
+  onControl: (c) => sendToRenderer("duplex:control", c),
+  onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
+  onClosed: (code) => sendToRenderer("duplex:closed", code, ""),
+});
 
 function createWindow(): void {
   win = new BrowserWindow({
@@ -64,42 +63,47 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-
-  electronSession.defaultSession.setPermissionRequestHandler(
-    (_wc, _permission, callback) => callback(true),
-  );
-
   win.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
-  connect();
+  host.connect(SESSION_ID);
+  host.ready();
 
-  globalShortcut.register("Control+Alt+Space", () => {
-    duplex?.sendControl({ type: "break", reason: "global_shortcut" });
+  shortcuts.register("Control+Alt+Space", () => {
+    host.interrupt("global_shortcut");
     sendToRenderer("ui:interrupted");
   });
 
-  ipcMain.handle("media:permissions", checkMediaPermissions);
+  ipcMain.handle("media:permissions", async () => ({
+    microphone: await permissions.status("microphone"),
+    camera: await permissions.status("camera"),
+    screen: await permissions.status("screen"),
+  }));
+  ipcMain.handle("media:request", (_e, kind) => permissions.request(kind));
+  ipcMain.handle("screenshot:capture", () => screenshots.capture());
 
-  ipcMain.on("duplex:control", (_e, control) => duplex?.sendControl(control));
-  ipcMain.on("duplex:audioFrame", (_e, header, pcm: Uint8Array) => {
-    duplex?.sendAudioFrame(header, Buffer.from(pcm));
+  ipcMain.on("duplex:control", (_e, control) => {
+    if ((control as { type?: string })?.type === "stop") host.endCall("client_stop");
+    else host.emit(control as HostEvent);
   });
-  ipcMain.on("screen:frame", (_e, metadata, payload: Uint8Array) => {
-    screenWs?.sendFrame(metadata, Buffer.from(payload));
-  });
-  ipcMain.handle("tool:call", async (_e, tool: string, args: unknown) => {
-    return tools.call(tool, args as Record<string, unknown>);
-  });
+  ipcMain.on("host:event", (_e, event) => host.emit(event as HostEvent));
+  ipcMain.on("call:start", () => host.startCall());
+  ipcMain.on("duplex:audioFrame", (_e, header, pcm: Uint8Array) =>
+    host.sendAudioFrame(header, Buffer.from(pcm)),
+  );
+  ipcMain.on("screen:frame", (_e, metadata, payload: Uint8Array) =>
+    host.sendScreenFrame(metadata, Buffer.from(payload)),
+  );
+  ipcMain.handle("tool:call", (_e, tool: string, args: unknown) =>
+    tools.call(tool, args as Record<string, unknown>),
+  );
 });
 
 app.on("will-quit", () => {
-  globalShortcut.unregisterAll();
-  duplex?.sendControl({ type: "stop" });
-  duplex?.close();
-  screenWs?.close();
+  shortcuts.unregisterAll();
+  host.disconnect("app_quit");
 });
 
 app.on("window-all-closed", () => {

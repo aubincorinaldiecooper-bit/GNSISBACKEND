@@ -2743,6 +2743,24 @@ def create_online_duplex_app(
                             "accepted": fresh,
                         }
                     )
+                elif event_type == "host.event":
+                    # Chassis-neutral desktop-Host lifecycle events
+                    # (host.ready, call.*, device.*, permission.*) — the daemon
+                    # records them on the session timeline; it never sees an
+                    # Electron/Tauri object, only neutral messages.
+                    if coordinator is not None:
+                        host_event = control.get("event")
+                        if isinstance(host_event, dict):
+                            coordinator.timeline.emit(
+                                str(host_event.get("type", "host.event")),
+                                component="host",
+                                fields={
+                                    k: v
+                                    for k, v in host_event.items()
+                                    if k != "type"
+                                },
+                            )
+                    await send_text({"type": "host.event.done"})
                 elif event_type == "task_status":
                     status = coordinator.task_status()
                     await send_text({"type": "task_status", "task": status})
