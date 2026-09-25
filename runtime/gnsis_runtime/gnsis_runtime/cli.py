@@ -133,6 +133,16 @@ class MemoryConfig:
     url: str | None = None
     token_env: str = "GNSIS_MEMORY_TOKEN"
     timeout_sec: float = 10.0
+    # Server-owned durable recall (Omni-SimpleMem sidecar). When
+    # session_recall_url is set, every accepted turn.final queries the
+    # sidecar and feeds compact relevant memories into the pinned context as
+    # memory.episode entries — durable memory is never a client-injected
+    # control message.
+    session_recall_url: str | None = None
+    session_recall_namespace: str = "gnsis"
+    session_recall_token_env: str = "GNSIS_SIMPLEMEM_TOKEN"
+    session_recall_top_k: int = 8
+    session_recall_timeout_sec: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -270,6 +280,10 @@ def validate_release_config(config: ReleaseConfig) -> None:
         raise ValueError("coordinator timeout and max_turns must be positive")
     if config.memory.timeout_sec <= 0:
         raise ValueError("memory.timeout_sec must be positive")
+    if config.memory.session_recall_timeout_sec <= 0:
+        raise ValueError("memory.session_recall_timeout_sec must be positive")
+    if config.memory.session_recall_top_k < 1:
+        raise ValueError("memory.session_recall_top_k must be positive")
 
 
 def preflight_config(config: ReleaseConfig) -> None:
@@ -617,6 +631,19 @@ def build_app(config: ReleaseConfig):
         if config.memory.url
         else None
     )
+    from .session_memory import SessionMemoryRecall
+
+    session_memory = (
+        SessionMemoryRecall(
+            config.memory.session_recall_url,
+            namespace=config.memory.session_recall_namespace,
+            token=os.environ.get(config.memory.session_recall_token_env, ""),
+            top_k=config.memory.session_recall_top_k,
+            timeout_s=config.memory.session_recall_timeout_sec,
+        )
+        if config.memory.session_recall_url
+        else None
+    )
 
     def gateway_factory(session_id: str) -> GNSISGateway:
         session_key = storage_key(session_id)
@@ -675,6 +702,7 @@ def build_app(config: ReleaseConfig):
         ),
         media_dir=runtime_dir / "media",
         detached_talker=detached_talker,
+        session_memory=session_memory,
     )
 
 

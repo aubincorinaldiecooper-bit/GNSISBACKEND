@@ -5,14 +5,12 @@ durable, cross-session knowledge of a repo's conventions, decisions, and which
 changes were accepted or rejected and why. The underlying coding model is rented
 and can't be out-coded; this layer is where a real, compounding edge lives.
 
-Per the project's deliberate scope, **no generic vector/RAG memory is implemented
-yet.** We ship:
+Two providers ship beside the defaults:
 
-* :class:`MemoryProvider` — the contract every provider satisfies.
-* :class:`NullMemoryProvider` — the safe default: writes are accepted and dropped,
-  reads return nothing, so the rest of the system runs unchanged.
-* :class:`SimpleMemProvider` — a named placeholder for the intended provider
-  (`SimpleMem`). It is intentionally inert until built.
+* :class:`gnsis.service.repository.PostgresMemoryProvider` — the audit/source
+  of truth for *approved coding intelligence* (CodeMemory).
+* :class:`gnsis.memory.simplemem.SimpleMemProvider` — the general durable
+  recall surface backed by Omni-SimpleMem (episodic + semantic memory).
 
 Two invariants the design bakes in for when memory *is* built:
 
@@ -131,28 +129,4 @@ class InMemoryMemoryProvider(MemoryProvider):
         return list(reversed(self._by_repo.get(repo, [])))[:limit]
 
 
-class SimpleMemProvider(MemoryProvider):
-    """Optional future ``SimpleMem``-backed provider (not the chosen default).
 
-    Postgres is the selected memory backend for GNSIS (see
-    :class:`gnsis.service.repository.PostgresMemoryProvider`); SimpleMem remains
-    a possible alternative adapter and is intentionally left unimplemented so it
-    can never be enabled by accident before it is real.
-    """
-
-    name = "simplemem"
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise NotImplementedError(
-            "SimpleMem-backed memory is not implemented. The chosen backend is "
-            "Postgres (PostgresMemoryProvider); use that or NullMemoryProvider."
-        )
-
-    def write(self, record: MemoryRecord) -> Optional[MemoryRecord]:  # pragma: no cover
-        raise NotImplementedError
-
-    def search(self, repo: str, query: str, limit: int = 5) -> List[MemoryRecord]:  # pragma: no cover
-        raise NotImplementedError
-
-    def recent(self, repo: str, limit: int = 20) -> List[MemoryRecord]:  # pragma: no cover
-        raise NotImplementedError

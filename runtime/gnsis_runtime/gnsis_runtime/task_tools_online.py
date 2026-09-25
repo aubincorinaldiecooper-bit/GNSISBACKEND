@@ -74,6 +74,7 @@ class TaskToolsRealtimeCoordinator:
         turn_bind_grace_sec: float = 5.0,
         expose_task_slate_to_model: bool = False,
         close_ledger: bool = False,
+        session_memory: Any | None = None,
     ) -> None:
         if delivery_poll_sec <= 0:
             raise ValueError("delivery_poll_sec must be positive")
@@ -101,6 +102,9 @@ class TaskToolsRealtimeCoordinator:
         self.turn_bind_grace_sec = turn_bind_grace_sec
         self.expose_task_slate_to_model = bool(expose_task_slate_to_model)
         self.close_ledger = close_ledger
+        # Server-owned durable recall (Omni-SimpleMem). None = no durable
+        # memory feeding the live session.
+        self.session_memory = session_memory
         self._outputs: asyncio.Queue[TaskToolsOnlineOutput] = asyncio.Queue()
         self._jobs: set[asyncio.Task[Any]] = set()
         self._delivery_task: asyncio.Task[None] | None = None
@@ -340,7 +344,48 @@ class TaskToolsRealtimeCoordinator:
                     self._handle_task_tools(pending_calls, turn),
                     "late-bound-task-tool-batch",
                 )
+            if self.session_memory is not None:
+                self._spawn(self._recall_durable(turn), "memory-recall")
             return turn
+
+    async def _recall_durable(self, turn: TurnEnvelope) -> None:
+        """Feed durable Omni-SimpleMem memories into pinned context.
+
+        Server-owned recall: the runtime queries the sidecar on each bound
+        turn instead of the client injecting ``memory.episode`` messages.
+        Recall latency must not hold the turn, so this runs as a job; episodes
+        land through the serialized ``inject_memory_episode`` path.
+        """
+        try:
+            episodes = await asyncio.to_thread(
+                self.session_memory.episodes_for_turn, turn.final_asr
+            )
+        except Exception:
+            LOGGER.warning(
+                "session memory recall failed", exc_info=True
+            )
+            return
+        injected = 0
+        for episode in episodes:
+            try:
+                await self.inject_memory_episode(episode)
+            except RuntimeError:
+                # Context mode does not accept memory episodes; nothing to do.
+                LOGGER.debug("memory episode rejected by pinned context")
+                return
+            except Exception:
+                LOGGER.warning(
+                    "memory episode injection failed", exc_info=True
+                )
+                return
+            injected += 1
+        LOGGER.info(
+            "session.recall op=inject session=%s turn=%s episodes=%d injected=%d",
+            self.session_id,
+            turn.turn_id,
+            len(episodes),
+            injected,
+        )
 
     def remember_media(self, media: MediaRef) -> None:
         self._ensure_open()

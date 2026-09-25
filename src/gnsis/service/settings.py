@@ -111,8 +111,16 @@ class Settings:
     # CORS origins allowed to call the API from a browser. Default "*".
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 
-    # Long-term memory backend: "postgres" (default) or "none".
+    # Long-term memory backend: "postgres" (default), "none", or "simplemem".
+    # "simplemem" selects the Omni-SimpleMem sidecar as the general recall
+    # surface; it requires simplemem_url + GNSIS_SIMPLEMEM_INTERNAL_TOKEN and
+    # fails loudly rather than silently running memoryless.
     memory_backend: str = "postgres"
+    simplemem_url: Optional[str] = None
+    # Postgres remains the CodeMemory audit store. When a sidecar is
+    # configured, approved records are also mirrored into Omni-SimpleMem as
+    # typed semantic memories preserving the Postgres memory_id.
+    simplemem_token_env: str = "GNSIS_SIMPLEMEM_INTERNAL_TOKEN"
 
     # Legacy Docker sandbox knobs. RETAINED ONLY for designing the hardened
     # container command inside GitHub Actions and for explicitly isolated tests.
@@ -479,6 +487,10 @@ class Settings:
             allowed_repos=repos,
             cors_origins=cors,
             memory_backend=os.environ.get("GNSIS_MEMORY", "postgres"),
+            simplemem_url=os.environ.get("GNSIS_SIMPLEMEM_URL"),
+            simplemem_token_env=os.environ.get(
+                "GNSIS_SIMPLEMEM_TOKEN_ENV", "GNSIS_SIMPLEMEM_INTERNAL_TOKEN"
+            ),
             sandbox=os.environ.get("GNSIS_SANDBOX", "none"),
             sandbox_image=os.environ.get("GNSIS_SANDBOX_IMAGE", "gnsis-sandbox:latest"),
             sandbox_network=os.environ.get("GNSIS_SANDBOX_NETWORK", "bridge"),
