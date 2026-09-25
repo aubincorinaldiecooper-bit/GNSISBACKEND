@@ -6,7 +6,11 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("gnsis", {
   mediaPermissions: () => ipcRenderer.invoke("media:permissions"),
+  requestPermission: (kind: string) => ipcRenderer.invoke("media:request", kind),
+  captureScreenshot: () => ipcRenderer.invoke("screenshot:capture"),
   sendControl: (control: unknown) => ipcRenderer.send("duplex:control", control),
+  sendHostEvent: (event: unknown) => ipcRenderer.send("host:event", event),
+  startCall: () => ipcRenderer.send("call:start"),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>
     ipcRenderer.send("duplex:audioFrame", header, pcm),
   sendScreenFrame: (metadata: unknown, payload: Uint8Array) =>
