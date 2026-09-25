@@ -10,6 +10,7 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
+import { hostLog } from "./hostLog.js";
 import {
   ElectronNotifications,
   ElectronPermissions,
@@ -68,10 +69,36 @@ const host = new HostSession({
     global_shortcuts: true,
     notifications: true,
   },
-  onControl: (c) => sendToRenderer("duplex:control", c),
+  onControl: (c) => {
+    const type = (c as { type?: string })?.type;
+    if (type && type !== "screen.frame.accepted") {
+      hostLog("daemon", String(type));
+    } else if (type === "screen.frame.accepted") {
+      const f = c as { frame_id?: string; context_sampled?: boolean };
+      hostLog("ingestion", `frame.accepted id=${f.frame_id} sampled=${f.context_sampled}`);
+    }
+    sendToRenderer("duplex:control", c);
+  },
   onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
-  onClosed: (code) => sendToRenderer("duplex:closed", code, ""),
-  onScreen: (update) => sendToRenderer("screen:update", update),
+  onClosed: (code) => {
+    hostLog("transport", `duplex closed code=${code}`);
+    sendToRenderer("duplex:closed", code, "");
+  },
+  onScreen: (update) => {
+    if (update.channel) {
+      const ch = update.channel;
+      hostLog(
+        "transport",
+        `screen config token=${ch.token ? "issued" : "absent"} ` +
+          `rate=${ch.recommended_frame_rate ?? "?"}Hz path=${ch.path ?? "?"}`,
+      );
+    }
+    if (update.control) {
+      const ctl = update.control as { type?: string };
+      hostLog("ingestion", `screen ${String(ctl?.type ?? "?")}`);
+    }
+    sendToRenderer("screen:update", update);
+  },
 });
 
 function createWindow(): void {
@@ -98,6 +125,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(async () => {
+  hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
   createWindow();
   host.connect(SESSION_ID);
   host.ready();
@@ -107,18 +135,32 @@ app.whenReady().then(async () => {
     sendToRenderer("ui:interrupted");
   });
 
-  ipcMain.handle("media:permissions", async () => ({
-    microphone: await permissions.status("microphone"),
-    camera: await permissions.status("camera"),
-    screen: await permissions.status("screen"),
-  }));
-  ipcMain.handle("media:request", (_e, kind) => permissions.request(kind));
+  ipcMain.handle("media:permissions", async () => {
+    const status = {
+      microphone: await permissions.status("microphone"),
+      camera: await permissions.status("camera"),
+      screen: await permissions.status("screen"),
+    };
+    hostLog("permissions", `status ${JSON.stringify(status)}`);
+    return status;
+  });
+  ipcMain.handle("media:request", async (_e, kind) => {
+    const result = await permissions.request(kind);
+    hostLog("permissions", `request ${String(kind)} -> ${String(result)}`);
+    return result;
+  });
 
   ipcMain.on("duplex:control", (_e, control) => {
     if ((control as { type?: string })?.type === "stop") host.endCall("client_stop");
     else host.emit(control as HostEvent);
   });
-  ipcMain.on("host:event", (_e, event) => host.emit(event as HostEvent));
+  ipcMain.on("host:event", (_e, event) => {
+    const type = (event as HostEvent)?.type;
+    if (typeof type === "string" && type.startsWith("playback.")) {
+      hostLog("playback", type);
+    }
+    host.emit(event as HostEvent);
+  });
   ipcMain.on("call:start", () => host.startCall());
   ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) =>
     host.sendAudioFrame(header, Buffer.from(pcm)),
@@ -126,27 +168,41 @@ app.whenReady().then(async () => {
   ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) =>
     host.sendScreenFrame(metadata, Buffer.from(payload)),
   );
-  ipcMain.handle("tool:call", (_e, tool: string, args: unknown) =>
-    tools.call(tool, args as Record<string, unknown>),
-  );
+  ipcMain.on("host:log", (_e, line) => {
+    if (typeof line === "string") hostLog("renderer", line);
+  });
+  ipcMain.handle("tool:call", async (_e, tool: string, args: unknown) => {
+    try {
+      const res = await tools.call(tool, args as Record<string, unknown>);
+      hostLog("execution", `tool ${String(tool)} ok`);
+      return res;
+    } catch (err) {
+      hostLog("execution", `tool ${String(tool)} failed: ${String(err)}`);
+      throw err;
+    }
+  });
 });
 
 app.on("will-quit", () => {
+  hostLog("host", "will-quit");
   shortcuts.unregisterAll();
   host.disconnect("app_quit");
 });
 
 app.on("window-all-closed", () => {
+  hostLog("host", "window-all-closed");
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("activate", () => {
   // macOS: closing the window keeps the app alive; a dock click must bring a
   // usable window back rather than leaving a windowless Host.
+  hostLog("host", "activate");
   if (win === null) createWindow();
 });
 
 app.on("second-instance", () => {
+  hostLog("host", "second-instance");
   if (win !== null) {
     if (win.isMinimized()) win.restore();
     win.focus();

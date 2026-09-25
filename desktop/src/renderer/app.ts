@@ -22,6 +22,7 @@ declare const gnsis: {
   requestPermission(kind: string): Promise<string>;
   sendControl(control: unknown): void;
   sendHostEvent(event: unknown): void;
+  hostLog(line: string): void;
   startCall(): void;
   sendAudioFrame(header: unknown, pcm: Uint8Array): void;
   sendScreenFrame(metadata: ScreenFrameMetadata, payload: Uint8Array): void;
@@ -37,6 +38,11 @@ const log = (m: string) => {
   const el = document.getElementById("log")!;
   el.textContent += `${new Date().toISOString().slice(11, 19)} ${m}\n`;
   el.scrollTop = el.scrollHeight;
+  try {
+    gnsis.hostLog(m);
+  } catch {
+    /* packaged or dev — logging is best-effort */
+  }
 };
 const setStatus = (m: string) =>
   (document.getElementById("status")!.textContent = m);
