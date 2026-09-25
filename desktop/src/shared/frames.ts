@@ -48,7 +48,9 @@ export function reconnectDelayMs(
   attempt: number,
   startedAtMs: number,
   nowMs = Date.now(),
+  delays: readonly number[] = RECONNECT_DELAYS_MS,
+  budgetMs: number = RECONNECT_BUDGET_MS,
 ): number | null {
-  if (attempt < 0 || nowMs - startedAtMs > RECONNECT_BUDGET_MS) return null;
-  return RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
+  if (attempt < 0 || delays.length === 0 || nowMs - startedAtMs > budgetMs) return null;
+  return delays[Math.min(attempt, delays.length - 1)];
 }

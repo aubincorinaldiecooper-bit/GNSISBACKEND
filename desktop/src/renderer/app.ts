@@ -15,6 +15,7 @@ import {
   fitWithin,
   resolveFrameRate,
 } from "../shared/frames.js";
+import { CaptureManager } from "../shared/captureLifecycle.js";
 
 declare const gnsis: {
   mediaPermissions(): Promise<Record<string, unknown>>;
@@ -132,7 +133,7 @@ function stopMic(): void {
 // the pace, and frames are fitted to the model's contract — never full-res.
 
 let screenChannel: ScreenChannelConfig | null = null;
-let activeVideoSource: "screen" | "camera" | null = null;
+const capture = new CaptureManager();
 const FRAME_FALLBACK_HZ = 1;
 
 gnsis.onScreen((update) => {
@@ -152,83 +153,107 @@ gnsis.onScreen((update) => {
 });
 
 async function shareFrames(source: "screen" | "camera"): Promise<void> {
-  const stream =
-    source === "camera"
-      ? await navigator.mediaDevices.getUserMedia({ video: true })
-      : await navigator.mediaDevices.getDisplayMedia({ video: true });
-  const track = stream.getVideoTracks()[0];
-  activeVideoSource = source;
-  gnsis.sendHostEvent({
-    type: "device.changed",
-    device_kind: source,
-    detail: track.label ?? source,
-    ts_ms: Date.now(),
-  });
-  const video = document.createElement("video");
-  video.muted = true;
-  video.srcObject = stream;
-  await video.play().catch(() => {});
-  const canvas = document.createElement("canvas");
-  const c2d = canvas.getContext("2d")!;
+  // Intentional source switch (or re-selection): CaptureManager stops the
+  // previous capture session before this acquires — never two streams or
+  // two samplers alive at once.
+  await capture.switchTo(async () => {
+    const stream =
+      source === "camera"
+        ? await navigator.mediaDevices.getUserMedia({ video: true })
+        : await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const track = stream.getVideoTracks()[0];
+    gnsis.sendHostEvent({
+      type: "device.changed",
+      device_kind: source,
+      detail: track.label ?? source,
+      ts_ms: Date.now(),
+    });
+    const video = document.createElement("video");
+    video.muted = true;
+    video.srcObject = stream;
+    await video.play().catch(() => {});
 
-  const rateHz = resolveFrameRate(screenChannel?.recommended_frame_rate, FRAME_FALLBACK_HZ);
-  let framesSent = 0;
-  let sending = false;
-  let lastBytes = 0;
-  const sendFrame = async () => {
-    if (!video.videoWidth || !video.videoHeight || sending) return;
-    sending = true;
-    try {
-      const fit = fitWithin(video.videoWidth, video.videoHeight);
-      if (canvas.width !== fit.width || canvas.height !== fit.height) {
-        canvas.width = fit.width;
-        canvas.height = fit.height;
+    let stopped = false;
+    let captureTimer: ReturnType<typeof setInterval> | null = null;
+    let statsTimer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      stopped = true;
+      if (captureTimer) clearInterval(captureTimer);
+      captureTimer = null;
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = null;
+      video.srcObject = null;
+      for (const t of stream.getTracks()) {
+        try {
+          t.stop();
+        } catch {
+          /* already stopped */
+        }
       }
-      c2d.drawImage(video, 0, 0, fit.width, fit.height);
-      const blob = await new Promise<Blob | null>((r) =>
-        canvas.toBlob(r, "image/jpeg", FRAME_JPEG_QUALITY),
-      );
-      if (!blob) return;
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      gnsis.sendScreenFrame(
-        {
-          type: "screen.frame",
-          frame_id: crypto.randomUUID(),
-          encoding: "jpeg",
-          video_source: source,
-          captured_at_ms: Date.now(),
-          width: canvas.width,
-          height: canvas.height,
-        },
-        bytes,
-      );
-      lastBytes = bytes.byteLength;
-      framesSent += 1;
-    } finally {
-      sending = false;
-    }
-  };
-  // The daemon rate-gates by capture timestamp, so pacer skew is fine — the
-  // timer just needs to be at/above the recommended rate to feed it.
-  const timer = setInterval(() => void sendFrame(), 1000 / rateHz);
-  track.onended = () => {
-    clearInterval(timer);
-    video.srcObject = null;
-    activeVideoSource = null;
-  };
-  log(
-    `${source} on: ${video.videoWidth || "?"}x${video.videoHeight || "?"} ` +
-      `→ ≤${FRAME_FIT_PX}px @ ${rateHz}Hz`,
-  );
-  // Report the effective sample once the stream produces real dimensions.
-  const stats = setInterval(() => {
-    if (framesSent === 0 || activeVideoSource !== source) return;
-    clearInterval(stats);
+    };
+    const sessionHandle = { stop };
+    // OS-ended capture is a real capture-ending event; a stale onended after
+    // a switch must not tear down the newer session.
+    track.onended = () => capture.stopIfCurrent(sessionHandle);
+
+    const canvas = document.createElement("canvas");
+    const c2d = canvas.getContext("2d")!;
+    const rateHz = resolveFrameRate(screenChannel?.recommended_frame_rate, FRAME_FALLBACK_HZ);
+    let framesSent = 0;
+    let sending = false;
+    let lastBytes = 0;
+    const sendFrame = async () => {
+      if (stopped || !video.videoWidth || !video.videoHeight || sending) return;
+      sending = true;
+      try {
+        const fit = fitWithin(video.videoWidth, video.videoHeight);
+        if (canvas.width !== fit.width || canvas.height !== fit.height) {
+          canvas.width = fit.width;
+          canvas.height = fit.height;
+        }
+        c2d.drawImage(video, 0, 0, fit.width, fit.height);
+        const blob = await new Promise<Blob | null>((r) =>
+          canvas.toBlob(r, "image/jpeg", FRAME_JPEG_QUALITY),
+        );
+        // Stopped mid-flight: drop the frame rather than pushing a stale one.
+        if (!blob || stopped) return;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        gnsis.sendScreenFrame(
+          {
+            type: "screen.frame",
+            frame_id: crypto.randomUUID(),
+            encoding: "jpeg",
+            video_source: source,
+            captured_at_ms: Date.now(),
+            width: canvas.width,
+            height: canvas.height,
+          },
+          bytes,
+        );
+        lastBytes = bytes.byteLength;
+        framesSent += 1;
+      } finally {
+        sending = false;
+      }
+    };
+    // The daemon rate-gates by capture timestamp, so pacer skew is fine —
+    // the timer just needs to be at/above the recommended rate to feed it.
+    captureTimer = setInterval(() => void sendFrame(), 1000 / rateHz);
     log(
-      `${source} sampling: ${canvas.width}x${canvas.height} · ` +
-        `${(lastBytes / 1024).toFixed(1)}KB/frame · ${rateHz}Hz`,
+      `${source} on: ${video.videoWidth || "?"}x${video.videoHeight || "?"} ` +
+        `→ ≤${FRAME_FIT_PX}px @ ${rateHz}Hz`,
     );
-  }, 2000);
+    statsTimer = setInterval(() => {
+      if (framesSent === 0) return;
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = null;
+      log(
+        `${source} sampling: ${canvas.width}x${canvas.height} · ` +
+          `${(lastBytes / 1024).toFixed(1)}KB/frame · ${rateHz}Hz`,
+      );
+    }, 2000);
+    return sessionHandle;
+  });
 }
 
 // ---- wire up ----------------------------------------------------------------
