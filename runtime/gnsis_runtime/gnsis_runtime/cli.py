@@ -80,6 +80,11 @@ class DuplexConfig:
         "context_memory", "context_no_previous", "context_slate"
     ] = "context_no_previous"
     expose_task_slate_to_model: bool = False
+    # Delivery gating (AGENTS.md decision 7): when on, a delivery counts as
+    # delivered only on the device's playback ACK, not on socket write; when
+    # off, send-receipt still finalizes (legacy clients that never ack).
+    playback_ack_required: bool = False
+    playback_ack_timeout_sec: float = 15.0
     speak_text_tokens_per_unit: int = 4
     talker_speech_tokens_per_unit: int = 25
     talker_final_speech_tokens_max: int = 0
@@ -280,6 +285,8 @@ def validate_release_config(config: ReleaseConfig) -> None:
         raise ValueError("coordinator timeout and max_turns must be positive")
     if config.memory.timeout_sec <= 0:
         raise ValueError("memory.timeout_sec must be positive")
+    if config.duplex.playback_ack_timeout_sec <= 0:
+        raise ValueError("duplex.playback_ack_timeout_sec must be positive")
     if config.memory.session_recall_timeout_sec <= 0:
         raise ValueError("memory.session_recall_timeout_sec must be positive")
     if config.memory.session_recall_top_k < 1:
@@ -509,6 +516,8 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
         codex_screen_history_seconds=duplex.codex_screen_history_seconds,
         tool_schemas=_tool_schemas(duplex.tools_path),
         expose_task_slate_to_model=duplex.expose_task_slate_to_model,
+        playback_ack_required=duplex.playback_ack_required,
+        playback_ack_timeout_sec=duplex.playback_ack_timeout_sec,
         warm_first_unit=duplex.warm_first_unit,
         startup_probe=duplex.startup_probe,
         max_session_sec=(
