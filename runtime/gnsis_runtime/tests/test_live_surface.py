@@ -1108,15 +1108,17 @@ def test_the_tap_is_answered_before_the_server_replies(harness):
     assert body.index("'Turning the camera on…'") < request_at
     assert body.index("aria-busy") < request_at
 
-def test_the_voice_runtime_keeps_one_gpu_container_warm_for_benchmarking():
-    """The live-vision benchmark must not include the ~115s cold-boot penalty.
+def test_the_voice_runtime_routes_both_sockets_to_one_container():
+    """The two live sockets must land in the same process.
 
-    Keep exactly the one container the two live sockets already require, while
-    retaining the existing idle window setting for the later rollback path.
+    Single-process socket routing is the invariant: `max_containers=1` keeps
+    the duplex state and both sockets in one container. The warm pool is
+    deliberately off (`min_containers=0`) — the ~115s cold boot is accepted —
+    while `scaledown_window` retains a short reuse window after activity.
     """
 
     source = Path("modal/gnsis_voice.py").read_text(encoding="utf-8")
-    assert "min_containers=1," in source
+    assert "min_containers=0," in source
     assert "scaledown_window=300," in source
     assert "max_containers=1," in source
 
