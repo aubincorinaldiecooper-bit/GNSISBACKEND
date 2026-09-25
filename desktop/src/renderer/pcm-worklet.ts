@@ -10,6 +10,10 @@ const CHUNK_SAMPLES = (TARGET_RATE * CHUNK_MS) / 1000;
 
 class PcmResampler extends AudioWorkletProcessor {
   private acc: number[] = [];
+  // Fractional source position carried across process() calls — restarting at
+  // zero per block emits floor(128/ratio)+1 samples per block, drifting the
+  // output above 16 kHz (≈16.19 kHz at a 44.1 kHz device rate).
+  private pos = 0;
 
   constructor() {
     super();
@@ -21,9 +25,11 @@ class PcmResampler extends AudioWorkletProcessor {
     // Nearest-sample downsample; good enough for speech at these ratios and
     // the runtime's unit mapping only needs timing, not hi-fi.
     const ratio = sampleRate / TARGET_RATE;
-    for (let i = 0; i < input.length; i += ratio) {
-      this.acc.push(input[Math.floor(i)]);
+    while (this.pos < input.length) {
+      this.acc.push(input[Math.floor(this.pos)]);
+      this.pos += ratio;
     }
+    this.pos -= input.length;
     while (this.acc.length >= CHUNK_SAMPLES) {
       const chunk = this.acc.splice(0, CHUNK_SAMPLES);
       const pcm = new Int16Array(chunk.length);

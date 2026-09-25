@@ -52,7 +52,8 @@ const setStatus = (m: string) =>
 const playbackCtx = new AudioContext({ sampleRate: 24000 });
 let playbackSeq = 0;
 let outputEpoch = 0;
-let currentSource: AudioBufferSourceNode | null = null;
+const scheduledSources = new Set<AudioBufferSourceNode>();
+let nextStartTime = 0;
 
 async function playPcm(pcm: Uint8Array): Promise<void> {
   const int16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
@@ -65,19 +66,27 @@ async function playPcm(pcm: Uint8Array): Promise<void> {
   const playback_id = `pb-${++playbackSeq}`;
   gnsis.sendHostEvent({ type: "playback.started", playback_id, output_epoch: outputEpoch, ts_ms: Date.now() });
   src.onended = () => {
-    if (currentSource === src) currentSource = null;
+    scheduledSources.delete(src);
     gnsis.sendHostEvent({ type: "playback.completed", playback_id, output_epoch: outputEpoch, ts_ms: Date.now() });
   };
-  currentSource = src;
-  src.start();
+  scheduledSources.add(src);
+  // Chain chunks instead of overlapping them: each buffer starts when the
+  // previous one ends (or now, whichever is later).
+  const startAt = Math.max(playbackCtx.currentTime, nextStartTime);
+  src.start(startAt);
+  nextStartTime = startAt + buf.duration;
 }
 
 function interruptPlayback(reason = "user_interrupt"): void {
-  try {
-    currentSource?.stop();
-  } catch {
-    /* already ended */
+  for (const src of scheduledSources) {
+    try {
+      src.stop();
+    } catch {
+      /* already ended */
+    }
   }
+  scheduledSources.clear();
+  nextStartTime = 0;
   gnsis.sendHostEvent({
     type: "playback.cancelled",
     playback_id: `pb-${playbackSeq}`,
@@ -92,6 +101,7 @@ function interruptPlayback(reason = "user_interrupt"): void {
 let seq = 0;
 let startSample = 0;
 let micStream: MediaStream | null = null;
+let micAudioCtx: AudioContext | null = null;
 let micDevice = "";
 
 async function startMic(): Promise<void> {
@@ -103,6 +113,7 @@ async function startMic(): Promise<void> {
   }
   gnsis.startCall();
   const ctx = new AudioContext();
+  micAudioCtx = ctx;
   await ctx.audioWorklet.addModule("./pcm-worklet.js");
   const src = ctx.createMediaStreamSource(micStream);
   const node = new AudioWorkletNode(ctx, "pcm-resampler");
@@ -126,9 +137,13 @@ async function startMic(): Promise<void> {
 }
 
 function stopMic(): void {
+  // Mute semantics: end local capture only. Sending {"type":"stop"} would
+  // terminate the daemon session and close the duplex socket; restarting the
+  // mic would then queue frames on a dead transport while the UI reports "on".
   micStream?.getTracks().forEach((t) => t.stop());
   micStream = null;
-  gnsis.sendControl({ type: "stop" });
+  void micAudioCtx?.close();
+  micAudioCtx = null;
   log("mic off");
 }
 
@@ -267,6 +282,7 @@ async function shareFrames(source: "screen" | "camera"): Promise<void> {
 gnsis.onControl((c: any) => {
   if (c?.type === "playback.ack.done" || c?.type === "host.event.done") return;
   log(`<- ${c?.type ?? "?"} ${JSON.stringify(c).slice(0, 160)}`);
+  if (c?.type === "playback.cancel") interruptPlayback("daemon_cancel");
   if (c?.type === "ready") setStatus(`session ${c.session_id}`);
 });
 gnsis.onAudio((pcm) => void playPcm(pcm));
