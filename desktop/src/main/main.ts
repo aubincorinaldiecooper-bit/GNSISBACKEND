@@ -71,6 +71,7 @@ const host = new HostSession({
   onControl: (c) => sendToRenderer("duplex:control", c),
   onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
   onClosed: (code) => sendToRenderer("duplex:closed", code, ""),
+  onScreen: (update) => sendToRenderer("screen:update", update),
 });
 
 function createWindow(): void {

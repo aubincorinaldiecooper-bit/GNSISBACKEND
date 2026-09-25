@@ -5,7 +5,17 @@
  * permission.changed. The daemon never sees a DOM or Electron API.
  */
 
-import type { ScreenFrameMetadata } from "../shared/protocol.js";
+import type {
+  ScreenChannelConfig,
+  ScreenFrameMetadata,
+} from "../shared/protocol.js";
+import {
+  FRAME_FIT_PX,
+  FRAME_JPEG_QUALITY,
+  fitWithin,
+  resolveFrameRate,
+} from "../shared/frames.js";
+import { CaptureManager } from "../shared/captureLifecycle.js";
 
 declare const gnsis: {
   mediaPermissions(): Promise<Record<string, unknown>>;
@@ -19,6 +29,7 @@ declare const gnsis: {
   onControl(fn: (control: unknown) => void): void;
   onAudio(fn: (pcm: Uint8Array) => void): void;
   onClosed(fn: (code: number, reason: string) => void): void;
+  onScreen(fn: (update: { channel?: ScreenChannelConfig; control?: unknown }) => void): void;
   onInterrupted(fn: () => void): void;
 };
 
@@ -116,49 +127,133 @@ function stopMic(): void {
 }
 
 // ---- screen / camera ---------------------------------------------------------
+// Persistent-stream sampling, mirroring production video.js: the MediaStream is
+// acquired once per source activation, a hidden <video>+drawImage produces
+// frames (no per-tick ImageCapture), the daemon's recommended_frame_rate sets
+// the pace, and frames are fitted to the model's contract — never full-res.
+
+let screenChannel: ScreenChannelConfig | null = null;
+const capture = new CaptureManager();
+const FRAME_FALLBACK_HZ = 1;
+
+gnsis.onScreen((update) => {
+  if (update.channel) {
+    screenChannel = update.channel;
+    log(
+      `screen channel: rate=${screenChannel.recommended_frame_rate ?? "?"}Hz ` +
+        `history=${screenChannel.codex_screen_history_seconds ?? "?"}s`,
+    );
+  }
+  const c = update.control as { type?: string; reason?: string } | undefined;
+  if (c?.type === "screen.frame.dropped") log(`frame dropped: ${c.reason ?? "?"}`);
+  if (c?.type === "screen.reconnect") {
+    const r = c as { attempt?: number; delay_ms?: number };
+    log(`screen reconnect #${r.attempt} in ${r.delay_ms}ms (capture stays live)`);
+  }
+});
 
 async function shareFrames(source: "screen" | "camera"): Promise<void> {
-  const stream =
-    source === "camera"
-      ? await navigator.mediaDevices.getUserMedia({ video: true })
-      : await navigator.mediaDevices.getDisplayMedia({ video: true });
-  const track = stream.getVideoTracks()[0];
-  gnsis.sendHostEvent({
-    type: "device.changed",
-    device_kind: source,
-    detail: track.label ?? source,
-    ts_ms: Date.now(),
-  });
-  const canvas = document.createElement("canvas");
-  const c2d = canvas.getContext("2d")!;
-  const grab = async () => {
-    const capture = new (
-      ImageCapture as unknown as {
-        new (t: MediaStreamTrack): { grabFrame(): Promise<ImageBitmap> };
+  // Intentional source switch (or re-selection): CaptureManager stops the
+  // previous capture session before this acquires — never two streams or
+  // two samplers alive at once.
+  await capture.switchTo(async () => {
+    const stream =
+      source === "camera"
+        ? await navigator.mediaDevices.getUserMedia({ video: true })
+        : await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const track = stream.getVideoTracks()[0];
+    gnsis.sendHostEvent({
+      type: "device.changed",
+      device_kind: source,
+      detail: track.label ?? source,
+      ts_ms: Date.now(),
+    });
+    const video = document.createElement("video");
+    video.muted = true;
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+
+    let stopped = false;
+    let captureTimer: ReturnType<typeof setInterval> | null = null;
+    let statsTimer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      stopped = true;
+      if (captureTimer) clearInterval(captureTimer);
+      captureTimer = null;
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = null;
+      video.srcObject = null;
+      for (const t of stream.getTracks()) {
+        try {
+          t.stop();
+        } catch {
+          /* already stopped */
+        }
       }
-    )(track);
-    const bmp = await capture.grabFrame();
-    canvas.width = bmp.width;
-    canvas.height = bmp.height;
-    c2d.drawImage(bmp, 0, 0);
-    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.7));
-    if (!blob) return;
-    gnsis.sendScreenFrame(
-      {
-        type: "screen.frame",
-        frame_id: crypto.randomUUID(),
-        encoding: "jpeg",
-        video_source: source,
-        captured_at_ms: Date.now(),
-        width: canvas.width,
-        height: canvas.height,
-      },
-      new Uint8Array(await blob.arrayBuffer()),
+    };
+    const sessionHandle = { stop };
+    // OS-ended capture is a real capture-ending event; a stale onended after
+    // a switch must not tear down the newer session.
+    track.onended = () => capture.stopIfCurrent(sessionHandle);
+
+    const canvas = document.createElement("canvas");
+    const c2d = canvas.getContext("2d")!;
+    const rateHz = resolveFrameRate(screenChannel?.recommended_frame_rate, FRAME_FALLBACK_HZ);
+    let framesSent = 0;
+    let sending = false;
+    let lastBytes = 0;
+    const sendFrame = async () => {
+      if (stopped || !video.videoWidth || !video.videoHeight || sending) return;
+      sending = true;
+      try {
+        const fit = fitWithin(video.videoWidth, video.videoHeight);
+        if (canvas.width !== fit.width || canvas.height !== fit.height) {
+          canvas.width = fit.width;
+          canvas.height = fit.height;
+        }
+        c2d.drawImage(video, 0, 0, fit.width, fit.height);
+        const blob = await new Promise<Blob | null>((r) =>
+          canvas.toBlob(r, "image/jpeg", FRAME_JPEG_QUALITY),
+        );
+        // Stopped mid-flight: drop the frame rather than pushing a stale one.
+        if (!blob || stopped) return;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        gnsis.sendScreenFrame(
+          {
+            type: "screen.frame",
+            frame_id: crypto.randomUUID(),
+            encoding: "jpeg",
+            video_source: source,
+            captured_at_ms: Date.now(),
+            width: canvas.width,
+            height: canvas.height,
+          },
+          bytes,
+        );
+        lastBytes = bytes.byteLength;
+        framesSent += 1;
+      } finally {
+        sending = false;
+      }
+    };
+    // The daemon rate-gates by capture timestamp, so pacer skew is fine —
+    // the timer just needs to be at/above the recommended rate to feed it.
+    captureTimer = setInterval(() => void sendFrame(), 1000 / rateHz);
+    log(
+      `${source} on: ${video.videoWidth || "?"}x${video.videoHeight || "?"} ` +
+        `→ ≤${FRAME_FIT_PX}px @ ${rateHz}Hz`,
     );
-  };
-  const timer = setInterval(grab, 1000);
-  track.onended = () => clearInterval(timer);
-  log(`${source} on`);
+    statsTimer = setInterval(() => {
+      if (framesSent === 0) return;
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = null;
+      log(
+        `${source} sampling: ${canvas.width}x${canvas.height} · ` +
+          `${(lastBytes / 1024).toFixed(1)}KB/frame · ${rateHz}Hz`,
+      );
+    }, 2000);
+    return sessionHandle;
+  });
 }
 
 // ---- wire up ----------------------------------------------------------------

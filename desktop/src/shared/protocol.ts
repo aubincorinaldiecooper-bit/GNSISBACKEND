@@ -29,6 +29,20 @@ export interface ScreenFrameMetadata {
   height?: number;
 }
 
+/**
+ * Screen-channel config the daemon publishes in `ready` and `media.mode.done`
+ * (online_duplex.py `_screen_channel`). The screen socket requires `token` —
+ * connecting without it is rejected before `screen.ready`.
+ */
+export interface ScreenChannelConfig {
+  enabled?: boolean;
+  path?: string | null;
+  token?: string | null;
+  recommended_frame_rate?: number;
+  codex_frame_rate?: number;
+  codex_screen_history_seconds?: number;
+}
+
 export type ClientControl =
   | { type: "ping"; id?: number | string }
   | { type: "stop" }
