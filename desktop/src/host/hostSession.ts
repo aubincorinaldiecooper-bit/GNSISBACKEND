@@ -68,6 +68,15 @@ export class HostSession {
       }
       this.opts.onControl?.(c);
     });
+    // ws emits "error" on DNS/refused/failed upgrades; without a listener Node
+    // throws it as an uncaught exception and can kill the Electron main process.
+    // Surface it as telemetry instead and let close/reconnect drive recovery.
+    this.duplex.on("error", (err) =>
+      this.opts.onControl?.({ type: "transport.error", channel: "duplex", message: String(err) }),
+    );
+    this.screen.on("error", (err) =>
+      this.opts.onScreen?.({ control: { type: "transport.error", channel: "screen", message: String(err) } }),
+    );
     this.screen.on("control", (control) => this.opts.onScreen?.({ control }));
     this.screen.on("reconnect_scheduled", (info) =>
       this.opts.onScreen?.({ control: { type: "screen.reconnect", ...(info as object) } }),
