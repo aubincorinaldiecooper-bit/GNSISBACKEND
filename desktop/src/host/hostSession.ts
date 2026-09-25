@@ -72,7 +72,7 @@ export class HostSession {
     // throws it as an uncaught exception and can kill the Electron main process.
     // Surface it as telemetry instead and let close/reconnect drive recovery.
     this.duplex.on("error", (err) =>
-      this.opts.onControl?.({ type: "transport.error", channel: "duplex", message: String(err) } as ServerControl),
+      this.opts.onControl?.({ type: "transport.error", channel: "duplex", message: String(err) }),
     );
     this.screen.on("error", (err) =>
       this.opts.onScreen?.({ control: { type: "transport.error", channel: "screen", message: String(err) } }),
