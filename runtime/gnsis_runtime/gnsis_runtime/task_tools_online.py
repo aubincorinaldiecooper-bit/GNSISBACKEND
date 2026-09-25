@@ -865,6 +865,12 @@ class TaskToolsRealtimeCoordinator:
                     self._delivery_outputs_pending.discard(
                         (delivery_id, claim_token, delivery_attempt)
                     )
+        harness_bridge = getattr(self, "_harness_bridge", None)
+        if harness_bridge is not None:
+            try:
+                await harness_bridge.stop()
+            except Exception:
+                LOGGER.warning("harness bridge stop failed", exc_info=True)
         try:
             await self.gateway.close()
             if discard_state:

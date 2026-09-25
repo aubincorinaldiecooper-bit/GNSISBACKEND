@@ -151,6 +151,18 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
+class HarnessConfig:
+    # Qwen Live Harness daemon/ACP reuse (AGENTS.md decision 8). discovery_path
+    # points at the daemon's discovery file ({url, protocolVersion, pid,
+    # instanceNonce, token}); when set, each session attaches a HarnessBridge
+    # that normalizes subagent state onto the timeline and enqueues terminal
+    # results into the Gateway delivery lane.
+    discovery_path: str | None = None
+    poll_sec: float = 2.0
+    timeout_sec: float = 10.0
+
+
+@dataclass(frozen=True)
 class ReleaseConfig:
     model: ModelArguments
     server: ServerConfig
@@ -159,6 +171,7 @@ class ReleaseConfig:
     worker: WorkerConfig
     coordinator: CoordinatorConfig
     memory: MemoryConfig
+    harness: HarnessConfig
 
 
 def _section(cls: type[Any], document: dict[str, Any], name: str) -> Any:
@@ -188,6 +201,7 @@ def load_config(path: str | Path) -> ReleaseConfig:
         "worker",
         "coordinator",
         "memory",
+        "harness",
     }
     unknown = sorted(set(document) - sections)
     if unknown:
@@ -200,6 +214,7 @@ def load_config(path: str | Path) -> ReleaseConfig:
         worker=_section(WorkerConfig, document, "worker"),
         coordinator=_section(CoordinatorConfig, document, "coordinator"),
         memory=_section(MemoryConfig, document, "memory"),
+        harness=_section(HarnessConfig, document, "harness"),
     )
     validate_release_config(config)
     return config
@@ -287,6 +302,10 @@ def validate_release_config(config: ReleaseConfig) -> None:
         raise ValueError("memory.timeout_sec must be positive")
     if config.duplex.playback_ack_timeout_sec <= 0:
         raise ValueError("duplex.playback_ack_timeout_sec must be positive")
+    if config.harness.poll_sec <= 0:
+        raise ValueError("harness.poll_sec must be positive")
+    if config.harness.timeout_sec <= 0:
+        raise ValueError("harness.timeout_sec must be positive")
     if config.memory.session_recall_timeout_sec <= 0:
         raise ValueError("memory.session_recall_timeout_sec must be positive")
     if config.memory.session_recall_top_k < 1:
@@ -701,6 +720,18 @@ def build_app(config: ReleaseConfig):
             coordinator_timeout_s=config.coordinator.timeout_sec + 5.0,
         )
 
+    harness_client = None
+    if config.harness.discovery_path:
+        from .harness import HarnessDaemonClient, HarnessUnavailable
+
+        try:
+            harness_client = HarnessDaemonClient.from_discovery_file(
+                config.harness.discovery_path,
+                timeout_sec=config.harness.timeout_sec,
+            )
+        except HarnessUnavailable as exc:
+            LOGGER.warning("harness discovery unusable: %s", exc)
+
     return create_online_duplex_app(
         bundle,
         params=params,
@@ -712,6 +743,8 @@ def build_app(config: ReleaseConfig):
         media_dir=runtime_dir / "media",
         detached_talker=detached_talker,
         session_memory=session_memory,
+        harness_client=harness_client,
+        harness_poll_sec=config.harness.poll_sec,
     )
 
 
