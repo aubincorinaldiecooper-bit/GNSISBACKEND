@@ -80,10 +80,6 @@ export interface NotificationAdapter {
   show(title: string, body: string): void;
 }
 
-export interface ScreenshotAdapter {
-  capture(source?: string): Promise<Uint8Array>;
-}
-
 export interface HostAdapters {
   audioCapture: AudioCaptureAdapter;
   videoCapture: VideoCaptureAdapter;
@@ -91,5 +87,4 @@ export interface HostAdapters {
   permissions: DesktopPermissionAdapter;
   shortcuts: ShortcutAdapter;
   notifications: NotificationAdapter;
-  screenshots: ScreenshotAdapter;
 }

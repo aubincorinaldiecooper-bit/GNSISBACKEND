@@ -19,7 +19,6 @@ We are not choosing Electron because it must remain the permanent chassis. We ar
 - output/call epochs;
 - daemon reconnect/lifecycle;
 - device switching;
-- native screenshots;
 - renderer isolation;
 - packaging/signing patterns.
 
@@ -38,7 +37,6 @@ Electron may own:
 - microphone/camera/screen devices;
 - capture encoders/resamplers;
 - speaker playback;
-- native screenshots;
 - local keyboard/global shortcuts;
 - desktop notifications;
 - update/install lifecycle;

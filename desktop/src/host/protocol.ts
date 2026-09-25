@@ -19,7 +19,6 @@ export interface HostCapabilities {
   camera: boolean;
   screen: boolean;
   playback_ack: boolean;
-  screenshots: boolean;
   global_shortcuts: boolean;
   notifications: boolean;
 }

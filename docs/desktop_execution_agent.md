@@ -28,7 +28,6 @@ The reason is practical: Qwen Live Harness Host already contains working pattern
 - output/call epochs;
 - daemon lifecycle and reconnect;
 - device switching;
-- native screenshots;
 - renderer isolation;
 - desktop packaging/signing patterns.
 
@@ -61,7 +60,6 @@ Electron may own:
 - microphone/camera/screen devices;
 - capture/resampling;
 - speaker playback;
-- native screenshots;
 - keyboard/global shortcuts;
 - desktop notifications;
 - install/update lifecycle;
@@ -111,7 +109,6 @@ At minimum isolate:
 - screen/camera capture;
 - playback;
 - permissions;
-- native screenshots;
 - global shortcuts;
 - desktop notifications.
 
