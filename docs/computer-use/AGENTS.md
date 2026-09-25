@@ -91,6 +91,121 @@ Do not create a parallel execution stack if an existing seam already fits.
 
 ---
 
+## Critical preconditions that must be closed first
+
+These are implementation gaps discovered in the current code. Treat them as prerequisites, not optional polish.
+
+### 1. Close the model -> Host -> model local-tool loop
+
+The runtime already supports model-generated external/business tool calls and a later `tool.response` injection back into the live model.
+
+The Desktop currently has a `ToolRegistry`, but the packaged path only invokes it directly from renderer IPC. There is not yet a complete broker that:
+
+```text
+front-brain emits local business tool.call
+        ↓
+runtime sends call to the owning Desktop Host
+        ↓
+Host validates + executes ToolRegistry adapter
+        ↓
+Host returns correlated tool.response
+        ↓
+runtime feeds response back into the same live model session
+```
+
+Do not build local adapters before proving this path end-to-end. Otherwise tools can exist on the Mac without being callable by GNSIS.
+
+Requirements:
+
+- preserve one pending external-tool call contract unless the runtime is deliberately extended;
+- correlate every call/result to the correct session and call;
+- reject unknown/unadvertised tools;
+- make disconnect/cancellation behavior deterministic;
+- never execute the same call twice after reconnect/retry;
+- return bounded structured errors to the model;
+- keep renderer buttons/debug UI out of the authoritative execution path.
+
+### 2. Keep Host capabilities and model-visible tool schemas in sync
+
+The runtime can expose configured business-tool schemas to the realtime model, while the Desktop owns the concrete local implementations.
+
+Those two catalogs must not drift.
+
+Before execution begins, establish a small capability/manifest contract so:
+
+- the model is not shown a local tool the connected Host cannot execute;
+- a Host adapter is not silently installed but invisible to the model;
+- schema/version mismatches fail closed;
+- session reconnect preserves the same negotiated capability set or explicitly renegotiates it.
+
+Respect the realtime model's tool-schema count/token budget. Do not expose dozens of tiny OS primitives if a smaller, well-typed capability surface can express the same actions.
+
+Prefer a compact tool surface with explicit action arguments over schema explosion, while keeping permissions specific enough to audit.
+
+### 3. Treat local execution as a trust boundary
+
+Once a runtime can ask the Host to move files, type into applications, or control a logged-in browser, the runtime connection is no longer only media transport.
+
+Before enabling side-effecting actions:
+
+- verify how the packaged Host authenticates/trusts the runtime endpoint in local and remote configurations;
+- do not accept executable local-tool requests from an arbitrary runtime URL merely because a WebSocket connected;
+- bind action requests to the active authenticated/trusted session;
+- preserve explicit user permission for risky actions;
+- fail closed on trust/capability mismatch.
+
+Reuse existing GNSIS edge/session authentication where it actually applies; do not invent a second auth system unless the current boundary cannot protect Host execution.
+
+### 4. Add the macOS Accessibility/native-control permission path
+
+Microphone, camera, and Screen Recording permission are not sufficient for generic desktop control.
+
+On macOS, UI automation must account for Accessibility trust and, depending on the chosen native mechanism, any additional Automation/Apple Events prompts.
+
+The generic desktop implementation must include:
+
+- status/preflight for Accessibility trust;
+- a clear user path to grant it;
+- correct behavior when denied/revoked;
+- relaunch/retry behavior where the OS requires it;
+- a small native helper/bridge if Electron/Node cannot provide the required OS API directly;
+- telemetry that distinguishes permission denial from navigation failure.
+
+Do not report generic desktop control as available merely because screen capture works.
+
+### 5. Verify the real-browser attachment mechanism before building browser semantics
+
+The product requirement is the user's existing authenticated browser session.
+
+Do not assume ordinary Chrome remote-debugging flags can always attach to the user's default active profile. Verify current Chrome/browser security constraints and the current upstream `open-browser-use` path first.
+
+Prefer a local extension/native-host or similarly supported attachment mechanism that can control the already-running browser without copying credentials.
+
+Acceptance must prove:
+
+- connect to the intended browser/profile;
+- identify current tabs;
+- preserve existing login state;
+- detach without killing the user's browser;
+- recover from browser restart/disconnect;
+- no cookie/password material enters model context.
+
+If installation currently requires a browser extension or helper, treat that as a real packaging/onboarding dependency and document it rather than hiding it.
+
+### 6. Do not assume Harness can launch the open-ended fallback
+
+The current `HarnessDaemonClient`/ `HarnessBridge` surface monitors subagent snapshots and controls stop/permission/result flow. The normal `task_start` path is backed by the configured worker provider registry.
+
+Therefore Phase 0 must prove how an OpenHands/open-ended desktop navigator is actually started.
+
+If no provider/launch adapter exists:
+
+- add the smallest provider/launch integration behind the existing task system;
+- do not overload the monitoring bridge into a second task system;
+- make task start/progress/permission/terminal state flow through the existing Gateway/timeline/delivery machinery.
+
+---
+
 ## Locked architecture
 
 ### 1. GNSIS remains the owner of the user relationship
@@ -473,13 +588,40 @@ High-frequency events should not synchronously block the realtime path.
 
 Before code changes:
 
-1. inspect `ToolRegistry`, Host event paths, Harness client/bridge, timeline, permissions, visual history, and current packaged reachability;
+1. inspect `ToolRegistry`, Host event paths, runtime external-tool handling, Harness client/bridge, provider registry, timeline, permissions, visual history, and current packaged reachability;
 2. complete the gap matrix above;
-3. identify which actions fit direct local adapters versus Harness-delegated work;
-4. identify any existing code already implementing candidate actions;
-5. report the smallest implementation plan.
+3. trace one model-generated external tool call from model output to the client boundary and prove exactly where execution currently stops;
+4. trace how `tool.response` returns to the live model;
+5. inventory model-visible business-tool schemas and current schema/token budgets;
+6. identify which actions fit direct local adapters versus delegated worker/Harness work;
+7. verify how the Desktop trusts/authenticates its runtime before permitting local side effects;
+8. verify the macOS Accessibility/native automation permission path;
+9. verify the current existing-browser attachment mechanism and any extension/helper requirement;
+10. prove whether the current Harness/provider stack can actually launch the intended open-ended desktop fallback;
+11. identify any existing code already implementing candidate actions;
+12. report the smallest implementation plan.
 
 Do not propose a new general-purpose agent framework.
+
+### PR 0 — local action broker + capability contract
+
+Before adding filesystem/browser/UI adapters, close the authoritative local-tool transport.
+
+Target:
+
+- model-generated external/business `tool.call` reaches the owning Desktop Host;
+- Host validates the negotiated tool name/schema;
+- Host executes through `ToolRegistry`;
+- result/error returns as correlated `tool.response`;
+- runtime feeds the response back into the same live model session;
+- duplicate/replayed calls cannot execute twice;
+- disconnect/cancel behavior is deterministic;
+- Host and runtime negotiate/version the local tool capability catalog;
+- side-effecting local execution only runs for a trusted runtime/session.
+
+Tests must prove one harmless deterministic local fixture tool end-to-end before real OS adapters are added.
+
+Stop after PR 0 is opened and report the proven call/response path and remaining platform dependencies.
 
 ### PR A — deterministic local primitives
 
@@ -525,6 +667,8 @@ Add the smallest generic desktop control surface needed for applications without
 
 Target:
 
+- macOS Accessibility preflight/grant/deny/revoke handling;
+- native helper/bridge if required;
 - focus;
 - click;
 - type;
@@ -537,7 +681,22 @@ Do not add another visual-memory system.
 
 Stop after PR C is opened.
 
-### PR D — verification/recovery closure
+### PR D — delegated/open-ended fallback activation
+
+Prove and wire the launch path for the open-ended navigator only after deterministic/browser/UI primitives exist.
+
+Target:
+
+- an unfamiliar multi-step task can be started through the existing task/provider system;
+- use OpenHands or another selected navigator only as the fallback executor;
+- task progress, permissions, cancellation and terminal result flow through existing Gateway/Harness/timeline/delivery contracts;
+- no second planner, memory system, or user-facing assistant is introduced.
+
+If the existing Harness can only observe/control tasks and cannot launch this backend, add the smallest provider/launch adapter rather than redesigning Harness.
+
+Stop after PR D is opened.
+
+### PR E — verification/recovery closure
 
 Wire action outcomes back into the existing perception/timeline path so GNSIS can distinguish:
 
@@ -551,7 +710,7 @@ Keep retries bounded.
 
 Do not create a second planner or second assistant.
 
-Stop after PR D is opened.
+Stop after PR E is opened.
 
 ---
 
@@ -596,18 +755,22 @@ Do not include in this program:
 This program is complete when:
 
 1. current GNSIS execution architecture remains intact;
-2. deterministic filesystem/app actions are concretely callable;
-3. ordinary local actions do not require a background subagent;
-4. existing browser-session control is concretely callable or has a proven blocker with a documented fallback;
-5. generic desktop UI control exists for cases with no better adapter;
-6. Harness remains the delegated/open-ended execution backend rather than becoming the path for every action;
-7. permission requests remain explicit;
-8. secrets remain outside model-visible context and routine telemetry;
-9. actions emit attributable lifecycle state;
-10. GNSIS can observe and verify important action outcomes using the existing perception path;
-11. failed verification can trigger bounded recovery/fallback rather than silent success;
-12. automated tests prove adapter and lifecycle behavior;
-13. real-device acceptance can exercise the complete:
+2. the live model can invoke a negotiated local Host tool and receive its response end-to-end;
+3. local-tool calls are bound to a trusted runtime/session and cannot replay into duplicate side effects;
+4. Host capabilities and model-visible tool schemas stay synchronized within the realtime schema budget;
+5. deterministic filesystem/app actions are concretely callable;
+6. ordinary local actions do not require a background subagent;
+7. existing browser-session control is concretely callable or has a proven blocker with a documented fallback;
+8. macOS Accessibility/native-control permission is handled explicitly and generic desktop UI control exists for cases with no better adapter;
+9. the selected open-ended fallback can actually be launched through the existing task/provider system;
+10. Harness remains the delegated/open-ended execution integration rather than becoming the path for every action;
+11. permission requests remain explicit;
+12. secrets remain outside model-visible context and routine telemetry;
+13. actions emit attributable lifecycle state;
+14. GNSIS can observe and verify important action outcomes using the existing perception path;
+15. failed verification can trigger bounded recovery/fallback rather than silent success;
+16. automated tests prove adapter and lifecycle behavior;
+17. real-device acceptance can exercise the complete:
 
 ```text
 HEAR / SEE
