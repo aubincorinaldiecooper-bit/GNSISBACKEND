@@ -416,9 +416,15 @@ def _build_session(
         prefix_snapshot=runtime.prefix_snapshot,
     )
     if screen_frames is None:
-        # Retain one frame per model unit across the full context window.
+        # Retain one frame per model unit across the full context window, and
+        # keep a bounded capture-time history of consumed frames over the
+        # configured codex recent-visual horizon.
         screen_frames = LatestScreenFrameBuffer(
-            max_pending_frames=runtime.params.context_max_units
+            max_pending_frames=runtime.params.context_max_units,
+            max_history_frames=_max_recent_screen_frames(runtime),
+            history_window_ms=(
+                runtime.settings.codex_screen_history_seconds * 1000
+            ),
         )
     return GNSISDuplexSession(
         live,

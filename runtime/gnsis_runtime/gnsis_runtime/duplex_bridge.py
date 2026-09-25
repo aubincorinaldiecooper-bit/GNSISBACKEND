@@ -32,6 +32,29 @@ class GNSISDuplexSession:
     def enqueue_screen_frame(self, frame: ScreenFrame) -> None:
         self.screen_frames.publish(frame)
 
+    def latest_screen_frame(self) -> ScreenFrame | None:
+        """Newest frame the model consumed — the current visual state."""
+
+        return self.screen_frames.latest_frame()
+
+    def screen_frame_at_or_before(
+        self, captured_at_ms: int
+    ) -> ScreenFrame | None:
+        """Newest consumed frame captured no later than the timestamp —
+        bounded temporal lookup without reacquiring the screen."""
+
+        return self.screen_frames.frame_at_or_before(captured_at_ms)
+
+    def recent_screen_frames(
+        self,
+        *,
+        limit: int | None = None,
+        within_ms: float | None = None,
+    ) -> tuple[ScreenFrame, ...]:
+        """Consumed visual history, newest first, within the retained window."""
+
+        return self.screen_frames.recent_frames(limit=limit, within_ms=within_ms)
+
     def set_media_mode(self, mode: str) -> str:
         """Switch vision at a model-unit boundary and return the previous mode.
 
