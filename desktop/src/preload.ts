@@ -23,5 +23,7 @@ contextBridge.exposeInMainWorld("gnsis", {
     ipcRenderer.on("duplex:audio", (_e, pcm) => fn(pcm)),
   onClosed: (fn: (code: number, reason: string) => void) =>
     ipcRenderer.on("duplex:closed", (_e, code, reason) => fn(code, reason)),
+  onScreen: (fn: (update: unknown) => void) =>
+    ipcRenderer.on("screen:update", (_e, update) => fn(update)),
   onInterrupted: (fn: () => void) => ipcRenderer.on("ui:interrupted", fn),
 });

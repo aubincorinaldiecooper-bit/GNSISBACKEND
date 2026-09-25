@@ -13,7 +13,10 @@ import {
   type HostCapabilities,
   type HostEvent,
 } from "./protocol.js";
-import type { ScreenFrameMetadata } from "../shared/protocol.js";
+import type {
+  ScreenChannelConfig,
+  ScreenFrameMetadata,
+} from "../shared/protocol.js";
 
 export interface HostSessionOptions {
   runtimeUrl: string;
@@ -23,6 +26,8 @@ export interface HostSessionOptions {
   onControl?: (control: unknown) => void;
   onAudio?: (pcm: Buffer) => void;
   onClosed?: (code: number) => void;
+  /** Daemon screen-channel config / screen-socket controls, for the UI. */
+  onScreen?: (update: { channel?: ScreenChannelConfig; control?: unknown }) => void;
 }
 
 export class HostSession {
@@ -49,7 +54,24 @@ export class HostSession {
       sessionId,
     });
     this.screen = new ScreenClient({ url: this.opts.runtimeUrl, sessionId });
-    this.duplex.on("control", (c) => this.opts.onControl?.(c));
+    this.duplex.on("control", (c) => {
+      const control = c as { type?: string; screen?: ScreenChannelConfig };
+      if (
+        (control.type === "ready" || control.type === "media.mode.done") &&
+        control.screen
+      ) {
+        // The daemon publishes the screen-channel token/config here — the
+        // socket is unusable without it, so transport updates from this, and
+        // the renderer learns the recommended frame rate from the same payload.
+        this.screen?.applyChannel(control.screen);
+        this.opts.onScreen?.({ channel: control.screen });
+      }
+      this.opts.onControl?.(c);
+    });
+    this.screen.on("control", (control) => this.opts.onScreen?.({ control }));
+    this.screen.on("reconnect_scheduled", (info) =>
+      this.opts.onScreen?.({ control: { type: "screen.reconnect", ...(info as object) } }),
+    );
     this.duplex.on("audio", (pcm) => this.opts.onAudio?.(pcm as Buffer));
     this.duplex.on("close", (code) => {
       this.opts.onClosed?.(code);
