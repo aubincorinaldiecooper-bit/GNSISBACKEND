@@ -96,8 +96,7 @@ Do not expose Electron-specific objects or APIs to the daemon.
 The host/daemon protocol should use neutral GNSIS messages such as:
 
 - `audio.frame`
-- `video.frame`
-- `screen.frame`
+- `screen.frame` (one visual-frame type; `video_source` selects screen vs camera)
 - `device.changed`
 - `permission.changed`
 - `playback.started`

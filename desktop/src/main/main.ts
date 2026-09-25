@@ -17,6 +17,7 @@ import {
   ElectronShortcuts,
 } from "../host/electronMain.js";
 import type { HostEvent } from "../host/protocol.js";
+import type { AudioFrameHeader, ScreenFrameMetadata } from "../shared/protocol.js";
 import { ToolRegistry } from "../tools/registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -122,10 +123,10 @@ app.whenReady().then(async () => {
   });
   ipcMain.on("host:event", (_e, event) => host.emit(event as HostEvent));
   ipcMain.on("call:start", () => host.startCall());
-  ipcMain.on("duplex:audioFrame", (_e, header, pcm: Uint8Array) =>
+  ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) =>
     host.sendAudioFrame(header, Buffer.from(pcm)),
   );
-  ipcMain.on("screen:frame", (_e, metadata, payload: Uint8Array) =>
+  ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) =>
     host.sendScreenFrame(metadata, Buffer.from(payload)),
   );
   ipcMain.handle("tool:call", (_e, tool: string, args: unknown) =>

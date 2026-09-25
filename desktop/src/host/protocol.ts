@@ -7,6 +7,11 @@
  * start: host.ready announces capabilities, the daemon answers with its own.
  */
 
+import type {
+  AudioFrameHeader,
+  ScreenFrameMetadata,
+} from "../shared/protocol.js";
+
 export const HOST_PROTOCOL_VERSION = 1;
 
 export interface HostCapabilities {
@@ -75,20 +80,12 @@ export type HostEvent =
     };
 
 /** Neutral media frame headers (payload follows as binary). */
-export interface AudioFrameHeader {
-  type: "audio.frame";
-  sequence: number;
-  start_sample: number;
-  sample_count: number;
-  captured_at_ms: number;
-}
+export type { AudioFrameHeader };
 
-export interface VideoFrameHeader {
-  type: "screen.frame" | "video.frame";
-  frame_id: string;
-  encoding: "jpeg" | "png";
-  video_source: "screen" | "camera";
-  captured_at_ms: number;
-  width?: number;
-  height?: number;
-}
+/**
+ * The daemon's /ws/screen socket accepts exactly one visual-frame type:
+ * `screen.frame`, with `video_source` selecting the capture surface. Screen
+ * and camera share that contract — `video.frame` is not part of the
+ * Host<->daemon wire protocol.
+ */
+export type VideoFrameHeader = ScreenFrameMetadata;

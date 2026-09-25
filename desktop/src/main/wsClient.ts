@@ -5,7 +5,12 @@
  */
 import WebSocket from "ws";
 import { EventEmitter } from "node:events";
-import type { ClientControl, ServerControl } from "../shared/protocol.js";
+import type {
+  AudioFrameHeader,
+  ClientControl,
+  ScreenFrameMetadata,
+  ServerControl,
+} from "../shared/protocol.js";
 
 export interface DuplexClientOptions {
   url: string;
@@ -56,7 +61,7 @@ export class DuplexClient extends EventEmitter {
     this._send(JSON.stringify(control));
   }
 
-  sendAudioFrame(header: ClientControl, pcm: Buffer): void {
+  sendAudioFrame(header: AudioFrameHeader, pcm: Buffer): void {
     this._send(JSON.stringify(header));
     this._send(pcm);
   }
@@ -89,7 +94,7 @@ export class ScreenClient extends EventEmitter {
     ws.on("error", (err) => this.emit("error", err));
   }
 
-  sendFrame(metadata: object, payload: Buffer): void {
+  sendFrame(metadata: ScreenFrameMetadata, payload: Buffer): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify(metadata));
     this.ws.send(payload);

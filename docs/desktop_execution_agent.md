@@ -92,8 +92,7 @@ Use neutral GNSIS protocol events such as:
 - `call.started`
 - `call.ended`
 - `audio.frame`
-- `screen.frame`
-- `video.frame`
+- `screen.frame` (one visual-frame type; `video_source` selects screen vs camera)
 - `device.changed`
 - `permission.changed`
 - `playback.started`
