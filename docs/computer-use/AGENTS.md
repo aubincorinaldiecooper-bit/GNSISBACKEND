@@ -65,11 +65,11 @@ The expected baseline already includes:
 - model-agnostic realtime provider boundary;
 - persistent visual verification capability after an action.
 
-Also confirm the important current limitation:
+Also confirm the important current limitations:
 
-> The packaged Desktop `ToolRegistry` currently exposes only `internet_search`.
+> The packaged Desktop `ToolRegistry` currently exposes only `internet_search`, and it is reachable only through renderer IPC — the runtime's external tool calls have no Host execution/response path.
 
-That is the known last-mile gap. Do not mistake it for an absence of execution architecture.
+Those are the known last-mile gaps. Do not mistake them for an absence of execution architecture — but do not treat adapter registration as the sole remaining work either (see the tool-routing requirement below).
 
 ### Mandatory gap inventory
 
@@ -252,6 +252,24 @@ Do not route every action through OpenHands.
 
 Do not create another delivery/result channel.
 
+### 2a. Bidirectional tool routing is required work
+
+The runtime emits external tool calls and then waits for a client `tool.response`. Today the desktop `ToolRegistry` is invoked only through renderer IPC (a hard-coded UI button), while incoming model-originated tool-call controls are merely logged — no Host path executes the call and returns a correlated response, so a model-issued call leaves the external tool pending forever.
+
+The Host must implement both directions explicitly:
+
+```text
+runtime external tool call (control on the duplex channel)
+        ↓
+HostSession routes it to ToolRegistry by name
+        ↓
+adapter executes (with provenance/permission checks)
+        ↓
+Host sends correlated tool.response back to the runtime
+```
+
+This routing is a prerequisite for every adapter in this program: a registered tool the model cannot reach is not callable. Include it in the earliest adapter PR — do not describe adapters as the sole last-mile gap.
+
 ### 3. GNSIS vision remains the verification layer
 
 Do not add a second competing visual brain by default.
@@ -369,6 +387,17 @@ decision returned to backend
 ```
 
 Do not turn a permission request into an automatic grant.
+
+### Bind local actions to authenticated user intent
+
+When continuous screen/browser perception is active, untrusted text on a webpage or in a document can induce a model-generated tool call — indirect prompt injection that would operate the user's real machine. Approval-only-when-a-backend-asks is therefore insufficient.
+
+Required:
+
+- every external tool call carries origin/provenance (which turn and which input — user speech, user text, or model output influenced by observed screen/page content — produced it), using the same trusted `turn.final` binding the task tools already rely on;
+- sensitive reads (private files, browser session surfaces, credential-adjacent paths) and actions that use authenticated session state require explicit user confirmation before execution;
+- calls whose provenance is untrusted content rather than direct user intent must not execute silently — they surface as a confirmation request or are refused;
+- permission decisions remain explicit timeline state.
 
 ### Keep secrets out of model-visible payloads
 
@@ -676,6 +705,13 @@ Target:
 - keyboard actions;
 - correlation + telemetry;
 - no brittle hard-coded workflow scripts.
+
+macOS consent is required work in this PR, not a follow-up:
+
+- cross-application focus/click/typing needs **Accessibility** trust, and Apple-Events-driven control needs **Automation** consent — the packaged Host currently models only microphone/camera/screen;
+- extend the Host permission model with accessibility/automation status + request paths (Accessibility via the TCC trusted-process prompt, Automation via the Apple Events usage consent and `NSAppleEventsUsageDescription` packaging metadata);
+- defined denial behavior: an action that lacks consent fails with permission-denied telemetry — never a silent no-op and never an implicit grant;
+- packaging metadata and real-device acceptance notes are part of the PR.
 
 Do not add another visual-memory system.
 
