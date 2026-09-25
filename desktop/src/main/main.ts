@@ -13,7 +13,6 @@ import { HostSession } from "../host/hostSession.js";
 import {
   ElectronNotifications,
   ElectronPermissions,
-  ElectronScreenshots,
   ElectronShortcuts,
 } from "../host/electronMain.js";
 import type { HostEvent } from "../host/protocol.js";
@@ -52,7 +51,6 @@ let win: BrowserWindow | null = null;
 const permissions = new ElectronPermissions();
 const shortcuts = new ElectronShortcuts();
 const notifications = new ElectronNotifications();
-const screenshots = new ElectronScreenshots();
 const tools = new ToolRegistry({ runtimeUrl: RUNTIME_URL });
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
@@ -67,7 +65,6 @@ const host = new HostSession({
     camera: true,
     screen: true,
     playback_ack: true,
-    screenshots: true,
     global_shortcuts: true,
     notifications: true,
   },
@@ -115,7 +112,6 @@ app.whenReady().then(async () => {
     screen: await permissions.status("screen"),
   }));
   ipcMain.handle("media:request", (_e, kind) => permissions.request(kind));
-  ipcMain.handle("screenshot:capture", () => screenshots.capture());
 
   ipcMain.on("duplex:control", (_e, control) => {
     if ((control as { type?: string })?.type === "stop") host.endCall("client_stop");

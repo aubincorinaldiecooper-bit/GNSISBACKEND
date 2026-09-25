@@ -1,10 +1,9 @@
 /**
  * Electron implementations of the main-process adapters: permissions,
- * global shortcuts, notifications, native screenshots.
+ * global shortcuts, notifications.
  * The only file that may import electron for these capabilities.
  */
 import {
-  desktopCapturer,
   globalShortcut,
   Notification,
   systemPreferences,
@@ -14,7 +13,6 @@ import type {
   NotificationAdapter,
   PermissionKind,
   PermissionState,
-  ScreenshotAdapter,
   ShortcutAdapter,
 } from "./adapters.js";
 
@@ -53,19 +51,5 @@ export class ElectronShortcuts implements ShortcutAdapter {
 export class ElectronNotifications implements NotificationAdapter {
   show(title: string, body: string): void {
     new Notification({ title, body }).show();
-  }
-}
-
-export class ElectronScreenshots implements ScreenshotAdapter {
-  async capture(sourceId?: string): Promise<Uint8Array> {
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: 1600, height: 1000 },
-    });
-    const source = sourceId
-      ? sources.find((s) => s.id === sourceId)
-      : sources[0];
-    if (!source) throw new Error("no screen source available");
-    return source.thumbnail.toPNG();
   }
 }

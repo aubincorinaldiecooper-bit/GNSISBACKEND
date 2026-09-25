@@ -10,7 +10,6 @@ import type { ScreenFrameMetadata } from "../shared/protocol.js";
 declare const gnsis: {
   mediaPermissions(): Promise<Record<string, unknown>>;
   requestPermission(kind: string): Promise<string>;
-  captureScreenshot(): Promise<Uint8Array>;
   sendControl(control: unknown): void;
   sendHostEvent(event: unknown): void;
   startCall(): void;
