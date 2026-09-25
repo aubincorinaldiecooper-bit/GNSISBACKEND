@@ -2,8 +2,8 @@
 
 Client for the GNSIS SimpleMem sidecar (``tools/simplemem/sidecar.py``), the
 hardened HTTP boundary around the upstream open-source ``simplemem`` package
-ported from Clipit's production implementation (CLIPIT PRs #106/#107/#109/
-#114/#123/#126).
+ported from the production deployment that hardened it (PRs #106/#107/#109/
+#114/#123/#126 there).
 
 Design contract (per AGENTS.md):
 

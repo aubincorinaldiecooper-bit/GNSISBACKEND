@@ -1,13 +1,13 @@
 """GNSIS's HTTP boundary around upstream Omni-SimpleMem.
 
-Ported from Clipit's hardened sidecar (CLIPIT ``tools/simplemem/sidecar.py``,
-merged through PRs #106/#107/#109/#114/#123/#126). The product contract it adds
-over the upstream package is reshaped for GNSIS: instead of one namespace per
-Clipit video, a namespace is one GNSIS memory scope (for example ``repo:owner/name``
-or ``workspace:<id>``), and every memory carries an explicit type plus
-structured provenance instead of only frame coordinates.
+Ported from the production video-retrieval service that battle-tested it
+(hardened through PRs #106/#107/#109/#114/#123/#126 there). The product
+contract it adds over the upstream package is reshaped for GNSIS: instead of
+one namespace per source video, a namespace is one GNSIS memory scope (for
+example ``repo:owner/name`` or ``workspace:<id>``), and every memory carries
+an explicit type plus structured provenance instead of only frame coordinates.
 
-Kept intact from the Clipit implementation:
+Kept intact from that implementation:
 
 - the transformers 4.57 CLIP contract check (transformers 5.x makes
   ``get_image_features`` return a ``BaseModelOutputWithPooling`` and upstream
