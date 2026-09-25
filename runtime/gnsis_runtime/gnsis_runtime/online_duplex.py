@@ -309,6 +309,11 @@ class _Runtime:
     # session memoryless; when set, each accepted turn.final is queried and
     # compact hits are injected through the memory.episode channel.
     session_memory: Any | None = None
+    # Qwen Live Harness daemon/ACP backend (optional): when a client is
+    # supplied each coordinator attaches a HarnessBridge that translates
+    # subagent state onto the timeline + Gateway delivery lane.
+    harness_client: Any | None = None
+    harness_poll_sec: float = 2.0
     prefix_snapshot: Any | None = None
     prefix_cache_status: str = "pending"
     prefix_prepare_seconds: float | None = None
@@ -1034,6 +1039,8 @@ def create_online_duplex_app(
     media_dir: str | Path,
     detached_talker: Any | None = None,
     session_memory: Any | None = None,
+    harness_client: Any | None = None,
+    harness_poll_sec: float = 2.0,
 ):
     """Create the persistent MiniCPM, task-tools and screen endpoints."""
 
@@ -1048,6 +1055,8 @@ def create_online_duplex_app(
         media_dir=Path(media_dir).expanduser().resolve(),
         detached_talker=detached_talker,
         session_memory=session_memory,
+        harness_client=harness_client,
+        harness_poll_sec=harness_poll_sec,
     )
     if not runtime.settings.edge_secret:
         LOGGER.warning(
@@ -2017,12 +2026,23 @@ def create_online_duplex_app(
                 ),
                 close_ledger=True,
                 session_memory=runtime.session_memory,
+                timeline=timeline,
                 playback_ack_required=runtime.settings.playback_ack_required,
                 playback_ack_timeout_sec=(
                     runtime.settings.playback_ack_timeout_sec
                 ),
             )
             await task_coordinator.start()
+            if runtime.harness_client is not None:
+                from .harness import HarnessBridge
+
+                harness_bridge = HarnessBridge(
+                    task_coordinator,
+                    runtime.harness_client,
+                    poll_sec=runtime.harness_poll_sec,
+                )
+                harness_bridge.start()
+                task_coordinator._harness_bridge = harness_bridge
             # The Brain is warmed in the background once the client is ready;
             # seeing and hearing must not wait on it.
             return task_coordinator
@@ -2743,6 +2763,73 @@ def create_online_duplex_app(
                             "accepted": fresh,
                         }
                     )
+                elif event_type == "host.event":
+                    # Chassis-neutral desktop-Host lifecycle events
+                    # (host.ready, call.*, device.*, permission.*) — the daemon
+                    # records them on the session timeline; it never sees an
+                    # Electron/Tauri object, only neutral messages.
+                    if coordinator is not None:
+                        host_event = control.get("event")
+                        if isinstance(host_event, dict):
+                            coordinator.timeline.emit(
+                                str(host_event.get("type", "host.event")),
+                                component="host",
+                                fields={
+                                    k: v
+                                    for k, v in host_event.items()
+                                    if k != "type"
+                                },
+                            )
+                    await send_text({"type": "host.event.done"})
+                elif event_type == "host.event":
+                    # Chassis-neutral desktop-Host lifecycle events
+                    # (host.ready, call.*, device.*, permission.*) — the daemon
+                    # records them on the session timeline; it never sees an
+                    # Electron/Tauri object, only neutral messages.
+                    if coordinator is not None:
+                        host_event = control.get("event")
+                        if isinstance(host_event, dict):
+                            coordinator.timeline.emit(
+                                str(host_event.get("type", "host.event")),
+                                component="host",
+                                fields={
+                                    k: v
+                                    for k, v in host_event.items()
+                                    if k != "type"
+                                },
+                            )
+                    await send_text({"type": "host.event.done"})
+                elif event_type in {"task.stop", "task.permission"}:
+                    bridge = getattr(
+                        coordinator, "_harness_bridge", None
+                    ) if coordinator is not None else None
+                    if bridge is None:
+                        await send_text(
+                            {"type": "error", "message": "no harness backend"}
+                        )
+                        continue
+                    try:
+                        if event_type == "task.stop":
+                            result = await asyncio.to_thread(
+                                bridge.client.stop_task,
+                                str(control.get("task_id", "")),
+                            )
+                        else:
+                            result = await asyncio.to_thread(
+                                bridge.client.decide_permission,
+                                str(control.get("request_handle", "")),
+                                str(control.get("decision", "deny")),
+                                scope=control.get("scope"),
+                            )
+                    except (TypeError, ValueError) as exc:
+                        await send_text({"type": "error", "message": str(exc)})
+                        continue
+                    coordinator.timeline.emit(
+                        "harness.control",
+                        component="harness",
+                        fields={"action": event_type, "result": result},
+                    )
+                    await send_text({"type": "harness.result", "result": result})
                 elif event_type == "task_status":
                     status = coordinator.task_status()
                     await send_text({"type": "task_status", "task": status})
