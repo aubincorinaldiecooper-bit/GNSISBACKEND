@@ -1,0 +1,43 @@
+name: desktop-dmg
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop-dmg.yml"
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - working-directory: desktop
+        run: npm ci
+      - working-directory: desktop
+        run: npm run typecheck
+      - working-directory: desktop
+        run: npm test
+      - name: Package unsigned development DMG (arm64)
+        working-directory: desktop
+        run: npm run package:mac
+      - name: Inspect packaged app for accidental secrets
+        working-directory: desktop
+        run: |
+          if grep -rilE "(api[_-]?key|secret|password|BEGIN PRIVATE KEY)" \
+            "release/mac-arm64/GNSIS.app/Contents/Resources/app" \
+            --include='*.js' --include='*.json' 2>/dev/null | grep -v icon; then
+            echo "possible secret material in packaged app" && exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GNSIS-dmg-arm64
+          path: desktop/release/*.dmg
+          if-no-files-found: error

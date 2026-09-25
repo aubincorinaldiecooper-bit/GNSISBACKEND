@@ -7,6 +7,7 @@
  */
 import { app, BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
 import {
@@ -20,7 +21,29 @@ import { ToolRegistry } from "../tools/registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const RUNTIME_URL = process.env.GNSIS_RUNTIME_URL ?? "http://127.0.0.1:8080";
+// Runtime resolution: GNSIS_RUNTIME_URL env var first (dev/CI), then a
+// persisted desktop setting at <userData>/gnsis.json ({"runtimeUrl": ...}),
+// then the local default. Packaged builds can't rely on env, so the JSON
+// file is the supported seam for pointing the installed app at any runtime
+// — including the future LocalGNSISProvider on 127.0.0.1.
+function resolveRuntimeUrl(): string {
+  const env = process.env.GNSIS_RUNTIME_URL;
+  if (env) return env;
+  try {
+    const cfgPath = path.join(app.getPath("userData"), "gnsis.json");
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+      runtimeUrl?: unknown;
+    };
+    if (typeof cfg.runtimeUrl === "string" && cfg.runtimeUrl) {
+      return cfg.runtimeUrl;
+    }
+  } catch {
+    // no config file / unreadable — fall through to the default
+  }
+  return "http://127.0.0.1:8080";
+}
+
+const RUNTIME_URL = resolveRuntimeUrl();
 const HOST_ID = process.env.GNSIS_HOST_ID ?? `host-${process.pid}`;
 const SESSION_ID = process.env.GNSIS_SESSION_ID ?? HOST_ID;
 
@@ -57,13 +80,22 @@ function createWindow(): void {
     width: 960,
     height: 640,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,
       sandbox: false,
       nodeIntegration: false,
     },
   });
   win.loadFile(path.join(__dirname, "../renderer/index.html"));
+  win.on("closed", () => {
+    win = null;
+  });
+}
+
+// One HostSession per machine: a second GNSIS.app instance would open a
+// second duplex socket and duplicate capture/shortcut state.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
 }
 
 app.whenReady().then(async () => {
@@ -108,4 +140,19 @@ app.on("will-quit", () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("activate", () => {
+  // macOS: closing the window keeps the app alive; a dock click must bring a
+  // usable window back rather than leaving a windowless Host.
+  if (win === null) createWindow();
+});
+
+app.on("second-instance", () => {
+  if (win !== null) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  } else {
+    createWindow();
+  }
 });
