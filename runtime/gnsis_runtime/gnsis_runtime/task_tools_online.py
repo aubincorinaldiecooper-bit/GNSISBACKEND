@@ -19,7 +19,9 @@ from .contracts import (
     storage_key,
 )
 from .coordination import TurnEnvelope
+from .delivery_gate import DeliveryGate
 from .lean_realtime import TaskToolHandler, worker_delivery_response
+from .timeline import SessionTimeline
 
 LOGGER = logging.getLogger(__name__)
 _TASK_TOOLS = frozenset({"task_start", "task_send", "task_resolve"})
@@ -75,6 +77,9 @@ class TaskToolsRealtimeCoordinator:
         expose_task_slate_to_model: bool = False,
         close_ledger: bool = False,
         session_memory: Any | None = None,
+        timeline: SessionTimeline | None = None,
+        playback_ack_required: bool = False,
+        playback_ack_timeout_sec: float = 15.0,
     ) -> None:
         if delivery_poll_sec <= 0:
             raise ValueError("delivery_poll_sec must be positive")
@@ -105,6 +110,17 @@ class TaskToolsRealtimeCoordinator:
         # Server-owned durable recall (Omni-SimpleMem). None = no durable
         # memory feeding the live session.
         self.session_memory = session_memory
+        # Shared causal timeline + delivery gate (AGENTS.md decisions 7 & 10):
+        # one ordered event plane, output epochs, and playback-ACK truth before
+        # a queued background result may announce.
+        self.timeline = timeline or SessionTimeline(session_id)
+        self.gate = DeliveryGate(
+            self.timeline, playback_ack_timeout_sec=playback_ack_timeout_sec
+        )
+        self.playback_ack_required = bool(playback_ack_required)
+        # delivery_id -> (claim_token, claim_attempt, epoch) for announcements
+        # whose authoritative 'delivered' is a device playback ACK.
+        self._pending_acks: dict[str, tuple[str, int, int]] = {}
         self._outputs: asyncio.Queue[TaskToolsOnlineOutput] = asyncio.Queue()
         self._jobs: set[asyncio.Task[Any]] = set()
         self._delivery_task: asyncio.Task[None] | None = None
@@ -336,6 +352,18 @@ class TaskToolsRealtimeCoordinator:
             self._latest_turn = turn
             self._next_context_revision = revision
             self._recent_media.clear()
+            self.gate.note_user_speech()
+            self.timeline.emit(
+                "turn.bound",
+                component="coordinator",
+                correlation_id=turn_id,
+                fields={
+                    "turn_id": turn_id,
+                    "context_revision": revision,
+                    "text_chars": len(final_asr),
+                },
+                source_ts_ms=timestamp_ms,
+            )
             pending_calls = self._pending_task_calls
             if pending_calls is not None:
                 self._pending_task_calls = None
@@ -677,7 +705,111 @@ class TaskToolsRealtimeCoordinator:
         )
         with self._state_lock:
             self._delivery_outputs_pending.discard(key)
+            self._pending_acks.pop(output.delivery_id, None)
+        self.gate.note_delivered(output.delivery_id)
+        self.timeline.emit(
+            "delivery.acknowledged",
+            component="coordinator",
+            correlation_id=output.delivery_id,
+            fields={"delivered": delivered},
+        )
         return record
+
+    def note_output_sent(self, output: TaskToolsOnlineOutput) -> None:
+        """An announcement's model event reached the socket.
+
+        With ``playback_ack_required`` the delivery stays 'delivering' until
+        the device's playback ACK lands; without it, send-receipt remains the
+        finalization (legacy clients) and the gate's playback ledger still
+        observes it.
+        """
+        if output.delivery_id is None:
+            return
+        epoch = self.gate.output_epoch
+        self.gate.note_output_sent(output.delivery_id, epoch=epoch)
+        self.gate.note_model_output_finished(epoch=epoch)
+        if self.playback_ack_required:
+            with self._state_lock:
+                self._pending_acks[output.delivery_id] = (
+                    output.claim_token,
+                    output.delivery_attempt,
+                    epoch,
+                )
+
+    def note_playback_ack(self, payload: Mapping[str, Any]) -> bool:
+        """Device playback ACK — the authoritative delivered signal.
+
+        ``{"delivery_id": ..., "phase": "started|finished|cancelled"}``.
+        Returns False when the ACK was for a stale output epoch.
+        """
+        delivery_id = payload.get("delivery_id") or payload.get("playback_id")
+        phase = payload.get("phase")
+        if not isinstance(delivery_id, str) or not isinstance(phase, str):
+            raise ValueError("playback.ack requires delivery_id and phase")
+        epoch = payload.get("output_epoch")
+        fresh = self.gate.note_playback_ack(
+            delivery_id,
+            phase,
+            epoch=epoch if isinstance(epoch, int) else None,
+            source_ts_ms=payload.get("at_ms"),
+        )
+        if not fresh:
+            return False
+        if phase not in {"finished", "cancelled"}:
+            return True
+        with self._state_lock:
+            pending = self._pending_acks.pop(delivery_id, None)
+        if pending is None:
+            # ACK for a delivery already finalized (legacy path) — record it
+            # for the timeline, but there is nothing left to commit.
+            return True
+        claim_token, claim_attempt, _ = pending
+        try:
+            self.gateway.delivery.acknowledge_consumed(
+                delivery_id,
+                claim_token,
+                claim_attempt=claim_attempt,
+                delivered=phase == "finished",
+            )
+            self.gate.note_delivered(delivery_id)
+        except Exception:
+            LOGGER.warning(
+                "could not commit playback ack for %s", delivery_id, exc_info=True
+            )
+        return True
+
+    def note_user_interruption(self, *, reason: str = "client_break") -> int:
+        """A meaningful user interruption: cancel the active output epoch."""
+        self.gate.note_user_speech()
+        epoch = self.gate.interrupt(reason=reason)
+        self.timeline.emit(
+            "user.interruption",
+            component="coordinator",
+            fields={"reason": reason},
+            output_epoch=epoch,
+        )
+        return epoch
+
+    def _finish_expired_playback(self, delivery_id: str) -> None:
+        """Deterministic ACK-timeout recovery: declare the delivery undelivered."""
+        with self._state_lock:
+            pending = self._pending_acks.pop(delivery_id, None)
+        if pending is None:
+            return
+        claim_token, claim_attempt, _ = pending
+        try:
+            self.gateway.delivery.acknowledge_consumed(
+                delivery_id,
+                claim_token,
+                claim_attempt=claim_attempt,
+                delivered=False,
+            )
+            self.gate.note_failed(delivery_id, reason="playback_ack_timeout")
+        except Exception:
+            LOGGER.warning(
+                "could not finish ack-timed-out delivery %s", delivery_id,
+                exc_info=True,
+            )
 
     async def stop_model_jobs(self) -> None:
         """Stop everything that touches the Thinker session.
@@ -831,7 +963,19 @@ class TaskToolsRealtimeCoordinator:
                 if not pending or self._model_input_busy():
                     await asyncio.sleep(self.delivery_poll_sec)
                     continue
+                for expired_id in self.gate.take_expired():
+                    self._finish_expired_playback(expired_id)
                 first = pending[0]
+                # Delivery gate: queued results may announce only when the
+                # foreground is quiet — no user speech, no open model output,
+                # no prior playback still draining on the device.
+                self.gate.register(first.delivery_id, delivery_id=first.delivery_id)
+                allowed, blocked_by = self.gate.may_announce(
+                    first.delivery_id, timing=first.timing
+                )
+                if not allowed:
+                    await asyncio.sleep(self.delivery_poll_sec)
+                    continue
                 if first.timing == "safe_pause" and not await self._safe_pause():
                     await asyncio.sleep(self.delivery_poll_sec)
                     continue
@@ -846,7 +990,9 @@ class TaskToolsRealtimeCoordinator:
                     if delivery.timing == "interrupt":
                         # Worker interrupts stop current output without setting the
                         # persistent client break flag.
+                        self.gate.interrupt(reason="delivery_interrupt")
                         await self._call_session("interrupt_output")
+                    self.gate.note_delivering(delivery.delivery_id)
                     response = worker_delivery_response(self.gateway, delivery)
                     key = (
                         delivery.delivery_id,
@@ -874,6 +1020,9 @@ class TaskToolsRealtimeCoordinator:
                             )
                         )
                 except asyncio.CancelledError:
+                    self.gate.cancel(
+                        delivery.delivery_id, reason="session_closed"
+                    )
                     key = (
                         delivery.delivery_id,
                         delivery.claim_token,
@@ -897,6 +1046,9 @@ class TaskToolsRealtimeCoordinator:
                     raise
                 except Exception as exc:
                     LOGGER.warning("worker delivery injection failed", exc_info=True)
+                    self.gate.note_failed(
+                        delivery.delivery_id, reason="inject_failed"
+                    )
                     key = (
                         delivery.delivery_id,
                         delivery.claim_token,

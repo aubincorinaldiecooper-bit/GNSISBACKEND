@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from mcpmft.infer import startup_timing
 
-from .contracts import MediaRef
+from .contracts import MediaRef, storage_key
 from .duplex_bridge import GNSISDuplexSession
 from .media_mode import (
     CLIENT_VIDEO_MODES,
@@ -201,6 +201,11 @@ class OnlineDuplexSettings:
     persist_camera_frames: bool = False
     tool_schemas: tuple[dict[str, Any], ...] = ()
     expose_task_slate_to_model: bool = False
+    # Delivery gating: when on, a background announcement is 'delivered' only
+    # after the device's playback ACK; when off, socket write finalizes it
+    # (legacy clients that never send playback.ack).
+    playback_ack_required: bool = False
+    playback_ack_timeout_sec: float = 15.0
     warm_first_unit: bool = True
     # Startup profiling aid, off in normal operation. When on, the boot pays
     # two extra measurements before serving: a trivial GPU op that attributes
@@ -1957,7 +1962,9 @@ def create_online_duplex_app(
                 # Touch was the whole unit, or a haptic call was malformed:
                 # either way the runtime answers the model itself.
                 if output.delivery_id is not None:
-                    coordinator.acknowledge_output(output)
+                    coordinator.note_output_sent(output)
+                    if not coordinator.playback_ack_required:
+                        coordinator.acknowledge_output(output)
                 if split.rejected is not None:
                     answer: dict[str, Any] = {"status": "rejected", "error": split.rejected}
                 elif len(split.cues) == 1:
@@ -1976,13 +1983,25 @@ def create_online_duplex_app(
                 wait_sent=output.delivery_id is not None,
             )
             if output.delivery_id is not None:
-                coordinator.acknowledge_output(output)
+                coordinator.note_output_sent(output)
+                if not coordinator.playback_ack_required:
+                    coordinator.acknowledge_output(output)
             coordinator.observe_frontbrain(event)
 
         async def build_coordinator(
             model_session: GNSISDuplexSession,
         ) -> TaskToolsRealtimeCoordinator:
             gateway = runtime.gateway_factory(session_id)
+            from .timeline import SessionTimeline
+
+            timeline = SessionTimeline(
+                session_id,
+                log_path=(
+                    runtime.media_dir / f"{storage_key(session_id)}.timeline.jsonl"
+                    if runtime.media_dir is not None
+                    else None
+                ),
+            )
             task_coordinator = TaskToolsRealtimeCoordinator(
                 gateway,
                 owner_id=session_id,
@@ -1998,6 +2017,10 @@ def create_online_duplex_app(
                 ),
                 close_ledger=True,
                 session_memory=runtime.session_memory,
+                playback_ack_required=runtime.settings.playback_ack_required,
+                playback_ack_timeout_sec=(
+                    runtime.settings.playback_ack_timeout_sec
+                ),
             )
             await task_coordinator.start()
             # The Brain is warmed in the background once the client is ready;
@@ -2185,7 +2208,9 @@ def create_online_duplex_app(
                                 wait_sent=output.delivery_id is not None,
                             )
                             if output.delivery_id is not None:
-                                coordinator.acknowledge_output(output)
+                                coordinator.note_output_sent(output)
+                                if not coordinator.playback_ack_required:
+                                    coordinator.acknowledge_output(output)
                         else:
                             await emit_model_event(output.value, output)
 
@@ -2630,6 +2655,8 @@ def create_online_duplex_app(
                     if want_video and (source or "camera") == "camera":
                         _session_mark("camera_mode_applied")
                 elif event_type == "break":
+                    if coordinator is not None:
+                        coordinator.note_user_interruption(reason="client_break")
                     await asyncio.to_thread(session.set_break)
                     await send_text({"type": "break.done"})
                 elif event_type == "clear_break":
@@ -2697,6 +2724,23 @@ def create_online_duplex_app(
                             "message": (
                                 "task_tools_v1 binds user text only through turn.final"
                             ),
+                        }
+                    )
+                elif event_type == "playback.ack":
+                    if coordinator is None:
+                        await send_text(
+                            {"type": "error", "message": "no active coordinator"}
+                        )
+                        continue
+                    try:
+                        fresh = coordinator.note_playback_ack(control)
+                    except (TypeError, ValueError) as exc:
+                        await send_text({"type": "error", "message": str(exc)})
+                        continue
+                    await send_text(
+                        {
+                            "type": "playback.ack.done",
+                            "accepted": fresh,
                         }
                     )
                 elif event_type == "task_status":
