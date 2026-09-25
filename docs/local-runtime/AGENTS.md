@@ -100,7 +100,7 @@ Before implementation:
 
 1. confirm the desktop Host files are actually present on `main`;
 2. specifically verify `desktop/` exists and the Host/daemon `host.event` seam is present;
-3. if PR #104 (desktop reconciliation) is still open, stop implementation and report that the desktop baseline is incomplete;
+3. if the desktop Host is absent or its `host.event` seam is missing, stop implementation and report that the desktop baseline is incomplete;
 4. do not silently re-create the desktop Host in this task;
 5. verify the current `RealtimeProvider` interface and use it rather than wiring local inference directly into the desktop shell.
 
