@@ -18,10 +18,10 @@ const fakeSource = (duration: number) => {
     },
     stop() {
       this.stops++;
-      this.onended?.();
+      (this.onended as (() => void) | null)?.();
     },
     end() {
-      this.onended?.();
+      (this.onended as (() => void) | null)?.();
     },
   };
   return src;
