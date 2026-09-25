@@ -27,7 +27,6 @@ def _configure():
 
 
 def _cols(table: str) -> set:
-    from sqlalchemy import text
 
     from gnsis.service.db import get_engine
 
@@ -196,6 +195,64 @@ class TenantIsolationTests(unittest.TestCase):
         ids = [b.memory_id, self.a.memory_id]
         got = self.cm.get_records_by_ids(memory_ids=ids, workspace_id="ws-A", repo="o/r")
         self.assertEqual([i.memory_id for i in got], ids)
+
+
+class SimpleMemMirrorTests(unittest.TestCase):
+    """Approved Postgres records mirror into Omni-SimpleMem as typed
+    memories carrying the Postgres provenance pointer; failures never
+    unmake the audit write."""
+
+    class _FakeMirror:
+        def __init__(self):
+            self.calls = []
+
+        def write_episode(self, repo, **kwargs):
+            self.calls.append((repo, kwargs))
+            return {"mauId": "mau-x"}
+
+    def setUp(self):
+        _configure()
+        from gnsis.service.codememory import CodeMemory
+
+        self.mirror = self._FakeMirror()
+        self.cm = CodeMemory(mirror=self.mirror)
+
+    def test_accepted_write_mirrors_with_provenance(self):
+        item = self.cm.record_accepted_change(
+            repo="o/r", source_job_id="job-9", workspace_id="ws-A",
+            repository_id="repo-1", content="kept the audit trail",
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(len(self.mirror.calls), 1)
+        repo, kwargs = self.mirror.calls[0]
+        self.assertEqual(repo, "o/r")
+        self.assertEqual(kwargs["memory_type"], "approved_code_intelligence")
+        self.assertEqual(kwargs["text"], "kept the audit trail")
+        prov = kwargs["provenance"]
+        self.assertEqual(prov["memory_id"], item.memory_id)
+        self.assertEqual(prov["source_job_id"], "job-9")
+        self.assertEqual(prov["authoritative_store"], "postgres")
+
+    def test_mirror_failure_does_not_block_audit_write(self):
+        class Broken:
+            def write_episode(self, repo, **kwargs):
+                raise RuntimeError("sidecar down")
+
+        from gnsis.service.codememory import CodeMemory
+
+        cm = CodeMemory(mirror=Broken())
+        item = cm.record_accepted_change(
+            repo="o/r", source_job_id="job-10", workspace_id="ws-A",
+            content="still written",
+        )
+        self.assertIsNotNone(item)
+
+    def test_no_mirror_configured_means_no_mirror_resolution(self):
+        from gnsis.service.codememory import CodeMemory
+
+        cm = CodeMemory()
+        # No GNSIS_SIMPLEMEM_URL in the test env → lazy init resolves to None.
+        self.assertIsNone(cm._mirror_provider())
 
 
 if __name__ == "__main__":

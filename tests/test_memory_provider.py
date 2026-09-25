@@ -1,7 +1,8 @@
 """Tests for the long-term memory adapter interface.
 
-We ship only the interface and a no-op default today; SimpleMem is a deliberate
-stub. These tests pin that contract so future providers conform to it.
+The interface, the no-op default, and the Omni-SimpleMem provider contract.
+Sidecar-facing behavior is covered in test_simplemem_provider.py against a
+fake HTTP service.
 """
 
 import unittest
@@ -31,9 +32,9 @@ class MemoryProviderTests(unittest.TestCase):
         self.assertFalse(rec.approved)
         self.assertTrue(rec.created_at)
 
-    def test_simplemem_is_not_implemented_yet(self):
-        with self.assertRaises(NotImplementedError):
-            SimpleMemProvider()
+    def test_simplemem_requires_a_sidecar_url(self):
+        with self.assertRaises(ValueError):
+            SimpleMemProvider("")
 
 
 class InMemoryProviderTests(unittest.TestCase):

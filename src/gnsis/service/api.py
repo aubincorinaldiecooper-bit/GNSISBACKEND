@@ -196,11 +196,19 @@ def store() -> PostgresJobStore:
 def _memory():
     from ..memory.base import NullMemoryProvider
 
-    if get_settings().memory_backend == "postgres":
+    backend = get_settings().memory_backend
+    if backend == "postgres":
         from .repository import PostgresMemoryProvider
 
         return PostgresMemoryProvider()
-    return NullMemoryProvider()
+    if backend == "simplemem":
+        from ..memory.simplemem import SimpleMemProvider
+
+        # Misconfigured required memory must not degrade silently to no memory.
+        return SimpleMemProvider(get_settings().simplemem_url)
+    if backend == "none":
+        return NullMemoryProvider()
+    raise RuntimeError(f"unknown memory backend: {backend!r}")
 
 
 def _require_execution_configured(settings) -> None:
@@ -348,11 +356,23 @@ def _ui() -> str:
 def health() -> dict:
     # Never expose secrets or their values — only whether subsystems are wired.
     settings = get_settings()
-    return {
+    payload = {
         "status": "ok",
         "user_auth": settings.user_auth_enabled,
         "github_app": bool(settings.github_app_id and settings.github_app_private_key),
     }
+    if settings.memory_backend == "simplemem":
+        # Required memory is configured: report it as degraded, not silently
+        # absent, when the sidecar cannot be reached or authenticated.
+        try:
+            _memory().assert_ready()
+            payload["memory"] = "ok"
+        except Exception:
+            payload["memory"] = "unavailable"
+            payload["status"] = "degraded"
+    else:
+        payload["memory"] = settings.memory_backend
+    return payload
 
 
 AVAILABLE_ENGINES = [

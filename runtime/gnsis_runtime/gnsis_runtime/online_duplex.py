@@ -300,6 +300,10 @@ class _Runtime:
     gateway_factory: Callable[[str], Any]
     provider_name: str | None
     detached_talker: Any | None = None
+    # Server-owned durable recall client (Omni-SimpleMem). None keeps the live
+    # session memoryless; when set, each accepted turn.final is queried and
+    # compact hits are injected through the memory.episode channel.
+    session_memory: Any | None = None
     prefix_snapshot: Any | None = None
     prefix_cache_status: str = "pending"
     prefix_prepare_seconds: float | None = None
@@ -1024,6 +1028,7 @@ def create_online_duplex_app(
     settings: OnlineDuplexSettings | None = None,
     media_dir: str | Path,
     detached_talker: Any | None = None,
+    session_memory: Any | None = None,
 ):
     """Create the persistent MiniCPM, task-tools and screen endpoints."""
 
@@ -1037,6 +1042,7 @@ def create_online_duplex_app(
         provider_name=provider_name,
         media_dir=Path(media_dir).expanduser().resolve(),
         detached_talker=detached_talker,
+        session_memory=session_memory,
     )
     if not runtime.settings.edge_secret:
         LOGGER.warning(
@@ -1991,6 +1997,7 @@ def create_online_duplex_app(
                     runtime.settings.expose_task_slate_to_model
                 ),
                 close_ledger=True,
+                session_memory=runtime.session_memory,
             )
             await task_coordinator.start()
             # The Brain is warmed in the background once the client is ready;

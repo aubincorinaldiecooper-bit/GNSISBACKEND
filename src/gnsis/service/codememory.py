@@ -29,11 +29,14 @@ selection reasons, and the provenance plumbing.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
 from ..memory.base import MemoryRecord
 from .repository import PostgresMemoryProvider
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryKind:
@@ -148,8 +151,71 @@ class CodeMemory:
     #: default number of items handed to a run
     DEFAULT_LIMIT = 6
 
-    def __init__(self, provider: Optional[PostgresMemoryProvider] = None) -> None:
+    def __init__(
+        self,
+        provider: Optional[PostgresMemoryProvider] = None,
+        mirror: Optional[object] = None,
+    ) -> None:
         self._provider = provider or PostgresMemoryProvider()
+        # ``mirror`` is a SimpleMemProvider (or None until first use). Approved
+        # records are mirrored into Omni-SimpleMem as typed semantic memories
+        # carrying the Postgres memory_id/provenance handle; Postgres stays the
+        # audit source of truth. A mirror failure is logged, never raised.
+        self._mirror = mirror
+        self._mirror_resolved = mirror is not None
+
+    def _mirror_provider(self):
+        if self._mirror_resolved:
+            return self._mirror
+        self._mirror_resolved = True
+        try:
+            from .settings import get_settings
+
+            settings = get_settings()
+            if not settings.simplemem_url:
+                return None
+            import os
+
+            from ..memory.simplemem import SimpleMemProvider
+
+            self._mirror = SimpleMemProvider(
+                settings.simplemem_url,
+                token=os.environ.get(settings.simplemem_token_env, ""),
+            )
+        except Exception:
+            logger.exception("simplemem mirror is configured but unavailable")
+            self._mirror = None
+        return self._mirror
+
+    def _mirror_to_simplemem(self, record: MemoryRecord) -> None:
+        provider = self._mirror_provider()
+        if provider is None:
+            return
+        try:
+            provider.write_episode(
+                record.repo,
+                text=record.content,
+                memory_type="approved_code_intelligence",
+                provenance={
+                    "memory_id": record.memory_id,
+                    "source_job_id": record.source_job_id,
+                    "workspace_id": record.workspace_id,
+                    "repository_id": record.repository_id,
+                    "authoritative_store": "postgres",
+                    "kind": record.kind,
+                },
+            )
+            logger.info(
+                "simplemem.mirror status=ok memory_id=%s repo=%s",
+                record.memory_id,
+                record.repo,
+            )
+        except Exception:
+            # The Postgres commit already happened; the mirror is a derived
+            # copy, so its failure must never unmake or block the audit write.
+            logger.exception(
+                "simplemem mirror write failed for memory_id=%s", record.memory_id
+            )
 
     # -- retrieval --------------------------------------------------------
     def retrieve_for_task(
@@ -318,23 +384,24 @@ class CodeMemory:
             written = self._provider.write(record)
         else:
             written = writer(
-                record,
-                {
-                    "source_run_id": source_run_id,
-                    "source_job_id": source_job_id,
-                    "outcome_id": outcome_id,
-                    "outcome_decision": outcome_decision,
-                    "workspace_id": workspace_id,
-                    "repository_id": repository_id,
-                    "item_key": kind,
-                    "source_model": source_model,
-                    "source_advisor_model": source_advisor_model,
-                    "approved_by": approved_by,
-                    "approved_at": approved_at,
-                },
-            )
+            record,
+            {
+                "source_run_id": source_run_id,
+                "source_job_id": source_job_id,
+                "outcome_id": outcome_id,
+                "outcome_decision": outcome_decision,
+                "workspace_id": workspace_id,
+                "repository_id": repository_id,
+                "item_key": kind,
+                "source_model": source_model,
+                "source_advisor_model": source_advisor_model,
+                "approved_by": approved_by,
+                "approved_at": approved_at,
+            },
+        )
         if written is None:
             return None
+        self._mirror_to_simplemem(written)
         return self._to_item(written, "recorded")
 
     def record_reviewed_intelligence_batch(
@@ -371,7 +438,13 @@ class CodeMemory:
             return []
         writer = getattr(self._provider, "write_many_with_provenance", None)
         if writer is None:
-            return [self._to_item(r, "recorded") for r in records if self._provider.write(r)]
+            recorded = []
+            for r in records:
+                w = self._provider.write(r)
+                if w:
+                    self._mirror_to_simplemem(w)
+                    recorded.append(self._to_item(r, "recorded"))
+            return recorded
         written = writer(
             records,
             [
@@ -392,6 +465,8 @@ class CodeMemory:
                 if str(item.get("content", "")).strip()
             ],
         )
+        for r in written:
+            self._mirror_to_simplemem(r)
         return [self._to_item(r, "recorded") for r in written]
 
     # -- internals --------------------------------------------------------
@@ -422,6 +497,7 @@ class CodeMemory:
         written = self._provider.write(record)
         if written is None:
             return None
+        self._mirror_to_simplemem(written)
         return self._to_item(written, "recorded")
 
     @staticmethod

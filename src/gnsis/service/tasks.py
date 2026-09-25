@@ -89,7 +89,14 @@ def _store() -> PostgresJobStore:
 def _memory() -> MemoryProvider:
     if settings.memory_backend == "postgres":
         return PostgresMemoryProvider()
-    return NullMemoryProvider()
+    if settings.memory_backend == "simplemem":
+        from ..memory.simplemem import SimpleMemProvider
+
+        # Configured-but-missing memory fails loudly instead of degrading to none.
+        return SimpleMemProvider(settings.simplemem_url)
+    if settings.memory_backend == "none":
+        return NullMemoryProvider()
+    raise RuntimeError(f"unknown memory backend: {settings.memory_backend!r}")
 
 
 def _resolve_policy_for_run():

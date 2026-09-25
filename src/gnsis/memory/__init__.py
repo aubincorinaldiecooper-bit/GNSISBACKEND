@@ -6,8 +6,8 @@ Two distinct things live here, deliberately kept apart:
   append-only record of what the evolution loop did. Always on.
 * :class:`MemoryProvider` and friends — the *long-term agent memory* interface
   (repo-scoped, approval-gated) that will let GNSIS specialize to a codebase.
-  Only the interface and a no-op default ship today; the real ``SimpleMem``
-  provider is a stub.
+  ``SimpleMemProvider`` is the general durable recall surface (Omni-SimpleMem);
+  Postgres remains the audit store for approved coding intelligence.
 """
 
 from .base import (
@@ -15,9 +15,9 @@ from .base import (
     MemoryProvider,
     MemoryRecord,
     NullMemoryProvider,
-    SimpleMemProvider,
 )
 from .memory import Memory
+from .simplemem import MEMORY_TYPES, SimpleMemProvider, SimpleMemUnavailable
 
 __all__ = [
     "Memory",
@@ -26,4 +26,6 @@ __all__ = [
     "NullMemoryProvider",
     "InMemoryMemoryProvider",
     "SimpleMemProvider",
+    "SimpleMemUnavailable",
+    "MEMORY_TYPES",
 ]
