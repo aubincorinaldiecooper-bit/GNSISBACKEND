@@ -5,7 +5,7 @@
  * epochs, protocol events, and socket ownership live in HostSession. The
  * renderer owns devices; the daemon never sees an Electron object.
  */
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, session } from "electron";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -49,6 +49,12 @@ const HOST_ID = process.env.GNSIS_HOST_ID ?? `host-${process.pid}`;
 const SESSION_ID = process.env.GNSIS_SESSION_ID ?? HOST_ID;
 
 let win: BrowserWindow | null = null;
+// The daemon's `ready` can arrive before the renderer has loaded (a warm
+// runtime answers in milliseconds; the page takes longer). Keep the last one
+// and whether the socket has closed since, so the renderer can ask instead of
+// waiting for a control that already went by.
+let lastReady: unknown = null;
+let duplexClosed = false;
 const permissions = new ElectronPermissions();
 const shortcuts = new ElectronShortcuts();
 const notifications = new ElectronNotifications();
@@ -71,6 +77,10 @@ const host = new HostSession({
   },
   onControl: (c) => {
     const type = (c as { type?: string })?.type;
+    if (type === "ready") {
+      lastReady = c;
+      duplexClosed = false;
+    }
     if (type && type !== "screen.frame.accepted") {
       hostLog("daemon", String(type));
     } else if (type === "screen.frame.accepted") {
@@ -81,6 +91,7 @@ const host = new HostSession({
   },
   onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
   onClosed: (code) => {
+    duplexClosed = true;
     hostLog("transport", `duplex closed code=${code}`);
     sendToRenderer("duplex:closed", code, "");
   },
@@ -102,9 +113,14 @@ const host = new HostSession({
 });
 
 function createWindow(): void {
+  // The product UI lays out a chat beside an agent panel; below ~1100 px the
+  // two overlap, so the window opens at a comfortable desktop size.
   win = new BrowserWindow({
-    width: 960,
-    height: 640,
+    width: 1440,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 700,
+    title: "GNSIS",
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,
@@ -112,7 +128,11 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-  win.loadFile(path.join(__dirname, "../renderer/index.html"));
+  // GNSIS_DEMO=1 fills the dock with the sample agents so every state of the
+  // interface can be reviewed in the packaged app, where there is no URL to
+  // add ?demo to.
+  const query = process.env.GNSIS_DEMO ? { demo: "1" } : undefined;
+  win.loadFile(path.join(__dirname, "../renderer/index.html"), query ? { query } : undefined);
   win.on("closed", () => {
     win = null;
   });
@@ -126,6 +146,28 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(async () => {
   hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
+  // Screen perception: the renderer's getDisplayMedia() is answered here, or
+  // Chromium refuses it. The whole primary display, so the visual sense sees
+  // what the person sees; on macOS 15+ the system picker is offered instead,
+  // and the OS asks for Screen Recording permission on first use either way.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    async (_request, callback) => {
+      try {
+        const sources = await desktopCapturer.getSources({ types: ["screen"] });
+        if (sources.length === 0) {
+          hostLog("permissions", "screen: no display source available");
+          callback({});
+          return;
+        }
+        hostLog("permissions", `screen: capturing ${sources[0].name}`);
+        callback({ video: sources[0] });
+      } catch (err) {
+        hostLog("permissions", `screen: source lookup failed: ${String(err)}`);
+        callback({});
+      }
+    },
+    { useSystemPicker: true },
+  );
   createWindow();
   host.connect(SESSION_ID);
   host.ready();
@@ -161,7 +203,27 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
+  ipcMain.handle("link:state", () => ({
+    ready: lastReady,
+    connected: host.connected,
+    closed: duplexClosed,
+  }));
+  ipcMain.on("session:reconnect", () => {
+    // The renderer asks for this when the person starts live voice after the
+    // daemon session ended or the connection dropped. Same session id: the
+    // daemon rebinds within its grace window, otherwise starts a fresh one.
+    hostLog("transport", "reconnect requested by renderer");
+    lastReady = null;
+    duplexClosed = false;
+    host.connect(SESSION_ID);
+    host.ready();
+  });
   ipcMain.on("call:start", () => host.startCall());
+  ipcMain.on("call:end", (_e, reason) => {
+    const why = typeof reason === "string" && reason ? reason : "renderer";
+    hostLog("host", `call ended reason=${why}`);
+    host.endCall(why, { stop: false });
+  });
   ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) =>
     host.sendAudioFrame(header, Buffer.from(pcm)),
   );

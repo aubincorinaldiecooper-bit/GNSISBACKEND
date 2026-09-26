@@ -113,7 +113,13 @@ export class HostSession {
     return this.callEpoch;
   }
 
-  endCall(reason: string): void {
+  /**
+   * Close the current call on the timeline. By default this also ends the
+   * daemon session (`stop`); with `stop: false` the session stays alive — the
+   * renderer uses that when the person ends live voice, so the next call can
+   * start on the same session and no epoch is left open.
+   */
+  endCall(reason: string, opts: { stop?: boolean } = {}): void {
     this.emit({
       type: "call.ended",
       call_epoch: this.callEpoch,
@@ -121,7 +127,7 @@ export class HostSession {
       reason,
       ts_ms: Date.now(),
     });
-    this.duplex?.sendControl({ type: "stop" });
+    if (opts.stop !== false) this.duplex?.sendControl({ type: "stop" });
   }
 
   /** Neutral HostEvent -> wire. playback.* doubles as playback.ack truth. */
