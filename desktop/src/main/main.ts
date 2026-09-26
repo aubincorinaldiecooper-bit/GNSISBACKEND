@@ -167,6 +167,11 @@ app.whenReady().then(async () => {
     host.emit(event as HostEvent);
   });
   ipcMain.on("call:start", () => host.startCall());
+  ipcMain.on("call:end", (_e, reason) => {
+    const why = typeof reason === "string" && reason ? reason : "renderer";
+    hostLog("host", `call ended reason=${why}`);
+    host.endCall(why, { stop: false });
+  });
   ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) =>
     host.sendAudioFrame(header, Buffer.from(pcm)),
   );

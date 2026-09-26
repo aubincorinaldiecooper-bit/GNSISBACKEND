@@ -76,3 +76,29 @@ test("screen socket errors surface via onScreen, not uncaught exceptions", async
   assert.ok(err, "expected a screen transport.error update");
   session.disconnect("test_done");
 });
+
+test("ending a call without stopping keeps the daemon session: call.ended goes out, stop does not", async () => {
+  const port = await deadPort();
+  const session = new HostSession({
+    runtimeUrl: `http://127.0.0.1:${port}`,
+    hostId: "h1",
+    chassis: "test",
+    capabilities,
+  });
+  session.connect("s1");
+  // Not connected (dead port), so every control queues in the duplex outbox in order.
+  const queued = () =>
+    (session["duplex"]!["outbox"] as Array<string | Buffer>)
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => JSON.parse(item) as { type: string; event?: { type: string; reason?: string } });
+  session.startCall();
+  session.endCall("live_ended", { stop: false });
+  let types = queued().map((c) => (c.type === "host.event" ? `host.event:${c.event?.type}` : c.type));
+  assert.deepEqual(types, ["host.event:call.started", "host.event:call.ended"]);
+  assert.equal(queued().at(-1)?.event?.reason, "live_ended");
+  // The default still ends the session, as the renderer's stop path relies on.
+  session.endCall("client_stop");
+  types = queued().map((c) => (c.type === "host.event" ? `host.event:${c.event?.type}` : c.type));
+  assert.deepEqual(types.slice(-2), ["host.event:call.ended", "stop"]);
+  session.disconnect("test_done");
+});

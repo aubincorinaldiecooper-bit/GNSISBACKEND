@@ -78,6 +78,12 @@ export class ElectronLiveHost implements LiveHost {
   private lastUserLevelAt = 0;
   private levelTimer: ReturnType<typeof setInterval> | null = null;
   private visionAccepted = false;
+  /** The `audio.chunk` header that describes the next binary frame. */
+  private pendingAudio: { generation_id?: unknown } | null = null;
+  /** The newest generation the daemon has sent audio for. */
+  private lastGeneration: number | null = null;
+  /** Every generation up to this one is cancelled: its audio is never played. */
+  private staleGeneration = -1;
   private readonly threshold: number;
   private readonly hangoverMs: number;
   private readonly levelIntervalMs: number;
@@ -104,13 +110,16 @@ export class ElectronLiveHost implements LiveHost {
     const { mic, playback, vision } = this.devices;
 
     this.bridge.onControl((c) => this.onControl(c));
-    this.bridge.onAudio((pcm) => playback.play(pcm));
+    this.bridge.onAudio((pcm) => this.onAudio(pcm));
     this.bridge.onClosed((code) => {
       this.log(`duplex closed ${code}`);
       this.setLink("closed", "The connection to GNSIS closed.");
     });
     this.bridge.onScreen((update) => this.onScreen(update));
-    this.bridge.onInterrupted(() => this.cutPlayback("global_shortcut"));
+    this.bridge.onInterrupted(() => {
+      this.retireGeneration();
+      this.cutPlayback("global_shortcut");
+    });
 
     playback.onSpeaking = (speaking) => {
       this.emit({ type: "agent.speaking", speaking });
@@ -170,6 +179,8 @@ export class ElectronLiveHost implements LiveHost {
     } catch (e) {
       const detail = micProblem(e);
       this.log(`mic failed: ${String(e)}`);
+      // The call was opened on the timeline; close it, or its epoch stays open.
+      this.bridge.endCall("mic_failed");
       this.emit({ type: "mic", state: isDenied(e) ? "denied" : "error", detail });
       throw new Error(detail);
     }
@@ -184,7 +195,11 @@ export class ElectronLiveHost implements LiveHost {
     this.live = false;
     this.endSpeech();
     this.devices.mic.stop();
+    // Whatever the daemon is still sending for this reply is stale from here:
+    // cancel what is scheduled, and refuse what has not arrived yet.
+    this.retireGeneration();
     if (this.devices.playback.speaking) this.cutPlayback("live_ended");
+    this.bridge.endCall("live_ended");
     this.log("live off");
     this.emit({ type: "mic", state: "off" });
   }
@@ -253,9 +268,20 @@ export class ElectronLiveHost implements LiveHost {
       case "error":
         if (c?.fatal) this.setLink("error", "The session could not start.");
         break;
-      case "playback.cancel":
+      case "playback.cancel": {
+        // The daemon names the generation it cancelled; anything from it that
+        // is still in flight must not play when it lands.
+        const cancelled = toGeneration(c?.cancelled_generation_id) ?? this.lastGeneration;
+        if (cancelled !== null) this.staleGeneration = Math.max(this.staleGeneration, cancelled);
         this.cutPlayback("daemon_cancel");
         break;
+      }
+      case "audio.chunk": {
+        this.pendingAudio = c as { generation_id?: unknown };
+        const gen = toGeneration(c?.generation_id);
+        if (gen !== null) this.lastGeneration = Math.max(this.lastGeneration ?? -1, gen);
+        break;
+      }
       case "chunk": {
         const text = typeof c?.text === "string" ? c.text : "";
         const endOfTurn = !!c?.end_of_turn;
@@ -268,6 +294,27 @@ export class ElectronLiveHost implements LiveHost {
     }
   }
 
+  /**
+   * Binary audio always follows the `audio.chunk` header that describes it.
+   * It plays only for a live session and a generation the daemon has not
+   * cancelled; anything else is dropped and logged as stale, never scheduled
+   * and never acknowledged — so a reply cannot resume after the person ended
+   * the conversation or spoke over it.
+   */
+  private onAudio(pcm: Uint8Array): void {
+    const header = this.pendingAudio;
+    this.pendingAudio = null;
+    const gen = toGeneration(header?.generation_id);
+    let reason: string | null = null;
+    if (!this.live) reason = "not_live";
+    else if (gen !== null && gen <= this.staleGeneration) reason = "cancelled_generation";
+    if (reason) {
+      this.log(`stale audio dropped gen=${gen ?? "?"} bytes=${pcm.byteLength} reason=${reason}`);
+      return;
+    }
+    this.devices.playback.play(pcm);
+  }
+
   private onScreen(update: ScreenUpdate): void {
     if (update.channel) this.devices.vision.applyChannel(update.channel);
     if (update.control) this.devices.vision.handleScreenControl(update.control);
@@ -276,6 +323,11 @@ export class ElectronLiveHost implements LiveHost {
   private cutPlayback(reason: string): void {
     this.devices.playback.cancel(reason);
     this.emit({ type: "agent.cut", reason });
+  }
+
+  /** A local cut: the generation playing now is stale from here on. */
+  private retireGeneration(): void {
+    if (this.lastGeneration !== null) this.staleGeneration = Math.max(this.staleGeneration, this.lastGeneration);
   }
 
   private setLink(state: LinkState, detail?: string): void {
@@ -319,6 +371,9 @@ export class ElectronLiveHost implements LiveHost {
 }
 
 const isDenied = (e: unknown) => (e as { name?: string } | null)?.name === "NotAllowedError";
+
+const toGeneration = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
 
 function micProblem(e: unknown): string {
   const name = (e as { name?: string } | null)?.name;

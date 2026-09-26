@@ -15,6 +15,7 @@ class FakeBridge implements GnsisBridge {
   hostEvents: unknown[] = [];
   logs: string[] = [];
   startCalls = 0;
+  endCalls: string[] = [];
   private handlers: Record<string, ((...a: any[]) => void) | undefined> = {};
   mediaPermissions = async () => ({ microphone: "granted", camera: "denied", screen: "unknown" });
   requestPermission = async () => "granted";
@@ -22,6 +23,7 @@ class FakeBridge implements GnsisBridge {
   sendHostEvent = (e: unknown) => { this.hostEvents.push(e); };
   hostLog = (l: string) => { this.logs.push(l); };
   startCall = () => { this.startCalls++; };
+  endCall = (reason: string) => { this.endCalls.push(reason); };
   sendAudioFrame = () => {};
   sendScreenFrame = () => {};
   callTool = async () => ({});
@@ -121,13 +123,15 @@ test("the link state is what the daemon last said, and a late subscriber hears i
   assert.deepEqual(events.at(-1), { type: "link", state: "error", detail: "The session could not start." });
 });
 
-test("audio plays as it arrives; the daemon's cancel and the global shortcut both cut it", async () => {
-  const { bridge, devices, events } = harness();
+test("audio plays while live; the daemon's cancel and the global shortcut both cut it", async () => {
+  const { bridge, devices, events, host } = harness();
   await tick();
+  await host.startLive();
+  bridge.control({ type: "audio.chunk", generation_id: 3, unit_id: 1 });
   bridge.audio(new Uint8Array(480));
-  assert.deepEqual(devices.calls, ["play:480"]);
+  assert.equal(devices.calls.at(-1), "play:480");
   assert.deepEqual(events.at(-1), { type: "agent.speaking", speaking: true });
-  bridge.control({ type: "playback.cancel", generation_id: 3 });
+  bridge.control({ type: "playback.cancel", generation_id: 4, cancelled_generation_id: 3 });
   assert.equal(devices.calls.at(-1), "cancel:daemon_cancel");
   assert.deepEqual(events.slice(-2), [
     { type: "agent.speaking", speaking: false },
@@ -136,6 +140,38 @@ test("audio plays as it arrives; the daemon's cancel and the global shortcut bot
   bridge.interrupted();
   assert.equal(devices.calls.at(-1), "cancel:global_shortcut");
   assert.deepEqual(events.at(-1), { type: "agent.cut", reason: "global_shortcut" });
+});
+
+test("audio from a cancelled generation, or after live ended, is dropped and logged, never played", async () => {
+  const { bridge, devices, host } = harness();
+  await tick();
+  await host.startLive();
+  const chunk = (gen: number, bytes: number) => {
+    bridge.control({ type: "audio.chunk", generation_id: gen, unit_id: 1 });
+    bridge.audio(new Uint8Array(bytes));
+  };
+  chunk(3, 100);
+  assert.equal(devices.calls.at(-1), "play:100");
+  // The daemon cancels generation 3; a chunk of it still in flight lands afterwards.
+  bridge.control({ type: "playback.cancel", generation_id: 4, cancelled_generation_id: 3 });
+  chunk(3, 200);
+  assert.equal(devices.calls.at(-1), "cancel:daemon_cancel", "the late chunk was not scheduled");
+  assert.ok(bridge.logs.some((l) => l.startsWith("stale audio dropped gen=3 bytes=200 reason=cancelled_generation")));
+  // The next generation plays.
+  chunk(4, 300);
+  assert.equal(devices.calls.at(-1), "play:300");
+  // The person ends live while generation 4 is still streaming: what arrives next is refused.
+  await host.endLive();
+  chunk(4, 400);
+  chunk(5, 500);
+  assert.ok(!devices.calls.includes("play:400") && !devices.calls.includes("play:500"), `nothing played after end: ${devices.calls}`);
+  assert.ok(bridge.logs.some((l) => l.startsWith("stale audio dropped gen=5 bytes=500 reason=not_live")));
+  // A new live session plays again, and the generation cut locally stays retired.
+  await host.startLive();
+  chunk(4, 600);
+  chunk(6, 700);
+  assert.ok(!devices.calls.includes("play:600"), "generation 4 was cut when live ended");
+  assert.equal(devices.calls.at(-1), "play:700");
 });
 
 test("starting live starts one call and the microphone; mute releases capture only", async () => {
@@ -156,8 +192,10 @@ test("starting live starts one call and the microphone; mute releases capture on
   assert.equal(devices.calls.at(-2), "mic.stop");
   assert.equal(devices.calls.at(-1), "cancel:live_ended");
   assert.deepEqual(events.at(-1), { type: "mic", state: "off" });
+  assert.deepEqual(bridge.endCalls, ["live_ended"], "the call closes on the timeline without stopping the session");
   await host.startLive();
   assert.equal(bridge.startCalls, 2, "each live session is a new call");
+  assert.equal(bridge.endCalls.length, 1);
 });
 
 test("a refused microphone is reported in plain words and live does not start", async () => {
@@ -166,6 +204,7 @@ test("a refused microphone is reported in plain words and live does not start", 
   await tick();
   await assert.rejects(host.startLive(), /The microphone was not allowed/);
   assert.equal(bridge.startCalls, 1);
+  assert.deepEqual(bridge.endCalls, ["mic_failed"], "a call that never got a microphone is closed, not left open");
   const mic = events.find((e) => e.type === "mic");
   assert.equal(mic && mic.type === "mic" && mic.state, "denied");
   assert.ok(!bridge.logs.some((l) => l === "live on"));

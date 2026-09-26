@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("gnsis", {
   sendHostEvent: (event: unknown) => ipcRenderer.send("host:event", event),
   hostLog: (line: string) => ipcRenderer.send("host:log", line),
   startCall: () => ipcRenderer.send("call:start"),
+  endCall: (reason: string) => ipcRenderer.send("call:end", reason),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>
     ipcRenderer.send("duplex:audioFrame", header, pcm),
   sendScreenFrame: (metadata: ScreenFrameMetadata, payload: Uint8Array) =>

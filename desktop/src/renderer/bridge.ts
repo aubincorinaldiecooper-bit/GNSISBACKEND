@@ -17,6 +17,8 @@ export interface GnsisBridge {
   sendHostEvent(event: unknown): void;
   hostLog(line: string): void;
   startCall(): void;
+  /** Close the call on the timeline; the daemon session stays alive. */
+  endCall(reason: string): void;
   sendAudioFrame(header: unknown, pcm: Uint8Array): void;
   sendScreenFrame(metadata: ScreenFrameMetadata, payload: Uint8Array): void;
   callTool(tool: string, args: Record<string, unknown>): Promise<unknown>;
