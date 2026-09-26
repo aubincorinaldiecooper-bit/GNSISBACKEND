@@ -44,7 +44,7 @@ A host implements `LiveHost`:
 | `endLive()` | closes the microphone and stops any reply still playing |
 | `setMuted(bool)` | releases or reacquires the microphone only — the session stays alive |
 | `startVision(source)` / `stopVision()` | points the one persistent visual sense at the screen or the camera, or off |
-| `capabilities()` | `voice`, `screen`, `camera`, `transcript`, `overlay` — the UI hides what a host cannot do |
+| `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay` — the UI hides what a host cannot do |
 | `subscribe(fn)` | events below |
 
 And it reports only what it actually observed:
@@ -78,6 +78,11 @@ their panels, the approval card, the canned replies to typed messages, and
 dictation (offered only when a host reports `transcript: true`). The runtime
 has no text input and no agent backend yet; when it does, these are the seams
 that change, and the shapes stay.
+
+The stand-ins appear only in demo mode (`demo` prop, `?demo`, or Settings →
+Developer → Load demo agents) or when the host reports `text: true`. Otherwise
+a typed message is shown as typed, followed by a line saying typing is not
+connected yet — never a made-up reply.
 
 ## Preview in a browser
 

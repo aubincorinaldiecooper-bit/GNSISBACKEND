@@ -172,6 +172,7 @@ export function liveInfo(live: LiveState | null, name: string, now: number): Liv
   let status: string;
   if (live.link === "connecting") status = "Connecting…";
   else if (live.link === "error") status = "Couldn’t connect";
+  else if (live.link === "closed") status = "Not connected";
   else if (userNow) status = `Listening · ${t}`;
   else if (agentNow) status = `${name} is speaking · ${t}`;
   else status = (live.muted ? "You’re muted · " : "Listening · ") + t;

@@ -41,6 +41,17 @@ The packaged app resolves the runtime in this order:
 The JSON file is the supported seam for pointing an installed build at a
 remote runtime today and at `LocalGNSISProvider` later — no repackaging.
 
+To talk to the production runtime, point `runtimeUrl` at the site
+(`https://gnsis.studio`), not at the runtime's own `.modal.run` address. The
+site forwards `/ws/duplex` and `/ws/screen` and adds the two things the
+runtime requires and the app does not hold: its front-door secret
+(`X-GNSIS-Edge`) and the Modal proxy credentials. A direct connection to the
+runtime's address is refused.
+
+`GNSIS_DEMO=1` opens the interface with the sample agents loaded, so every
+state can be reviewed in the packaged app (Settings → Developer → Load demo
+agents does the same at run time).
+
 ## Signing / notarization
 
 - Development DMG (default): run with `CSC_IDENTITY_AUTO_DISCOVERY=false` —

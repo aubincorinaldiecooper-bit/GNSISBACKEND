@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import {
-  AGENT_ANSWER, AGENT_TOTAL, APPROVAL, COMMANDS, FOLLOW_PHRASE, QUESTION, ROOF_DRAFT,
+  AGENT_ANSWER, AGENT_TOTAL, APPROVAL, COMMANDS, FOLLOW_PHRASE, QUESTION, ROOF_DRAFT, TYPING_NOT_CONNECTED,
   demoAgents, focusConv, homeConv, recipeConv, spawnedConv,
   type Conv, type Turn,
 } from "../demo/data";
@@ -53,7 +53,10 @@ export interface State {
   demo: boolean;
 }
 
-const NO_CAPS: HostCapabilities = { voice: false, screen: false, camera: false, transcript: false, overlay: false };
+const NO_CAPS: HostCapabilities = { voice: false, text: false, screen: false, camera: false, transcript: false, overlay: false };
+
+/** How long the visual sense may sit on "starting" before that is reported as a problem. */
+const VISION_START_TIMEOUT_MS = 20_000;
 
 const initial: State = {
   phase: "loading", creating: false, identity: null, caps: NO_CAPS,
@@ -106,8 +109,14 @@ export function configure(h: LiveHost, ids: IdentityStore) {
 export const getHost = () => host;
 export const getIdentityStore = () => identityStore;
 
+let visionTimer: ReturnType<typeof setTimeout> | null = null;
+
 function onLiveEvent(ev: LiveEvent) {
   if (ev.type === "vision") {
+    if (ev.state !== "starting" && visionTimer) {
+      clearTimeout(visionTimer);
+      visionTimer = null;
+    }
     setState({ vision: { source: ev.source, state: ev.state, detail: ev.detail } });
     return;
   }
@@ -166,9 +175,12 @@ export const liveTurnsFor = (s: State, convId: string): Turn[] => (s.live && s.l
 export const liveInfoFor = (s: State): LiveInfo =>
   liveInfo(s.live, s.live ? s.convs[s.live.to]?.title ?? "GNSIS" : "", s.now);
 
+/** Stand-in agents and canned replies are shown only in demo mode or when the host can take typed messages. */
+const standIns = (s: State) => s.demo || s.caps.text;
+
 // ---- setup ------------------------------------------------------------------
 export function enterDesktop(identity: Identity, demo: boolean) {
-  const convs: Record<string, Conv> = { gnsis: homeConv(identity.publicId, demo) };
+  const convs: Record<string, Conv> = { gnsis: homeConv(identity.publicId, demo, demo || getState().caps.text) };
   let agentIds: string[] = [];
   let tabs = ["gnsis"];
   if (demo) {
@@ -176,7 +188,7 @@ export function enterDesktop(identity: Identity, demo: boolean) {
     agentIds = ["roof", "recipe", "watch", "triage", "gift"];
     tabs = ["gnsis", "roof", "recipe"];
   }
-  setState({ phase: "desktop", identity, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet: !demo, t: 0, live: null, toast: null });
+  setState({ phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet: !demo, t: 0, live: null, toast: null });
 }
 
 export async function loadIdentity() {
@@ -206,6 +218,7 @@ export async function createIdentity(): Promise<string | null> {
 }
 
 export async function eraseIdentity() {
+  finishLive();
   await identityStore?.erase();
   setState({ settingsOpen: false, identity: null, phase: "welcome", live: null });
 }
@@ -240,12 +253,15 @@ export const actions = {
       const switching = !!s.live && s.live.to !== id;
       endedLive = switching;
       const base = switching ? { ...s, ...endLivePatch(s) } : s;
+      // The chat being left was read up to now; its clock stops with the idle
+      // ticks, so stamp it here rather than let it archive at once.
+      const left = leaving(base);
       return {
         ...(switching ? endLivePatch(s) : {}),
         mode: "bar", dockMenu: false, visionMenu: false, active: id, winOpen: true, panelHidden: false, menuOpen: false, greet: false,
         toast: base.toast && base.toast.id === id ? null : base.toast,
         tabs: withTab(base.tabs, id),
-        convs: withConv(base, id, { unread: false, archived: false, readAt: base.t }),
+        convs: withConv({ ...base, convs: left }, id, { unread: false, archived: false, readAt: base.t }),
       };
     });
     if (endedLive) void h?.endLive().catch(() => {});
@@ -255,7 +271,8 @@ export const actions = {
     let endedLive = false;
     setState((s) => {
       endedLive = !!s.live;
-      return { ...(s.live ? endLivePatch(s) : {}), mode: "dock", winOpen: false, listening: false, heard: 0, hold: 0, text: "", menuOpen: false, visionMenu: false, toast: null };
+      const base = s.live ? { ...s, ...endLivePatch(s) } : s;
+      return { ...(s.live ? endLivePatch(s) : {}), convs: leaving(base), mode: "dock", winOpen: false, listening: false, heard: 0, hold: 0, text: "", menuOpen: false, visionMenu: false, toast: null };
     });
     if (endedLive) void h?.endLive().catch(() => {});
   },
@@ -313,7 +330,21 @@ export const actions = {
     if (!h) return;
     const caps = getState().caps;
     if (source && !caps[source]) return;
+    if (visionTimer) clearTimeout(visionTimer);
+    visionTimer = null;
     setState({ visionMenu: false, vision: { source, state: source ? "starting" : "off" } });
+    if (source) {
+      // "Starting" is a promise the runtime has to keep by accepting a frame.
+      // If it never does, say so instead of showing a spinner for good.
+      visionTimer = setTimeout(() => {
+        visionTimer = null;
+        setState((s) =>
+          s.vision.state === "starting" && s.vision.source === source
+            ? { vision: { source, state: "error", detail: "GNSIS hasn’t received a picture yet. The runtime may not be taking video." } }
+            : {},
+        );
+      }, VISION_START_TIMEOUT_MS);
+    }
     const p = source ? h.startVision(source) : h.stopVision();
     p.catch((e) => setState({ vision: { source, state: "error", detail: plain(e) || "The visual sense could not start." } }));
   },
@@ -393,6 +424,17 @@ export const actions = {
       return;
     }
     const cur = s.winOpen ? s.convs[s.active] : null;
+    if (!standIns(s)) {
+      // The host cannot deliver typed words. Show what was typed, and say so —
+      // never a made-up reply.
+      const id = cur ? s.active : "gnsis";
+      setState((st) => ({
+        text: "",
+        winOpen: true,
+        convs: withConv(st, id, { turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: TYPING_NOT_CONNECTED }] }),
+      }));
+      return;
+    }
     if (!cur || s.active === "gnsis") return actions.handoff(v, false, null);
     if (s.active === "roof" && cur.approval === "pending") {
       setState({ apCustom: v, text: "" });
@@ -438,12 +480,37 @@ export function filteredCommands(text: string) {
   return COMMANDS.filter((c) => c.name.slice(1).startsWith(q) || c.desc.toLowerCase().includes(q));
 }
 
+/** The chat being viewed, stamped as read now: called when the view moves away from it. */
+function leaving(s: State): Record<string, Conv> {
+  return viewing(s, s.active) && s.convs[s.active] ? withConv(s, s.active, { readAt: s.t }) : s.convs;
+}
+
+/**
+ * Is anything on screen moving? A desktop app runs all day; when nothing is
+ * streaming, speaking, listening, fading or about to leave the dock, the clock
+ * stands still and nothing re-renders.
+ */
+export function isBusy(s: State): boolean {
+  if (s.live || s.listening || s.toast) return true;
+  for (const id of ["gnsis", ...s.agentIds]) {
+    const c = s.convs[id];
+    if (!c) continue;
+    const lt = c.turns.length ? c.turns[c.turns.length - 1] : null;
+    if (isWorking(c)) return true;
+    if (lt && lt.role === "agent" && (lt.stream ?? 0) < lt.text.length && !c.stopped) return true;
+    if (c.bornT !== undefined && s.t - c.bornT < 8) return true;
+    // read and finished: it leaves the dock after a while, so keep counting
+    if (id !== "gnsis" && !c.archived && !c.needs && !c.unread && c.readAt !== undefined && !viewing(s, id)) return true;
+  }
+  return false;
+}
+
 // ---- the clock --------------------------------------------------------------
 // Drives the stand-in agents (streaming answers, badges, archiving) and, while
 // live voice is on, the wall clock the status line and the bars read.
 export function tick() {
   const s = getState();
-  if (s.phase !== "desktop") return;
+  if (s.phase !== "desktop" || !isBusy(s)) return;
   const t = s.t + 1;
   const now = s.live ? Date.now() : s.now;
   if (s.listening) {

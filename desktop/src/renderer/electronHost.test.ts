@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LiveEvent } from "@gnsis/ui";
-import type { GnsisBridge, ScreenUpdate } from "./bridge.js";
+import type { GnsisBridge, LinkState, ScreenUpdate } from "./bridge.js";
 import { ElectronLiveHost, type Devices } from "./electronHost.js";
 
 /**
@@ -16,12 +16,17 @@ class FakeBridge implements GnsisBridge {
   logs: string[] = [];
   startCalls = 0;
   endCalls: string[] = [];
+  reconnects = 0;
+  /** What the main process would answer about the link when the page loads. */
+  state: LinkState = { ready: { type: "ready", session_id: "s1" }, connected: true, closed: false };
   private handlers: Record<string, ((...a: any[]) => void) | undefined> = {};
   mediaPermissions = async () => ({ microphone: "granted", camera: "denied", screen: "unknown" });
   requestPermission = async () => "granted";
   sendControl = (c: unknown) => { this.controls.push(c); };
   sendHostEvent = (e: unknown) => { this.hostEvents.push(e); };
   hostLog = (l: string) => { this.logs.push(l); };
+  linkState = async () => this.state;
+  reconnect = () => { this.reconnects++; };
   startCall = () => { this.startCalls++; };
   endCall = (reason: string) => { this.endCalls.push(reason); };
   sendAudioFrame = () => {};
@@ -73,14 +78,17 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
   return devices;
 }
 
-function harness(opts: { micError?: Error; visionError?: Error; now?: () => number } = {}) {
+function harness(opts: { micError?: Error; visionError?: Error; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number } = {}) {
   const bridge = new FakeBridge();
+  if (opts.ready === false) bridge.state = { ready: null, connected: false, closed: false };
+  if (opts.state) bridge.state = opts.state;
   const devices = fakeDevices(opts);
   const events: LiveEvent[] = [];
   const host = new ElectronLiveHost(bridge, devices, (l) => bridge.logs.push(l), {
     now: opts.now,
     speechThreshold: 0.2,
     speechHangoverMs: 300,
+    readyTimeoutMs: opts.readyTimeoutMs,
     setInterval: (() => 0) as unknown as typeof setInterval,
     clearInterval: (() => {}) as unknown as typeof clearInterval,
   });
@@ -98,17 +106,60 @@ test("the runtime's text chunks become the reply's words, with the end and inter
   bridge.control({ type: "chunk", text: "", end_of_turn: false, interrupted: false, is_listen: true });
   bridge.control({ type: "chunk", text: ", how are you?", end_of_turn: true, interrupted: false });
   bridge.control({ type: "chunk", text: "", end_of_turn: false, interrupted: true });
+  // The last speech unit of a reply also closes it, in case the text never carried the flag.
+  bridge.control({ type: "audio.done", generation_id: 2, unit_id: 4, end_of_turn: true });
+  bridge.control({ type: "audio.done", generation_id: 3, unit_id: 1, end_of_turn: false });
   const words = events.filter((e) => e.type === "agent.text");
   assert.deepEqual(words, [
     { type: "agent.text", text: "Hi there", endOfTurn: false, interrupted: false },
     { type: "agent.text", text: ", how are you?", endOfTurn: true, interrupted: false },
     { type: "agent.text", text: "", endOfTurn: false, interrupted: true },
+    { type: "agent.text", text: "", endOfTurn: true, interrupted: false },
   ]);
   assert.ok(bridge.logs.some((l) => l.startsWith("<- chunk ")), "controls still reach the host log");
 });
 
+test("starting live waits for the runtime to be ready; End cancels the wait", async () => {
+  const { bridge, devices, host } = harness({ ready: false });
+  await tick();
+  const attempt = host.startLive();
+  await tick();
+  assert.equal(bridge.startCalls, 0, "no call and no microphone before the runtime is ready");
+  assert.deepEqual(devices.calls, []);
+  bridge.control({ type: "ready", session_id: "s1" });
+  await attempt;
+  assert.equal(bridge.startCalls, 1);
+  assert.deepEqual(devices.calls, ["mic.start"]);
+  await host.endLive();
+  // A second attempt, abandoned by End while still connecting: nothing opens, nothing throws.
+  bridge.closed(1006);
+  const abandoned = host.startLive();
+  await tick();
+  assert.equal(bridge.reconnects, 1, "a closed link is reopened first");
+  await host.endLive();
+  await abandoned;
+  assert.equal(bridge.startCalls, 1);
+  assert.equal(devices.calls.filter((c) => c === "mic.start").length, 1);
+});
+
+test("a runtime that never becomes ready is reported in plain words, not waited on forever", async () => {
+  const { bridge, host } = harness({ ready: false, readyTimeoutMs: 30 });
+  await tick();
+  await assert.rejects(host.startLive(), /GNSIS could not be reached/);
+  assert.equal(bridge.startCalls, 0);
+});
+
+test("a ready that went by before the page loaded is picked up from the main process", async () => {
+  const { events } = harness();
+  await tick();
+  assert.deepEqual(events.at(-1), { type: "link", state: "ready", detail: undefined });
+  const closedBefore = harness({ state: { ready: { type: "ready" }, connected: false, closed: true } });
+  await tick();
+  assert.deepEqual(closedBefore.events.at(-1), { type: "link", state: "closed", detail: "The connection to GNSIS closed." });
+});
+
 test("the link state is what the daemon last said, and a late subscriber hears it", async () => {
-  const { bridge, events, host } = harness();
+  const { bridge, events, host } = harness({ ready: false });
   await tick();
   assert.deepEqual(events[0], { type: "link", state: "connecting", detail: undefined });
   bridge.control({ type: "runtime.status", status: "loading" });

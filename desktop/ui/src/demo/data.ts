@@ -119,8 +119,14 @@ const MORNING_SHORT = "Short version: water and daylight first, then one focused
 
 export const GREETING =
   "Hi, I’m your GNSIS. Press the voice button to talk with me live, or type below. When a job needs its own helper, I’ll start an agent for it.";
+/** The same welcome when typed messages cannot reach GNSIS yet. */
+export const GREETING_VOICE_ONLY =
+  "Hi, I’m your GNSIS. Press the voice button to talk with me live. When a job needs its own helper, I’ll start an agent for it.";
+/** What typing gets when the host cannot deliver it. Honest, not a made-up reply. */
+export const TYPING_NOT_CONNECTED =
+  "Typing isn’t connected to GNSIS yet. Press the voice button to talk.";
 
-export function homeConv(publicId: string, demo: boolean): Conv {
+export function homeConv(publicId: string, demo: boolean, text = true): Conv {
   return {
     id: "gnsis",
     title: "GNSIS",
@@ -139,7 +145,7 @@ export function homeConv(publicId: string, demo: boolean): Conv {
           { role: "user", text: "Also find a cacio e pepe recipe for two" },
           { role: "agent", text: "Recipe finder is on it. I’ll let you know when it’s done.", stream: 999 },
         ]
-      : [{ role: "agent", text: GREETING, stream: 999 }],
+      : [{ role: "agent", text: text ? GREETING : GREETING_VOICE_ONLY, stream: 999 }],
   };
 }
 

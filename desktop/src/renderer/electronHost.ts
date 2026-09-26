@@ -58,10 +58,18 @@ export interface ElectronHostOptions {
   speechHangoverMs?: number;
   /** How often the speaker level is sampled while a reply plays. */
   levelIntervalMs?: number;
+  /**
+   * How long starting live voice waits for the runtime to be ready. A cold
+   * remote runtime takes about two minutes to load, so the default is
+   * generous; the person can end the attempt at any time.
+   */
+  readyTimeoutMs?: number;
   now?: () => number;
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
 }
+
+type Wait = "ready" | "aborted" | "timeout";
 
 type Listener = (e: LiveEvent) => void;
 
@@ -84,9 +92,12 @@ export class ElectronLiveHost implements LiveHost {
   private lastGeneration: number | null = null;
   /** Every generation up to this one is cancelled: its audio is never played. */
   private staleGeneration = -1;
+  /** A live start waiting for the runtime; resolved by `ready`, End, or the timeout. */
+  private waiting: ((ok: boolean) => void) | null = null;
   private readonly threshold: number;
   private readonly hangoverMs: number;
   private readonly levelIntervalMs: number;
+  private readonly readyTimeoutMs: number;
   private readonly now: () => number;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
@@ -100,6 +111,7 @@ export class ElectronLiveHost implements LiveHost {
     this.threshold = opts.speechThreshold ?? 0.12;
     this.hangoverMs = opts.speechHangoverMs ?? 350;
     this.levelIntervalMs = opts.levelIntervalMs ?? 66;
+    this.readyTimeoutMs = opts.readyTimeoutMs ?? 180_000;
     this.now = opts.now ?? (() => Date.now());
     this.setIntervalFn = opts.setInterval ?? setInterval;
     this.clearIntervalFn = opts.clearInterval ?? clearInterval;
@@ -147,6 +159,18 @@ export class ElectronLiveHost implements LiveHost {
       this.emit({ type: "vision", source: null, state: "off" });
     };
 
+    // The daemon's `ready` may have gone by before this page loaded; the main
+    // process kept it. Ask, rather than show "Connecting…" to a runtime that
+    // has been ready for a while.
+    void this.bridge
+      .linkState()
+      .then((s) => {
+        if (!s || this.link !== "connecting") return;
+        if (s.ready && s.connected) this.setLink("ready");
+        else if (s.closed) this.setLink("closed", "The connection to GNSIS closed.");
+      })
+      .catch(() => {});
+
     // Permission state is explicit state, reported to the daemon as it is found.
     void this.bridge.mediaPermissions().then((p) => {
       for (const [k, v] of Object.entries(p ?? {})) {
@@ -158,21 +182,39 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   capabilities(): HostCapabilities {
-    return { voice: true, screen: true, camera: true, transcript: false, overlay: false };
+    // text: the runtime has no typed input yet; transcript: it sends no
+    // speech-to-text of the person; overlay: an ordinary window for now.
+    return { voice: true, text: false, screen: true, camera: true, transcript: false, overlay: false };
   }
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
-    const state = this.link;
-    const detail = this.linkDetail;
+    // Read the link at delivery time, not at subscribe time: a `ready` that
+    // lands in between must not be followed by a stale "connecting".
     queueMicrotask(() => {
-      if (this.listeners.has(listener)) listener({ type: "link", state, detail });
+      if (this.listeners.has(listener)) listener({ type: "link", state: this.link, detail: this.linkDetail });
     });
     return () => this.listeners.delete(listener);
   }
 
   async startLive(): Promise<void> {
-    if (this.live) return;
+    if (this.live || this.waiting) return;
+    // The microphone opens only once the runtime is ready to hear it: frames
+    // sent into a connecting socket would queue up and arrive as one stale
+    // burst, and a dead socket would leave the UI "listening" to nothing.
+    if (this.link !== "ready") {
+      if (this.link === "closed" || this.link === "error") {
+        this.log("reconnect: live voice requested while the link is down");
+        this.setLink("connecting", "Reconnecting to GNSIS.");
+        this.bridge.reconnect();
+      }
+      const outcome = await this.waitForReady();
+      if (outcome === "aborted") return;
+      if (outcome === "timeout") {
+        this.log("live: the runtime did not become ready in time");
+        throw new Error("GNSIS could not be reached.");
+      }
+    }
     this.bridge.startCall();
     try {
       await this.devices.mic.start();
@@ -191,6 +233,8 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   async endLive(): Promise<void> {
+    // End while still connecting: the attempt is abandoned, nothing to close.
+    this.waiting?.(false);
     if (!this.live) return;
     this.live = false;
     this.endSpeech();
@@ -261,6 +305,11 @@ export class ElectronLiveHost implements LiveHost {
         break;
       case "session.done":
         this.setLink("closed", "The session ended.");
+        break;
+      case "audio.done":
+        // The last unit of a reply says so; close the reply even if the text
+        // chunk that ended it never carried the flag.
+        if (c?.end_of_turn) this.emit({ type: "agent.text", text: "", endOfTurn: true, interrupted: false });
         break;
       case "transport.error":
         this.setLink("error", "GNSIS could not be reached.");
@@ -334,6 +383,22 @@ export class ElectronLiveHost implements LiveHost {
     this.link = state;
     this.linkDetail = detail;
     this.emit({ type: "link", state, detail });
+    if (state === "ready") this.waiting?.(true);
+    else if (state === "closed" || state === "error") this.waiting?.(false);
+  }
+
+  private waitForReady(): Promise<Wait> {
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (outcome: Wait) => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        this.waiting = null;
+        resolve(outcome);
+      };
+      timer = setTimeout(() => finish("timeout"), this.readyTimeoutMs);
+      this.waiting = (ok) => finish(ok ? "ready" : "aborted");
+    });
   }
 
   // ---- microphone energy -> the person's turns ----------------------------------

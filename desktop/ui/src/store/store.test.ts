@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { SimulatedLiveHost } from "../hosts/simulated";
 import type { Identity, IdentityStore, LiveEvent, LiveHost } from "../host";
 import { dockGeometry, rankedAgents } from "../components/Shell";
-import { actions, configure, enterDesktop, getState, presence, resetStore, setState } from "./store";
+import { actions, configure, enterDesktop, getState, presence, resetStore, setState, tick } from "./store";
+import { TYPING_NOT_CONNECTED } from "../demo/data";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,9 +20,10 @@ const identityStore: IdentityStore = {
 class RecordingHost implements LiveHost {
   readonly kind = "recording";
   calls: string[] = [];
+  text = false;
   private listeners = new Set<(e: LiveEvent) => void>();
   capabilities() {
-    return { voice: true, screen: true, camera: false, transcript: false, overlay: false };
+    return { voice: true, text: this.text, screen: true, camera: false, transcript: false, overlay: false };
   }
   subscribe(fn: (e: LiveEvent) => void) {
     this.listeners.add(fn);
@@ -142,6 +144,44 @@ test("the visual sense is a switch the host reports back on", async () => {
   actions.send();
   await sleep(0);
   assert.equal(host.calls.at(-1), "stopVision");
+});
+
+test("typing to a host that cannot deliver it gets an honest line, never a made-up reply", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  assert.match(getState().convs.gnsis.turns[0].text, /Press the voice button to talk with me live\. When/);
+  setState({ text: "What’s the weather tomorrow?", mode: "bar", winOpen: true });
+  actions.send();
+  const s = getState();
+  assert.deepEqual(s.convs.gnsis.turns.slice(-2), [
+    { role: "user", text: "What’s the weather tomorrow?" },
+    { role: "system", text: TYPING_NOT_CONNECTED },
+  ]);
+  assert.equal(s.agentIds.length, 0, "no stand-in agent was started");
+  assert.equal(s.text, "");
+  // In demo mode the stand-ins are back, so the whole flow can be reviewed.
+  enterDesktop(identity, true);
+  setState({ text: "Find me a plumber", mode: "bar", winOpen: true, active: "gnsis" });
+  actions.send();
+  assert.ok(getState().agentIds.includes("c1"), "demo mode hands the job to a stand-in agent");
+});
+
+test("when nothing is moving, the clock stands still and nothing re-renders", () => {
+  resetStore();
+  configure(new RecordingHost(), identityStore);
+  enterDesktop(identity, false);
+  const before = getState();
+  tick();
+  tick();
+  assert.equal(getState(), before, "an idle desktop does not produce new state");
+  // Something to do: a stand-in reply streaming in.
+  setState((s) => ({ convs: { ...s.convs, gnsis: { ...s.convs.gnsis, turns: [...s.convs.gnsis.turns, { role: "agent", text: "Working on it.", stream: 0 }] } } }));
+  const busyBefore = getState();
+  tick();
+  assert.notEqual(getState(), busyBefore);
+  assert.equal(getState().t, busyBefore.t + 1);
 });
 
 test("the simulated host plays a whole conversation into the chat", async () => {

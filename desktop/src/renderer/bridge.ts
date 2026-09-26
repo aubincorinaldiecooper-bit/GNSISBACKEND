@@ -10,12 +10,24 @@ export interface ScreenUpdate {
   control?: unknown;
 }
 
+export interface LinkState {
+  /** The last `ready` control the daemon sent on this connection, if any. */
+  ready: unknown;
+  connected: boolean;
+  /** The duplex socket closed since it last opened. */
+  closed: boolean;
+}
+
 export interface GnsisBridge {
   mediaPermissions(): Promise<Record<string, unknown>>;
   requestPermission(kind: string): Promise<string>;
   sendControl(control: unknown): void;
   sendHostEvent(event: unknown): void;
   hostLog(line: string): void;
+  /** What the main process knows about the runtime link right now. */
+  linkState(): Promise<LinkState>;
+  /** Open the runtime sockets again after they closed. */
+  reconnect(): void;
   startCall(): void;
   /** Close the call on the timeline; the daemon session stays alive. */
   endCall(reason: string): void;

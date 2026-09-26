@@ -22,7 +22,7 @@ export class SimulatedLiveHost implements LiveHost {
   constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; tenthMs?: number } = {}) {
     this.script = opts.script ?? (() => liveScript(null));
     this.tenth = opts.tenthMs ?? 100;
-    this.caps = { voice: true, screen: false, camera: false, transcript: opts.transcript ?? true, overlay: false };
+    this.caps = { voice: true, text: true, screen: false, camera: false, transcript: opts.transcript ?? true, overlay: false };
   }
 
   capabilities(): HostCapabilities {

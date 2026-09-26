@@ -19,6 +19,11 @@ export type VisionSource = "screen" | "camera";
 export interface HostCapabilities {
   /** Live speech-to-speech is available at all. */
   voice: boolean;
+  /**
+   * A typed message reaches GNSIS. Without it, typing gets a plain line saying
+   * so, never a made-up reply; the stand-in agents are only shown in demo mode.
+   */
+  text: boolean;
   /** The host can feed the runtime frames of the screen. */
   screen: boolean;
   /** The host can feed the runtime frames from a camera. */
