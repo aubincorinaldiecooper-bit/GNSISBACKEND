@@ -72,6 +72,12 @@ Only `dist/` (the bundled app) + `package.json`. No tests, sources,
 sourcemaps, model assets, or dev infrastructure. `release/` is the output
 dir for packaged artifacts.
 
+The renderer in `dist/renderer/` is the product interface, `@gnsis/ui`
+(`ui/`, an npm workspace of this package), bundled by esbuild with React, the
+Geist fonts it ships, and blobatar for the faces. Nothing in it is fetched at
+run time: the page's content policy allows only its own files. See
+`ui/README.md` for the interface and how GNSISFRONTEND takes the same code.
+
 ## macOS permissions
 
 On first use the installed app requests microphone, camera (when used), and

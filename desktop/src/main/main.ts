@@ -102,9 +102,14 @@ const host = new HostSession({
 });
 
 function createWindow(): void {
+  // The product UI lays out a chat beside an agent panel; below ~1100 px the
+  // two overlap, so the window opens at a comfortable desktop size.
   win = new BrowserWindow({
-    width: 960,
-    height: 640,
+    width: 1440,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 700,
+    title: "GNSIS",
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,
