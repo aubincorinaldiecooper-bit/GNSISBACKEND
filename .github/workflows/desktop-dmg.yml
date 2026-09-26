@@ -25,19 +25,40 @@ jobs:
         run: npm run typecheck
       - working-directory: desktop
         run: npm test
-      - name: Package unsigned development DMG (arm64)
+      - name: Package unsigned development DMG (universal)
         working-directory: desktop
         run: npm run package:mac
+      - name: Verify packaged app is a real universal binary
+        working-directory: desktop
+        run: |
+          # A green electron-builder exit is not proof: inspect every Mach-O in
+          # the bundle and fail if any is single-architecture.
+          APP="release/mac-universal/GNSIS.app"
+          test -d "$APP" || { echo "expected $APP to exist"; exit 1; }
+          single=0
+          while IFS= read -r f; do
+            info="$(lipo -info "$f" 2>/dev/null || true)"
+            case "$info" in
+              *x86_64*arm64*|*arm64*x86_64*) ;;
+              *) echo "NOT universal: $f -> $info"; single=1 ;;
+            esac
+          done < <(
+            find "$APP" -type f | while IFS= read -r f; do
+              file "$f" | grep -q "Mach-O" && printf '%s\n' "$f"
+            done
+          )
+          [ "$single" -eq 0 ] || exit 1
+          lipo -info "$APP/Contents/MacOS/GNSIS"
       - name: Inspect packaged app for accidental secrets
         working-directory: desktop
         run: |
           if grep -rilE "(api[_-]?key|secret|password|BEGIN PRIVATE KEY)" \
-            "release/mac-arm64/GNSIS.app/Contents/Resources/app" \
+            "release/mac-universal/GNSIS.app/Contents/Resources/app" \
             --include='*.js' --include='*.json' 2>/dev/null | grep -v icon; then
             echo "possible secret material in packaged app" && exit 1
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: GNSIS-dmg-arm64
+          name: GNSIS-dmg-universal
           path: desktop/release/*.dmg
           if-no-files-found: error

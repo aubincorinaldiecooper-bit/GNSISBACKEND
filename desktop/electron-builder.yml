@@ -19,9 +19,11 @@ mac:
   # time. Replace with a real .icns when brand assets are produced.
   icon: build/icon.png
   target:
+    # One download for Mac: a universal app runs natively on Apple Silicon and
+    # Intel, so users never choose a CPU architecture.
     - target: dmg
       arch:
-        - arm64
+        - universal
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
@@ -41,6 +43,10 @@ dmg:
       type: link
       path: /Applications
 
+# Universal suitability (audit): the only runtime dependency is `ws` (pure
+# JS); `files:` ships only dist/ + package.json — no native modules or vendored
+# binaries, so the standard electron-builder universal merge is safe.
+#
 # Signing/notarization: enabled automatically when credentials exist.
 #   CSC_LINK / CSC_KEY_PASSWORD            — Developer ID certificate
 #   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarization API key

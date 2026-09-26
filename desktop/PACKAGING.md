@@ -9,15 +9,19 @@ architecture, only distribution.
 ```bash
 cd desktop
 npm ci
-npm run package:mac        # GNSIS-<version>-arm64.dmg in release/
+npm run package:mac        # GNSIS-<version>-universal.dmg in release/
 npm run package:mac:dir    # unpacked GNSIS.app only (faster smoke check)
 ```
 
-Artifact: `desktop/release/GNSIS-<version>-arm64.dmg`.
+Artifact: `desktop/release/GNSIS-<version>-universal.dmg` — a universal app
+that runs natively on Apple Silicon and Intel; users never pick a CPU
+architecture.
 
 The DMG must be built on macOS (`hdiutil`). Linux CI builds everything up to
 the `.app`; the `.dmg` step runs on the `macos` runner in
-`.github/workflows/desktop-dmg.yml`.
+`.github/workflows/desktop-dmg.yml`, which also verifies every Mach-O in the
+bundle carries both `x86_64` and `arm64` slices (`lipo -info`) before the
+artifact uploads.
 
 ## Identity
 
