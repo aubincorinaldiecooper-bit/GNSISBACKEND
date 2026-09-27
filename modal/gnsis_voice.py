@@ -105,6 +105,9 @@ image = (
         "fastapi>=0.110",
         "uvicorn[standard]>=0.29",
         "websockets>=12",
+        # Trusted spoken-turn transcription for the desktop action policy.
+        "faster-whisper>=1.2,<2",
+        "huggingface-hub>=0.30,<1",
         # Token2wav deps. torchaudio must match the torch pin: the
         # unbounded torchaudio wheel resolves to the cu13 build and fails
         # to load libcudart.so.13 under torch 2.6 (cu124).
@@ -115,7 +118,8 @@ image = (
     .run_commands(
         "python -m pip install --no-deps /workspace/runtime/minicpm_ft",
         "python -m pip install --no-deps /workspace/runtime/gnsis_runtime",
-        "mkdir -p /workspace /var/gnsis /var/gnsis/ledger",
+        "mkdir -p /workspace /var/gnsis /var/gnsis/ledger /opt/gnsis-asr",
+        "python -c \"from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small.en', local_dir='/opt/gnsis-asr/faster-whisper-small.en')\"",
     )
 )
 
@@ -139,6 +143,7 @@ def cache_gnsis_models() -> dict[str, str]:
         "talker_config": Path("/models/Gander/talker/talker_config.json"),
         "token2wav": Path("/models/Gander/talker/assets/token2wav"),
         "ref_audio": Path("/models/Gander/talker/assets/ref_audio.wav"),
+        "asr": Path("/opt/gnsis-asr/faster-whisper-small.en/model.bin"),
     }
     for label, path in required.items():
         if not path.exists():

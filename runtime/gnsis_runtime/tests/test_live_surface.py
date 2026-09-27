@@ -916,9 +916,12 @@ def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
     assert config.duplex.talker_emit_speech_tokens == 25
     assert config.server.cuda_visible_devices == "0,1"
 
-    # Everything else pinned: raw audio into the model (no
-    # ASR), no worker, no memory layer, camera negotiated as before.
-    assert config.asr.mode == "disabled"
+    # Raw audio still goes directly into the model; managed ASR runs beside it
+    # only to produce trusted spoken-turn text for the desktop action policy.
+    assert config.asr.mode == "managed"
+    assert config.asr.model_path == "/opt/gnsis-asr/faster-whisper-small.en"
+    assert config.asr.device == "cpu"
+    assert config.asr.compute_type == "int8"
     assert config.worker.provider == "none"
     assert config.duplex.sliding_window_mode == "context_no_previous"
     assert config.duplex.allow_client_video is True
