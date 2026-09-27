@@ -1,0 +1,69 @@
+{
+  "version": "desktop-v1",
+  "tools": [
+    {
+      "name": "open",
+      "description": "Open an app, a web address, or a file or folder on the person's Mac. Web addresses open in their own browser.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "An app name like Spotify, a web address, or a file or folder like Downloads."
+          }
+        }
+      }
+    },
+    {
+      "name": "files",
+      "description": "See or change files and folders on the person's Mac. A bare name is looked for in the open Finder window and the usual folders. selected means what is selected in Finder.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": {"type": "string", "enum": ["list", "find", "move", "rename", "new_folder"]},
+          "path": {"type": "string", "maxLength": 512, "description": "The file or folder acted on. For list and find, the folder to look in."},
+          "to": {"type": "string", "maxLength": 512, "description": "For move, the folder to move it into."},
+          "name": {"type": "string", "maxLength": 255, "description": "For rename, the new name. For new_folder, its name."},
+          "query": {"type": "string", "maxLength": 128, "description": "For find, part of the name or a kind such as pdf."}
+        }
+      }
+    },
+    {
+      "name": "browser",
+      "description": "Use the web browser the person already has open, in their own tabs.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": {"type": "string", "enum": ["tabs", "switch", "go", "back", "forward", "reload"]},
+          "url": {"type": "string", "maxLength": 2048, "description": "For go, the address to load in the current tab."},
+          "tab": {"type": "integer", "minimum": 1, "maximum": 100, "description": "For switch, the tab number from tabs."}
+        }
+      }
+    },
+    {
+      "name": "input",
+      "description": "Type, press keys, or click in the app in front, when the other tools cannot do it. Look at the screen afterwards.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": {"type": "string", "enum": ["type", "keys", "click"]},
+          "text": {"type": "string", "maxLength": 1000, "description": "For type, the text."},
+          "keys": {"type": "string", "maxLength": 64, "description": "For keys, like cmd+f, enter, escape."},
+          "label": {"type": "string", "maxLength": 128, "description": "For click, the visible name of the button or item."},
+          "x": {"type": "number", "minimum": 0, "maximum": 1, "description": "For click without a name, 0 to 1 across the shared screen."},
+          "y": {"type": "number", "minimum": 0, "maximum": 1, "description": "0 to 1 down the shared screen."}
+        }
+      }
+    }
+  ]
+}

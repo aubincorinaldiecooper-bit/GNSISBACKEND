@@ -62,6 +62,17 @@ export type LiveEvent =
   | { type: "user.words"; text: string; final: boolean }
   /** Microphone state. `denied` and `error` carry a plain-English detail. */
   | { type: "mic"; state: "on" | "off" | "denied" | "error"; detail?: string }
+  /**
+   * Something GNSIS did, or is waiting to do, on this computer at the model's
+   * request: waiting for the person's OK, done (with what was checked),
+   * failed, declined, or blocked on a permission macOS has not given.
+   * `working` is the moment it starts; the others are outcomes.
+   */
+  | {
+      type: "action";
+      state: "working" | "waiting" | "done" | "failed" | "declined" | "needs_permission";
+      text: string;
+    }
   /** The visual sense. `on` is sent only once the runtime has accepted a frame. */
   | {
       type: "vision";

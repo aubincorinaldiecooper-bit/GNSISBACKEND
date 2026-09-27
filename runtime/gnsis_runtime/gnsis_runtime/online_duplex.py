@@ -13,7 +13,7 @@ import socket
 import time
 import urllib.parse
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -22,6 +22,13 @@ from mcpmft.infer import startup_timing
 
 from .contracts import MediaRef, storage_key
 from .duplex_bridge import GNSISDuplexSession
+from .host_tools import (
+    HOST_TOOLS_PARAM,
+    HOST_TOOLS_VERSION_PARAM,
+    NO_HOST_TOOLS,
+    HostToolNegotiation,
+    negotiate,
+)
 from .media_mode import (
     CLIENT_VIDEO_MODES,
     VIDEO_SOURCES,
@@ -43,7 +50,7 @@ from .screen_transport import (
     decode_screen_frame,
     persist_screen_frame,
 )
-from .task_tools_online import TaskToolsRealtimeCoordinator
+from .task_tools_online import StaleToolResponse, TaskToolsRealtimeCoordinator
 
 LOGGER = logging.getLogger(__name__)
 _SESSION_ID = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,128}$")
@@ -200,6 +207,14 @@ class OnlineDuplexSettings:
     # stays in memory unless someone turns this on deliberately.
     persist_camera_frames: bool = False
     tool_schemas: tuple[dict[str, Any], ...] = ()
+    # The reviewed schemas of tools a connected Host may run on its own
+    # machine (host_tools.HostToolCatalog). None: no session is ever shown one.
+    host_tool_catalog: Any | None = None
+    # How long a client has to answer an external tool call before the model
+    # is told it timed out, and the most a client's `tool.progress` can extend
+    # that (a confirmation the person is still reading).
+    external_tool_timeout_sec: float = 60.0
+    external_tool_max_wait_sec: float = 300.0
     expose_task_slate_to_model: bool = False
     # Delivery gating: when on, a background announcement is 'delivered' only
     # after the device's playback ACK; when off, socket write finalizes it
@@ -269,6 +284,9 @@ class _ActiveSession:
     session_marks: set = field(default_factory=set)
     session_timing_t0: float = 0.0
     startup_class: str = "warm"
+    # What this session agreed with its Host when the socket opened. A resume
+    # keeps it: the model's prompt was built from it and cannot change.
+    host_tools: HostToolNegotiation = NO_HOST_TOOLS
 
 
 def _session_timing_mark(
@@ -315,6 +333,14 @@ class _Runtime:
     harness_client: Any | None = None
     harness_poll_sec: float = 2.0
     prefix_snapshot: Any | None = None
+    # Prefix snapshots for sessions whose Host added tools, keyed by the
+    # accepted tool names. The tools are part of the prefilled prompt, so a
+    # session with a different set cannot reuse the base snapshot.
+    prefix_snapshots: dict[tuple[str, ...], Any] = field(default_factory=dict)
+    # Set when the host-tool catalog could not be prepared (it did not fit the
+    # model's tool budget). Actions are then offered to no session, and the
+    # voice product carries on without them rather than failing to boot.
+    host_tools_error: str | None = None
     prefix_cache_status: str = "pending"
     prefix_prepare_seconds: float | None = None
     first_unit_warmup_seconds: float | None = None
@@ -391,10 +417,18 @@ def _build_session(
     *,
     media_mode: str | None = None,
     screen_frames: LatestScreenFrameBuffer | None = None,
+    host_tools: tuple[str, ...] = (),
 ) -> GNSISDuplexSession:
     from mcpmft.infer.realtime import DuplexLiveConfig, DuplexLiveSession
     from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
-    tools = _model_tool_schemas(runtime)
+    tools = _model_tool_schemas(runtime, host_tools)
+    # A snapshot holds the tools it was prefilled with and restoring one
+    # ignores `tools`, so only a snapshot of exactly this set may be used.
+    snapshot = (
+        runtime.prefix_snapshots.get(tuple(host_tools))
+        if host_tools
+        else runtime.prefix_snapshot
+    )
 
     live = DuplexLiveSession(
         runtime.bundle,
@@ -413,8 +447,25 @@ def _build_session(
         ),
         detached_talker=runtime.detached_talker,
         tools=tools,
-        prefix_snapshot=runtime.prefix_snapshot,
+        prefix_snapshot=snapshot,
     )
+    if (
+        host_tools
+        and snapshot is None
+        and runtime.prefix_snapshot is not None
+        and hasattr(live, "runner")
+    ):
+        # This session just prefilled a tool set nobody had used yet. Keep
+        # the result, so the next session with the same Host starts as fast
+        # as a web session does.
+        runtime.prefix_snapshots[tuple(host_tools)] = (
+            live.runner.capture_prefix_snapshot()
+        )
+        LOGGER.info(
+            "Prepared host-tool prefix cache: tools=%s tokens=%d",
+            ",".join(host_tools),
+            runtime.prefix_snapshots[tuple(host_tools)].token_count,
+        )
     if screen_frames is None:
         # Retain one frame per model unit across the full context window, and
         # keep a bounded capture-time history of consumed frames over the
@@ -499,6 +550,31 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
         runtime.prefix_snapshot.token_count,
         runtime.prefix_prepare_seconds,
     )
+    catalog = runtime.settings.host_tool_catalog
+    if catalog is not None:
+        # A desktop offers its whole catalog in the ordinary case, so that
+        # prefix is prepared now rather than on the first desktop session.
+        names = catalog.names()
+        try:
+            with startup_timing.stage("host_tool_prefix_prepare"):
+                runner.prepare(
+                    **{**prepare_kwargs, "tools": _model_tool_schemas(runtime, names)}
+                )
+                runtime.prefix_snapshots[names] = runner.capture_prefix_snapshot()
+        except ValueError as exc:
+            # ToolProtocolError is a ValueError: the catalog is over the tool
+            # budget. The model's tool set is checked before anything is
+            # prefilled, so the base prefix above is untouched.
+            runtime.host_tools_error = str(exc)
+            LOGGER.error(
+                "host tools disabled: the catalog could not be prepared: %s", exc
+            )
+        else:
+            LOGGER.info(
+                "Prepared host-tool prefix cache: tools=%s tokens=%d",
+                ",".join(names),
+                runtime.prefix_snapshots[names].token_count,
+            )
     startup_timing.resource_snapshot("after_prefix_prepare")
 
     if not runtime.settings.warm_first_unit:
@@ -537,27 +613,38 @@ async def _open_session(
     *,
     media_mode: str | None = None,
     screen_frames: LatestScreenFrameBuffer | None = None,
+    host_tools: tuple[str, ...] = (),
 ) -> GNSISDuplexSession:
     return await asyncio.to_thread(
         _build_session,
         runtime,
         media_mode=media_mode,
         screen_frames=screen_frames,
+        host_tools=host_tools,
     )
 
 
-def _model_tool_schemas(runtime: _Runtime) -> list[dict[str, Any]]:
-    """Return the model-visible tool set, including GNSIS's local touch output."""
+def _model_tool_schemas(
+    runtime: _Runtime,
+    host_tools: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    """Return the model-visible tool set, including GNSIS's local touch output.
+
+    ``host_tools`` are the catalog tools this session's Host accepted to run;
+    they sit between the deployment's own tools and the built-ins.
+    """
 
     from mcpmft.tool_protocol import ensure_lean_task_tools
 
     configured = list(runtime.settings.tool_schemas)
+    catalog = runtime.settings.host_tool_catalog
+    hosted = list(catalog.select(host_tools)) if catalog is not None and host_tools else []
     reserved = {str(schema.get("name") or "") for schema in BUILT_IN_TOOL_SCHEMAS}
-    for schema in configured:
+    for schema in [*configured, *hosted]:
         name = str(schema.get("name") or "")
         if name in reserved:
             raise ValueError(f"{name} is a reserved built-in realtime output tool")
-    return ensure_lean_task_tools([*configured, *BUILT_IN_TOOL_SCHEMAS])
+    return ensure_lean_task_tools([*configured, *hosted, *BUILT_IN_TOOL_SCHEMAS])
 
 
 def _reserve_built_in_tools(params: Any, bundle: Any) -> Any:
@@ -594,10 +681,10 @@ def _reserve_built_in_tools(params: Any, bundle: Any) -> Any:
     return replace(params, **changes)
 
 
-def _tool_names(runtime: _Runtime) -> list[str]:
+def _tool_names(runtime: _Runtime, host_tools: Sequence[str] = ()) -> list[str]:
     return [
         str(schema.get("name") or "")
-        for schema in _model_tool_schemas(runtime)
+        for schema in _model_tool_schemas(runtime, host_tools)
         if schema.get("name")
     ]
 
@@ -802,6 +889,14 @@ async def _send_chunk(
             else b""
         )
         payload = event.to_payload()
+        call_id = getattr(event, "call_id", None)
+        if call_id:
+            # A call the client is expected to answer, by this id.
+            payload.update(
+                call_id=call_id,
+                dispatch=getattr(event, "dispatch", "client"),
+                turn_id=getattr(event, "turn_id", None),
+            )
     payload.update(
         audio=bool(audio),
         audio_bytes=len(audio),
@@ -1129,6 +1224,28 @@ def create_online_duplex_app(
         raise ValueError("asr_timeout_sec must be positive")
     if runtime.settings.turn_bind_grace_sec < 0:
         raise ValueError("turn_bind_grace_sec cannot be negative")
+    if runtime.settings.external_tool_timeout_sec <= 0:
+        raise ValueError("external_tool_timeout_sec must be positive")
+    if (
+        runtime.settings.external_tool_max_wait_sec
+        < runtime.settings.external_tool_timeout_sec
+    ):
+        raise ValueError(
+            "external_tool_max_wait_sec cannot be shorter than external_tool_timeout_sec"
+        )
+    catalog = runtime.settings.host_tool_catalog
+    if catalog is not None:
+        clashes = sorted(
+            set(catalog.names())
+            & {str(schema.get("name") or "") for schema in runtime.settings.tool_schemas}
+        )
+        if clashes:
+            raise ValueError(
+                f"host tool catalog repeats deployment tools: {', '.join(clashes)}"
+            )
+        # Built-in and task-tool names are refused here too, at boot, rather
+        # than on the first desktop session.
+        _model_tool_schemas(runtime, catalog.names())
     app = FastAPI(title="GNSIS Online Duplex", version="1.0.0")
 
     async def prepare_static_prefix() -> None:
@@ -1341,6 +1458,21 @@ def create_online_duplex_app(
             ),
             "asr_enabled": bool(runtime.settings.asr_base_url),
             "tools": _tool_names(runtime),
+            # What a desktop may add: the reviewed catalog, and which tool sets
+            # already have a prefilled prefix.
+            "host_tools": (
+                {
+                    "version": runtime.settings.host_tool_catalog.version,
+                    "tools": list(runtime.settings.host_tool_catalog.names()),
+                    "available": runtime.host_tools_error is None,
+                    "error": runtime.host_tools_error,
+                    "prefix_cached": [
+                        list(names) for names in runtime.prefix_snapshots
+                    ],
+                }
+                if runtime.settings.host_tool_catalog is not None
+                else None
+            ),
         }
 
     @app.get("/api/asr/health")
@@ -1763,6 +1895,18 @@ def create_online_duplex_app(
                 _session_mark("first_talker_generation_start", at=submit_at)
             _session_mark("first_audio_chunk_sent")
         resume_token = websocket.query_params.get("resume_token") or ""
+        # Which of the Host's own tools this session's model may be shown.
+        # Decided before the model is opened, because the tools are part of
+        # the prompt it is prefilled with.
+        offered_host_tools = negotiate(
+            (
+                runtime.settings.host_tool_catalog
+                if runtime.host_tools_error is None
+                else None
+            ),
+            websocket.query_params.get(HOST_TOOLS_PARAM),
+            websocket.query_params.get(HOST_TOOLS_VERSION_PARAM),
+        )
         parked = runtime.sessions.get(session_id)
         resuming = bool(
             parked is not None
@@ -1991,8 +2135,13 @@ def create_online_duplex_app(
                     await emit_model_event(followup)
                 return
             # What is left of the unit, which is all of it when no touch was
-            # asked for, takes the ordinary path.
+            # asked for, takes the ordinary path. It is observed before it is
+            # sent: observing is what registers an external call and gives it
+            # the id the client must answer with, so the id has to be on the
+            # event when it goes out. Every model event passes through here,
+            # so each is observed exactly once.
             event = split.remainder
+            coordinator.observe_frontbrain(event)
             await send_model_event(
                 event,
                 wait_sent=output.delivery_id is not None,
@@ -2001,7 +2150,6 @@ def create_online_duplex_app(
                 coordinator.note_output_sent(output)
                 if not coordinator.playback_ack_required:
                     coordinator.acknowledge_output(output)
-            coordinator.observe_frontbrain(event)
 
         async def build_coordinator(
             model_session: GNSISDuplexSession,
@@ -2036,6 +2184,12 @@ def create_online_duplex_app(
                 playback_ack_required=runtime.settings.playback_ack_required,
                 playback_ack_timeout_sec=(
                     runtime.settings.playback_ack_timeout_sec
+                ),
+                external_tool_timeout_sec=(
+                    runtime.settings.external_tool_timeout_sec
+                ),
+                external_tool_max_wait_sec=(
+                    runtime.settings.external_tool_max_wait_sec
                 ),
             )
             await task_coordinator.start()
@@ -2194,8 +2348,21 @@ def create_online_duplex_app(
                         session_id,
                     )
                 else:
+                    if offered_host_tools.offered or offered_host_tools.rejected:
+                        LOGGER.info(
+                            "host tools: session_id=%s version=%s offered=%s "
+                            "accepted=%s rejected=%s reason=%s",
+                            session_id,
+                            offered_host_tools.version,
+                            ",".join(offered_host_tools.offered),
+                            ",".join(offered_host_tools.accepted),
+                            ",".join(offered_host_tools.rejected),
+                            offered_host_tools.reason or "-",
+                        )
                     open_task = asyncio.create_task(
-                        _open_session(runtime),
+                        _open_session(
+                            runtime, host_tools=offered_host_tools.accepted
+                        ),
                         name=f"gnsis-model-open-{session_id}",
                     )
                     session = await asyncio.shield(open_task)
@@ -2209,6 +2376,7 @@ def create_online_duplex_app(
                         session_marks=timing_record["marks"],
                         session_timing_t0=timing_record["t0"],
                         startup_class=timing_record["startup_class"],
+                        host_tools=offered_host_tools,
                         codex_frame_gate=ScreenFrameRateGate(
                             _codex_frame_interval_ms(runtime)
                         ),
@@ -2299,7 +2467,9 @@ def create_online_duplex_app(
                         "turn_bind_grace_ms": round(
                             runtime.settings.turn_bind_grace_sec * 1000
                         ),
-                        "tools": _tool_names(runtime),
+                        "tools": _tool_names(runtime, active.host_tools.accepted),
+                        "host_tools": active.host_tools.to_payload(),
+                        "tool_call_protocol": "call_id_v1",
                         "context_events": [
                             "turn.final",
                             *(
@@ -2330,6 +2500,20 @@ def create_online_duplex_app(
                     }
                 )
                 _session_mark("ready_event_sent")
+                if resuming:
+                    # A call issued before the socket dropped is still owed an
+                    # answer. The Host runs a call id at most once, so the
+                    # resend either gets the result it already has, or runs a
+                    # call that never reached it.
+                    redelivery = coordinator.pending_external_dispatch()
+                    if redelivery is not None:
+                        coordinator.timeline.emit(
+                            "tool.redelivered",
+                            component="tools",
+                            correlation_id=redelivery["call_id"],
+                            fields={"tool": redelivery["tool_calls"][0]["name"]},
+                        )
+                        await send_text(redelivery)
 
                 LOGGER.info(
                     "duplex ready: container=%s session_id=%s media_mode=%s "
@@ -2578,6 +2762,7 @@ def create_online_duplex_app(
                         runtime,
                         media_mode=active.media_mode,
                         screen_frames=screen_frames,
+                        host_tools=active.host_tools.accepted,
                     )
                     if runtime.detached_talker is not None:
                         speech_output_stop, speech_output_task = (
@@ -2689,17 +2874,48 @@ def create_online_duplex_app(
                     await asyncio.to_thread(session.clear_break)
                     await send_text({"type": "clear_break.done"})
                 elif event_type == "tool.response":
+                    call_id = control.get("call_id")
                     try:
                         response_event = await coordinator.inject_external_tool_response(
-                            control.get("content")
+                            control.get("content"),
+                            call_id=call_id,
                         )
+                    except StaleToolResponse as exc:
+                        # Late, replayed, or for a call that timed out: the
+                        # model never sees it, and the client is told why.
+                        await send_text(
+                            {
+                                "type": "tool.response.stale",
+                                "call_id": exc.call_id,
+                                "reason": exc.reason,
+                            }
+                        )
+                        continue
                     except (RuntimeError, ValueError) as exc:
                         await send_text({"type": "error", "message": str(exc)})
                         continue
                     if response_event is None:
-                        await send_text({"type": "tool.response.queued"})
+                        await send_text(
+                            {"type": "tool.response.queued", "call_id": call_id}
+                        )
                     else:
                         await emit_model_event(response_event)
+                elif event_type == "tool.progress":
+                    try:
+                        extended = coordinator.note_external_tool_progress(
+                            control.get("call_id"), control.get("state")
+                        )
+                    except (RuntimeError, ValueError) as exc:
+                        await send_text({"type": "error", "message": str(exc)})
+                        continue
+                    if not extended:
+                        await send_text(
+                            {
+                                "type": "tool.response.stale",
+                                "call_id": control.get("call_id"),
+                                "reason": "not_pending",
+                            }
+                        )
                 elif event_type == "turn.final":
                     try:
                         turn = coordinator.bind_final_turn(control)
@@ -2771,12 +2987,16 @@ def create_online_duplex_app(
                     )
                 elif event_type == "host.event":
                     # Chassis-neutral desktop-Host lifecycle events
-                    # (host.ready, call.*, device.*, permission.*) — the daemon
-                    # records them on the session timeline; it never sees an
-                    # Electron/Tauri object, only neutral messages.
+                    # (host.ready, call.*, device.*, permission.*, action.*) —
+                    # the daemon records them on the session timeline; it never
+                    # sees an Electron/Tauri object, only neutral messages. An
+                    # action's steps carry its call id, so they line up with
+                    # the runtime's own tool.* events for the same call.
                     if coordinator is not None:
                         host_event = control.get("event")
                         if isinstance(host_event, dict):
+                            call_id = host_event.get("call_id")
+                            source_ts = host_event.get("ts_ms")
                             coordinator.timeline.emit(
                                 str(host_event.get("type", "host.event")),
                                 component="host",
@@ -2785,24 +3005,12 @@ def create_online_duplex_app(
                                     for k, v in host_event.items()
                                     if k != "type"
                                 },
-                            )
-                    await send_text({"type": "host.event.done"})
-                elif event_type == "host.event":
-                    # Chassis-neutral desktop-Host lifecycle events
-                    # (host.ready, call.*, device.*, permission.*) — the daemon
-                    # records them on the session timeline; it never sees an
-                    # Electron/Tauri object, only neutral messages.
-                    if coordinator is not None:
-                        host_event = control.get("event")
-                        if isinstance(host_event, dict):
-                            coordinator.timeline.emit(
-                                str(host_event.get("type", "host.event")),
-                                component="host",
-                                fields={
-                                    k: v
-                                    for k, v in host_event.items()
-                                    if k != "type"
-                                },
+                                correlation_id=call_id if isinstance(call_id, str) else None,
+                                source_ts_ms=(
+                                    source_ts
+                                    if isinstance(source_ts, int) and not isinstance(source_ts, bool)
+                                    else None
+                                ),
                             )
                     await send_text({"type": "host.event.done"})
                 elif event_type in {"task.stop", "task.permission"}:

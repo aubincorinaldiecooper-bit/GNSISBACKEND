@@ -22,6 +22,12 @@ export interface DuplexClientOptions {
   url: string;
   sessionId: string;
   headers?: Record<string, string>;
+  /**
+   * Extra query parameters, read at each connect: the tools this Host offers
+   * (the runtime builds the model's prompt before any message could arrive)
+   * and the resume token that lets a dropped session be picked back up.
+   */
+  query?: () => Record<string, string | undefined>;
 }
 
 export class DuplexClient extends EventEmitter {
@@ -39,7 +45,10 @@ export class DuplexClient extends EventEmitter {
   }
 
   connect(): void {
-    const url = `${this.opts.url}/ws/duplex?session_id=${encodeURIComponent(this.opts.sessionId)}`;
+    let url = `${this.opts.url}/ws/duplex?session_id=${encodeURIComponent(this.opts.sessionId)}`;
+    for (const [key, value] of Object.entries(this.opts.query?.() ?? {})) {
+      if (value) url += `&${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+    }
     const ws = new WebSocket(url, { headers: this.opts.headers });
     this.ws = ws;
     ws.on("open", () => {
@@ -192,12 +201,14 @@ export class ScreenClient extends EventEmitter {
     }, delay);
   }
 
-  sendFrame(metadata: ScreenFrameMetadata, payload: Buffer): void {
+  /** Returns whether the frame actually went out. */
+  sendFrame(metadata: ScreenFrameMetadata, payload: Buffer): boolean {
     // Stale frames are not queued for later replay: if transport is down the
     // sampler's next tick produces a fresher frame instead.
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
     this.ws.send(JSON.stringify(metadata));
     this.ws.send(payload);
+    return true;
   }
 
   /** Tear down the current socket + pending reconnect; leaves `ws` null. */

@@ -132,6 +132,10 @@ export class ElectronLiveHost implements LiveHost {
       this.retireGeneration();
       this.cutPlayback("global_shortcut");
     });
+    this.bridge.onAction((update) => {
+      this.log(`action ${update.callId} ${update.state}`);
+      this.emit({ type: "action", state: update.state, text: update.text });
+    });
 
     playback.onSpeaking = (speaking) => {
       this.emit({ type: "agent.speaking", speaking });

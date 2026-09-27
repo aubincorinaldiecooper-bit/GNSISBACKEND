@@ -39,6 +39,14 @@ export interface GnsisBridge {
   onClosed(fn: (code: number, reason: string) => void): void;
   onScreen(fn: (update: ScreenUpdate) => void): void;
   onInterrupted(fn: () => void): void;
+  /** What GNSIS is doing or did on this computer (main's ActionBroker). */
+  onAction(fn: (update: ActionUpdate) => void): void;
+}
+
+export interface ActionUpdate {
+  callId: string;
+  state: "working" | "waiting" | "done" | "failed" | "declined" | "needs_permission";
+  text: string;
 }
 
 declare global {

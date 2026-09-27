@@ -56,12 +56,10 @@ export type ClientControl =
       source_ts_ms?: number;
     }
   | { type: "host.event"; event: Record<string, unknown> }
-  | {
-      type: "tool.call";
-      tool: string;
-      args: Record<string, unknown>;
-      call_id: string;
-    }
+  // The answer to the runtime's `tool.call` with the same call_id, and a
+  // keep-alive while the person is still deciding whether to allow it.
+  | { type: "tool.response"; call_id: string; content: Record<string, unknown> }
+  | { type: "tool.progress"; call_id: string; state: string }
   | AudioFrameHeader;
 
 export type ServerControl =

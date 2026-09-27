@@ -129,11 +129,35 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
       }
       break;
     }
+    case "action": {
+      // What GNSIS did on the computer goes in the conversation as a plain
+      // line; the moment it starts does not, only what came of it.
+      const line = actionLine(ev.state, ev.text);
+      if (line) commit.push({ role: "system", text: line });
+      break;
+    }
     case "vision":
       // Not part of a live session; the store keeps it separately.
       break;
   }
   return { live: next, commit };
+}
+
+function actionLine(state: string, text: string): string | null {
+  const said = text.trim();
+  if (!said) return null;
+  switch (state) {
+    case "waiting":
+    case "declined":
+    case "needs_permission":
+      return said;
+    case "done":
+      return `Done: ${said}`;
+    case "failed":
+      return `Couldn’t do it: ${said}`;
+    default:
+      return null;
+  }
 }
 
 /** The turns still open when live ends, plus the closing line. */

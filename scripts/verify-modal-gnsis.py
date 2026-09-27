@@ -48,6 +48,7 @@ HEALTH_SETTINGS = (
         "client_video",
     ),
     ("asr.mode", "asr_enabled"),
+    ("duplex.host_tools_path", "host_tools"),
     ("not a file setting, fixed by the model core", "chunk_ms"),
 )
 

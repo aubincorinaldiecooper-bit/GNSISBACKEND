@@ -142,6 +142,10 @@ class StubCoordinator:
     def observe_frontbrain(self, _event: Any) -> None:
         return None
 
+    def pending_external_dispatch(self) -> None:
+        # No external tool call is ever waiting on a stub.
+        return None
+
 
 @dataclass
 class StubModel:

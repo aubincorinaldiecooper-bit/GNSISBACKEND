@@ -5,11 +5,25 @@
  * epochs, protocol events, and socket ownership live in HostSession. The
  * renderer owns devices; the daemon never sees an Electron object.
  */
-import { app, BrowserWindow, desktopCapturer, ipcMain, session } from "electron";
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  dialog,
+  ipcMain,
+  screen as displays,
+  session,
+  systemPreferences,
+} from "electron";
+import os from "node:os";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
+import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
+import { TurnLog } from "../host/turns.js";
+import { ScreenWatch } from "../host/screenWatch.js";
+import { actionsAllowed } from "../host/runtimeTrust.js";
 import { hostLog } from "./hostLog.js";
 import {
   ElectronNotifications,
@@ -17,8 +31,15 @@ import {
   ElectronShortcuts,
 } from "../host/electronMain.js";
 import type { HostEvent } from "../host/protocol.js";
-import type { AudioFrameHeader, ScreenFrameMetadata } from "../shared/protocol.js";
+import type { AudioFrameHeader, ClientControl, ScreenFrameMetadata } from "../shared/protocol.js";
 import { ToolRegistry } from "../tools/registry.js";
+import { HOST_TOOL_SCHEMAS, HOST_TOOLS_VERSION } from "../tools/catalog.js";
+import { FilesTool } from "../tools/files.js";
+import { MacFinder } from "../tools/mac/finder.js";
+import { OpenTool } from "../tools/mac/open.js";
+import { BrowserTool } from "../tools/mac/browser.js";
+import { InputTool } from "../tools/mac/input.js";
+import { systemShell } from "../tools/mac/shell.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,19 +48,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // then the local default. Packaged builds can't rely on env, so the JSON
 // file is the supported seam for pointing the installed app at any runtime
 // — including the future LocalGNSISProvider on 127.0.0.1.
+function readSettings(): { runtimeUrl?: unknown; actions?: unknown } {
+  try {
+    const cfgPath = path.join(app.getPath("userData"), "gnsis.json");
+    return JSON.parse(readFileSync(cfgPath, "utf8")) as { runtimeUrl?: unknown; actions?: unknown };
+  } catch {
+    // no config file / unreadable — defaults apply
+    return {};
+  }
+}
+const SETTINGS = readSettings();
+
 function resolveRuntimeUrl(): string {
   const env = process.env.GNSIS_RUNTIME_URL;
   if (env) return env;
-  try {
-    const cfgPath = path.join(app.getPath("userData"), "gnsis.json");
-    const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as {
-      runtimeUrl?: unknown;
-    };
-    if (typeof cfg.runtimeUrl === "string" && cfg.runtimeUrl) {
-      return cfg.runtimeUrl;
-    }
-  } catch {
-    // no config file / unreadable — fall through to the default
+  if (typeof SETTINGS.runtimeUrl === "string" && SETTINGS.runtimeUrl) {
+    return SETTINGS.runtimeUrl;
   }
   return "http://127.0.0.1:8080";
 }
@@ -60,6 +84,35 @@ const shortcuts = new ElectronShortcuts();
 const notifications = new ElectronNotifications();
 const tools = new ToolRegistry({ runtimeUrl: RUNTIME_URL });
 
+// The actions GNSIS can take on this machine when the model asks. Offered to
+// the runtime on connect, so the model is only ever told about what this
+// machine can actually do — and only to a runtime this desktop trusts with
+// them (host/runtimeTrust.ts).
+const finder = process.platform === "darwin" ? new MacFinder(systemShell) : undefined;
+const filesTool = new FilesTool({ home: os.homedir(), finder });
+const inputTool = new InputTool(systemShell, {
+  bounds: () => displays.getPrimaryDisplay().bounds,
+});
+tools.registerAction(new OpenTool(systemShell, filesTool));
+tools.registerAction(filesTool);
+tools.registerAction(new BrowserTool(systemShell, (combo) => inputTool.press(combo)));
+tools.registerAction(inputTool);
+const ACTIONS_TRUST = actionsAllowed(
+  RUNTIME_URL,
+  process.env.GNSIS_ACTIONS === "on" || process.env.GNSIS_ACTIONS === "off"
+    ? process.env.GNSIS_ACTIONS
+    : SETTINGS.actions === true
+      ? "on"
+      : SETTINGS.actions === false
+        ? "off"
+        : undefined,
+);
+const OFFERED_ACTIONS = ACTIONS_TRUST.allowed
+  ? tools.actionNames(process.platform, HOST_TOOL_SCHEMAS.map((tool) => tool.name))
+  : [];
+const turns = new TurnLog();
+const screenWatch = new ScreenWatch();
+
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
 
@@ -75,7 +128,9 @@ const host = new HostSession({
     global_shortcuts: true,
     notifications: true,
   },
+  hostTools: { names: OFFERED_ACTIONS, version: HOST_TOOLS_VERSION },
   onControl: (c) => {
+    broker.handleControl(c as Record<string, unknown>);
     const type = (c as { type?: string })?.type;
     if (type === "ready") {
       lastReady = c;
@@ -112,6 +167,64 @@ const host = new HostSession({
   },
 });
 
+const broker = new ActionBroker({
+  registry: tools,
+  send: (control) => host.sendControl(control as unknown as ClientControl),
+  event: (event) => host.emit(event),
+  confirm: askPerson,
+  accessibility: (prompt) =>
+    process.platform === "darwin" ? systemPreferences.isTrustedAccessibilityClient(prompt) : true,
+  latestTurn: () => turns.latest(),
+  log: hostLog,
+  notify: (update) => sendToRenderer("action:update", update),
+  lookAfter: (sinceMs) => screenWatch.lookAfter(sinceMs),
+});
+
+/**
+ * Ask the person before an action runs. A native alert, because the GNSIS
+ * window may be behind the app GNSIS is about to act on; GNSIS comes forward
+ * for it, and when the action types or clicks into another app, that app is
+ * put back in front before it runs.
+ */
+async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<boolean> {
+  const previous = request.typesIntoFrontApp ? await frontAppName() : null;
+  hostLog("execution", `asking the person: ${request.summary} (${request.reason})`);
+  app.focus({ steal: true });
+  const options = {
+    type: "question" as const,
+    buttons: ["Allow", "Don’t Allow"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: "GNSIS",
+    message: `Allow GNSIS to ${lowerFirst(request.summary)}?`,
+    detail: request.why,
+    signal,
+  };
+  const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  const allowed = result.response === 0 && !signal.aborted;
+  hostLog("execution", `the person ${allowed ? "allowed" : "did not allow"}: ${request.summary}`);
+  if (allowed && previous && previous !== app.getName()) {
+    // Activating a running app needs no permission; the action then types
+    // into the app the person was using, not into GNSIS.
+    await systemShell.run("/usr/bin/open", ["-a", previous]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return allowed;
+}
+
+async function frontAppName(): Promise<string | null> {
+  if (process.platform !== "darwin") return null;
+  const front = await systemShell.run("/usr/bin/lsappinfo", ["front"], { timeoutMs: 3_000 });
+  if (front.code !== 0 || !front.stdout.trim()) return null;
+  const info = await systemShell.run("/usr/bin/lsappinfo", ["info", "-only", "name", front.stdout.trim()], { timeoutMs: 3_000 });
+  return /"(?:LSDisplayName|name)"\s*=\s*"([^"]+)"/i.exec(info.stdout)?.[1] ?? null;
+}
+
+function lowerFirst(text: string): string {
+  return text ? text[0].toLowerCase() + text.slice(1) : text;
+}
+
 function createWindow(): void {
   // The product UI lays out a chat beside an agent panel; below ~1100 px the
   // two overlap, so the window opens at a comfortable desktop size.
@@ -146,6 +259,11 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(async () => {
   hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
+  hostLog(
+    "execution",
+    `actions offered: ${OFFERED_ACTIONS.join(",") || "none"} (catalog ${HOST_TOOLS_VERSION}; ${ACTIONS_TRUST.why}); ` +
+      `accessibility ${process.platform === "darwin" ? (systemPreferences.isTrustedAccessibilityClient(false) ? "granted" : "not granted") : "n/a"}`,
+  );
   // Screen perception: the renderer's getDisplayMedia() is answered here, or
   // Chromium refuses it. The whole primary display, so the visual sense sees
   // what the person sees; on macOS 15+ the system picker is offered instead,
@@ -227,9 +345,11 @@ app.whenReady().then(async () => {
   ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) =>
     host.sendAudioFrame(header, Buffer.from(pcm)),
   );
-  ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) =>
-    host.sendScreenFrame(metadata, Buffer.from(payload)),
-  );
+  ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) => {
+    if (host.sendScreenFrame(metadata, Buffer.from(payload))) {
+      screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
+    }
+  });
   ipcMain.on("host:log", (_e, line) => {
     if (typeof line === "string") hostLog("renderer", line);
   });

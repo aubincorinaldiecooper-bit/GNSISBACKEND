@@ -124,3 +124,20 @@ test("the armed button's bars follow the level and stay flat when nobody speaks"
   const soft = barHeights(0.2, true, 3);
   assert.ok(soft.every((h) => h >= 6 && h <= 22), `bars in range: ${soft}`);
 });
+
+test("what GNSIS did on the computer lands in the chat as a plain line; the start of it does not", () => {
+  const live = startLiveState("gnsis", T0, "ready");
+  const said = (state: "working" | "waiting" | "done" | "failed" | "declined" | "needs_permission", text: string) =>
+    applyLiveEvent(live, { type: "action", state, text }, T0).commit;
+  assert.deepEqual(said("working", "Move “report.pdf” into “Projects”"), []);
+  assert.deepEqual(said("waiting", "Waiting for your OK: Move “report.pdf” into “Projects”"), [
+    { role: "system", text: "Waiting for your OK: Move “report.pdf” into “Projects”" },
+  ]);
+  assert.deepEqual(said("done", "Moved report.pdf into ~/Documents/Projects."), [
+    { role: "system", text: "Done: Moved report.pdf into ~/Documents/Projects." },
+  ]);
+  assert.deepEqual(said("failed", "No folder called Taxes."), [{ role: "system", text: "Couldn’t do it: No folder called Taxes." }]);
+  assert.deepEqual(said("declined", "Not done: Move “report.pdf” into “Projects”"), [
+    { role: "system", text: "Not done: Move “report.pdf” into “Projects”" },
+  ]);
+});

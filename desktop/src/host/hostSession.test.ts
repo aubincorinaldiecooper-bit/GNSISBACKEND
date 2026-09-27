@@ -102,3 +102,35 @@ test("ending a call without stopping keeps the daemon session: call.ended goes o
   assert.deepEqual(types.slice(-2), ["host.event:call.ended", "stop"]);
   session.disconnect("test_done");
 });
+
+test("the desktop offers its actions on connect, and a reconnect carries the resume token", async () => {
+  const server = new WebSocketServer({ port: 0 });
+  await once(server, "listening");
+  const port = (server.address() as { port: number }).port;
+  const urls: string[] = [];
+  server.on("connection", (socket, request) => {
+    urls.push(request.url ?? "");
+    if (urls.length === 1) {
+      socket.send(JSON.stringify({ type: "ready", session_id: "s1", resume_token: "tok-123" }));
+    }
+  });
+  const session = new HostSession({
+    runtimeUrl: `http://127.0.0.1:${port}`,
+    hostId: "h1",
+    chassis: "test",
+    capabilities,
+    hostTools: { names: ["open", "files"], version: "desktop-v1" },
+  });
+  session.connect("s1");
+  await sleep(150);
+  // The same session again, as after a dropped connection.
+  session.connect("s1");
+  await sleep(150);
+  session.disconnect("test_done");
+  await new Promise<void>((r) => server.close(() => r()));
+  assert.equal(urls[0], "/ws/duplex?session_id=s1&host_tools=open%2Cfiles&host_tools_version=desktop-v1");
+  assert.equal(
+    urls.find((u) => u.includes("resume_token")),
+    "/ws/duplex?session_id=s1&host_tools=open%2Cfiles&host_tools_version=desktop-v1&resume_token=tok-123",
+  );
+});

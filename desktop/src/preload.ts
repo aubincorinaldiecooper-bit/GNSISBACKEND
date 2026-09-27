@@ -30,4 +30,6 @@ contextBridge.exposeInMainWorld("gnsis", {
   onScreen: (fn: (update: unknown) => void) =>
     ipcRenderer.on("screen:update", (_e, update) => fn(update)),
   onInterrupted: (fn: () => void) => ipcRenderer.on("ui:interrupted", fn),
+  onAction: (fn: (update: unknown) => void) =>
+    ipcRenderer.on("action:update", (_e, update) => fn(update)),
 });

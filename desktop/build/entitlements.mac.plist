@@ -19,5 +19,11 @@
 	<true/>
 	<key>com.apple.security.device.camera</key>
 	<true/>
+	<!-- Actions: controlling Finder, the person's browser and System Events
+	     through Apple Events. macOS still asks the person once per app
+	     (Privacy & Security → Automation); this only lets the question be
+	     asked under the Hardened Runtime. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 </dict>
 </plist>

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Run one end-to-end action scenario: the real runtime app with a scripted
+# model (runtime/gnsis_runtime/tests/scripted_runtime.py) and the desktop's
+# real action path (desktop/scripts/e2e-actions.ts).
+#
+#   desktop/scripts/e2e-actions.sh files-move
+#   desktop/scripts/e2e-actions.sh files-move-asked
+#   desktop/scripts/e2e-actions.sh open-app '{"name":"open","arguments":{"target":"TextEdit"}}'
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SCENARIO="${1:-files-move}"
+MOVE='{"name":"files","arguments":{"action":"move","path":"report.pdf","to":"Projects"}}'
+CALL="${2:-$MOVE}"
+PORT="${E2E_PORT:-18765}"
+WORK="$(mktemp -d)"
+python3 "$ROOT/runtime/gnsis_runtime/tests/scripted_runtime.py" \
+  --port "$PORT" --media-dir "$WORK/media" --call "$CALL" >"$WORK/runtime.log" 2>&1 &
+RUNTIME_PID=$!
+trap 'kill "$RUNTIME_PID" 2>/dev/null || true' EXIT
+for _ in $(seq 1 150); do
+  curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
+  sleep 0.2
+done
+cd "$ROOT/desktop"
+status=0
+E2E_RUNTIME_URL="http://127.0.0.1:$PORT" E2E_MEDIA_DIR="$WORK/media" \
+  E2E_SCENARIO="$SCENARIO" E2E_HOME="$WORK/home" npx tsx scripts/e2e-actions.ts || status=$?
+echo "--- runtime log: what it agreed and logged ---"
+grep -E "host tools|Uvicorn running" "$WORK/runtime.log" | head -5 || true
+if [ "$status" -ne 0 ]; then grep -A 30 -E "Traceback|ERROR" "$WORK/runtime.log" | head -60; fi
+exit "$status"
