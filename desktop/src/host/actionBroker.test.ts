@@ -31,7 +31,7 @@ class FakeFiles implements ActionTool {
   }
 }
 
-function setup(opts: { turn?: TrustedTurn; confirm?: (r: ConfirmRequest, s: AbortSignal) => Promise<boolean>; trusted?: boolean; look?: "fresh" | "not_shared" | "not_yet" } = {}) {
+function setup(opts: { turn?: TrustedTurn; confirm?: (r: ConfirmRequest, s: AbortSignal) => Promise<boolean>; trusted?: boolean; look?: "fresh" | "not_shared" | "not_yet"; waitForWords?: () => Promise<void>; latestTurn?: () => TrustedTurn | null } = {}) {
   const registry = new ToolRegistry({ runtimeUrl: "http://127.0.0.1:1" });
   const files = new FakeFiles();
   registry.registerAction(files);
@@ -51,7 +51,8 @@ function setup(opts: { turn?: TrustedTurn; confirm?: (r: ConfirmRequest, s: Abor
       prompts.push(prompt);
       return opts.trusted ?? true;
     },
-    latestTurn: () => opts.turn ?? null,
+    latestTurn: opts.latestTurn ?? (() => opts.turn ?? null),
+    waitForWords: opts.waitForWords,
     log: () => {},
     lookAfter: opts.look ? async () => opts.look! : undefined,
   };
@@ -216,4 +217,20 @@ test("after a change, the model is told whether it can check it by looking", asy
     const response = await answer(sent, `call_look_${look}`);
     assert.match(String((response.content as { screen: string }).screen), note);
   }
+});
+
+test("an action that arrives before the person's words are transcribed waits for them, then runs without asking", async () => {
+  let turn: TrustedTurn | null = null;
+  const { broker, files, sent, asked } = setup({
+    latestTurn: () => turn,
+    waitForWords: async () => {
+      await sleep(30);
+      turn = { turnId: "t-late", text: "move the report into Projects", endedAtMs: Date.now() };
+    },
+  });
+  broker.handleControl(call("call_words", move));
+  const response = await answer(sent, "call_words");
+  assert.equal((response.content as { status: string }).status, "done");
+  assert.equal(asked.length, 0);
+  assert.equal(files.runs, 1);
 });

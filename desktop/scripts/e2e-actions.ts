@@ -14,7 +14,11 @@
  *
  * E2E_RUNTIME_URL   runtime to connect to (http://127.0.0.1:18765)
  * E2E_MEDIA_DIR     the runtime's --media-dir, where the timeline lands
- * E2E_SCENARIO      files-move (default) | files-move-asked | open-app
+ * E2E_SCENARIO      files-move (default) | files-move-asked | files-move-spoken | open-app
+ *                   files-move-spoken: no words are given; the person "speaks" (tone
+ *                   audio), the desktop transcribes it through the runtime's own
+ *                   /api/asr/transcribe (a stand-in speech-to-text behind it), sends
+ *                   turn.final, and the move runs without asking because of it.
  * E2E_HOME          a scratch home folder for the files scenarios
  */
 import assert from "node:assert/strict";
@@ -24,6 +28,7 @@ import path from "node:path";
 import { HostSession } from "../src/host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../src/host/actionBroker.js";
 import { TurnLog } from "../src/host/turns.js";
+import { runtimeTranscriber, UtteranceTranscriber } from "../src/host/utterances.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { HOST_TOOL_SCHEMAS, HOST_TOOLS_VERSION } from "../src/tools/catalog.js";
 import { FilesTool } from "../src/tools/files.js";
@@ -66,6 +71,7 @@ async function main(): Promise<void> {
   const sent: Array<Record<string, unknown>> = [];
 
   let broker: ActionBroker | null = null;
+  let utterances: UtteranceTranscriber | null = null;
   const host = new HostSession({
     runtimeUrl: RUNTIME,
     hostId: "e2e-host",
@@ -76,6 +82,7 @@ async function main(): Promise<void> {
       const control = c as Record<string, unknown>;
       controls.push(control);
       broker?.handleControl(control);
+      if (utterances?.handleControl(control)) say(`runtime → desktop  turn ${String(control.turn_id)} accepted`);
       if (control.type === "tool.call") say(`runtime → desktop  tool.call ${String(control.call_id)} ${JSON.stringify(control.tool_calls)}`);
       if (control.type === "tool.response.queued") say(`runtime → desktop  answer queued for the model (${String(control.call_id)})`);
       if (control.type === "chunk" && control.text) say(`model says: "${String(control.text)}"`);
@@ -96,8 +103,21 @@ async function main(): Promise<void> {
     },
     accessibility: () => true,
     latestTurn: () => turns.latest(),
+    waitForWords: () => utterances?.settled() ?? Promise.resolve(),
     log: (area, line) => say(`[${area}] ${line}`),
   });
+  if (SCENARIO === "files-move-spoken") {
+    utterances = new UtteranceTranscriber({
+      transcribe: runtimeTranscriber(RUNTIME),
+      send: (control) => {
+        if (control.type === "turn.final") say(`desktop → runtime  turn.final "${String(control.text)}"`);
+        host.sendControl(control as unknown as ClientControl);
+      },
+      turns,
+      log: (area, line) => say(`[${area}] ${line}`),
+    });
+  }
+  const mic = new Mic(host, utterances);
 
   host.connect(`e2e-${process.pid}`);
   host.ready();
@@ -106,14 +126,19 @@ async function main(): Promise<void> {
   say(`runtime ready; agreed tools: ${agreed.join(", ")}; model tools: ${(ready.tools as string[]).join(", ")}`);
   assert.deepEqual(agreed, offered, "the runtime agrees to exactly what this desktop offered");
 
-  // One second of microphone audio: the scripted model takes its turn.
-  sendSecond(host, 0);
+  // Microphone audio: the scripted model takes its turn on the first second.
+  if (SCENARIO === "files-move-spoken") {
+    mic.send(1_500, 0.2); // the person speaks
+    mic.send(1_000, 0); //   and stops
+  } else {
+    mic.send(1_000, 0);
+  }
   const call = await waitFor(() => controls.find((c) => c.type === "tool.call" && c.call_id), "tool.call");
   const callId = String(call.call_id);
   const answer = await waitFor(() => sent.find((c) => c.type === "tool.response" && c.call_id === callId), "tool.response");
   await waitFor(() => controls.find((c) => c.type === "tool.response.queued" && c.call_id === callId), "tool.response.queued");
   // The model takes the answer in with the next second of audio.
-  sendSecond(host, 1);
+  mic.send(1_000, 0);
   const spoken = await waitFor(() => controls.find((c) => c.type === "chunk" && typeof c.text === "string" && c.text), "the model's reply");
   const content = answer.content as { status: string; message: string };
 
@@ -123,7 +148,11 @@ async function main(): Promise<void> {
     await assert.rejects(fs.access(path.join(home, "Downloads", "report.pdf")));
     say(`disk: ${path.join(home, "Documents", "Projects", "report.pdf")} exists, and the original is gone`);
     assert.equal(content.status, "done");
-    assert.equal(asked.length, SCENARIO === "files-move" ? 0 : 1, "asked the person exactly when the policy says to");
+    assert.equal(asked.length, SCENARIO === "files-move-asked" ? 1 : 0, "asked the person exactly when the policy says to");
+  }
+  if (SCENARIO === "files-move-spoken") {
+    assert.equal(turns.latest()?.text, "Move that report into the Projects folder.", "the person's words came back as a trusted turn");
+    say(`trusted turn on record: "${turns.latest()?.text}" (${turns.latest()?.turnId})`);
   }
   if (SCENARIO === "open-app") {
     assert.equal(content.status, "done", content.message);
@@ -135,12 +164,26 @@ async function main(): Promise<void> {
   say(`PASS ${SCENARIO}: ${content.message}`);
 }
 
-function sendSecond(host: HostSession, n: number): void {
-  const pcm = Buffer.alloc(16_000 * 2);
-  host.sendAudioFrame(
-    { type: "audio.frame", sequence: n + 1, start_sample: n * 16_000, sample_count: 16_000, captured_at_ms: Date.now() },
-    pcm,
-  );
+/** The microphone: 100 ms frames to the runtime, and to the transcriber when there is one. */
+class Mic {
+  private seq = 0;
+  private sample = 0;
+  constructor(
+    private readonly host: HostSession,
+    private readonly words: UtteranceTranscriber | null,
+  ) {}
+
+  send(ms: number, amplitude: number): void {
+    for (let done = 0; done < ms; done += 100) {
+      const pcm = Buffer.alloc(1_600 * 2);
+      for (let i = 0; i < 1_600; i += 1) pcm.writeInt16LE(Math.round(amplitude * 32_767 * Math.sin(i / 3)), i * 2);
+      this.seq += 1;
+      const header = { type: "audio.frame" as const, sequence: this.seq, start_sample: this.sample, sample_count: 1_600, captured_at_ms: Date.now() + done };
+      this.sample += 1_600;
+      this.host.sendAudioFrame(header, pcm);
+      this.words?.feed(header, pcm);
+    }
+  }
 }
 
 async function printTimeline(callId: string): Promise<void> {

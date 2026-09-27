@@ -162,14 +162,55 @@ class _Bundle:
         resampler = object()
 
 
+def _stand_in_asr(text: str) -> str:
+    """A speech-to-text upstream that hears `text` in any non-empty audio.
+
+    The runtime's own /api/asr/transcribe route forwards to it exactly as it
+    forwards to the real transcriber, so everything from the desktop to the
+    route and back is the production path.
+    """
+
+    import http.server
+    import socketserver
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _answer(self, payload: dict[str, Any]) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._answer({"status": "ok"})
+
+        def do_POST(self) -> None:  # noqa: N802
+            size = int(self.headers.get("Content-Length") or 0)
+            audio = self.rfile.read(size)
+            self._answer({"text": text if audio else "", "segments": []})
+
+        def log_message(self, *_args: Any) -> None:
+            return None
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--media-dir", required=True)
     parser.add_argument("--call", required=True, help="the one tool call the model makes, as JSON")
     parser.add_argument("--tool-timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--asr-text",
+        help="serve /api/asr/transcribe from a stand-in speech-to-text that hears this",
+    )
     args = parser.parse_args()
     call = json.loads(args.call)
+    asr_base_url = _stand_in_asr(args.asr_text) if args.asr_text else None
 
     import uvicorn
 
@@ -197,6 +238,7 @@ def main() -> None:
             host_tool_catalog=load_host_tool_catalog(CATALOG),
             reconnect_grace_sec=5.0,
             external_tool_timeout_sec=args.tool_timeout,
+            asr_base_url=asr_base_url,
         ),
         media_dir=args.media_dir,
     )

@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
 import { TurnLog } from "../host/turns.js";
+import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
 import { hostLog } from "./hostLog.js";
@@ -112,6 +113,17 @@ const OFFERED_ACTIONS = ACTIONS_TRUST.allowed
   : [];
 const turns = new TurnLog();
 const screenWatch = new ScreenWatch();
+// The person's own words, so an action they asked for by name runs without a
+// second ask. Only where actions are offered; see host/utterances.ts.
+const utterances =
+  OFFERED_ACTIONS.length > 0
+    ? new UtteranceTranscriber({
+        transcribe: runtimeTranscriber(RUNTIME_URL),
+        send: (control) => host.sendControl(control as unknown as ClientControl),
+        turns,
+        log: hostLog,
+      })
+    : null;
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
@@ -131,6 +143,7 @@ const host = new HostSession({
   hostTools: { names: OFFERED_ACTIONS, version: HOST_TOOLS_VERSION },
   onControl: (c) => {
     broker.handleControl(c as Record<string, unknown>);
+    utterances?.handleControl(c as Record<string, unknown>);
     const type = (c as { type?: string })?.type;
     if (type === "ready") {
       lastReady = c;
@@ -175,6 +188,7 @@ const broker = new ActionBroker({
   accessibility: (prompt) =>
     process.platform === "darwin" ? systemPreferences.isTrustedAccessibilityClient(prompt) : true,
   latestTurn: () => turns.latest(),
+  waitForWords: () => utterances?.settled() ?? Promise.resolve(),
   log: hostLog,
   notify: (update) => sendToRenderer("action:update", update),
   lookAfter: (sinceMs) => screenWatch.lookAfter(sinceMs),
@@ -342,9 +356,12 @@ app.whenReady().then(async () => {
     hostLog("host", `call ended reason=${why}`);
     host.endCall(why, { stop: false });
   });
-  ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) =>
-    host.sendAudioFrame(header, Buffer.from(pcm)),
-  );
+  ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) => {
+    const audio = Buffer.from(pcm);
+    host.sendAudioFrame(header, audio);
+    utterances?.feed(header, audio);
+  });
+  if (utterances) setInterval(() => utterances.idle(Date.now()), 1_000);
   ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) => {
     if (host.sendScreenFrame(metadata, Buffer.from(payload))) {
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);

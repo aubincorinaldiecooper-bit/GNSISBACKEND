@@ -42,7 +42,9 @@ export class OpenTool implements ActionTool {
     const app = await this.installedApp(target);
     if (app) return this.prepareApp(app);
     const local = await this.files.resolve(target, "any").catch((err: unknown) => {
-      if (err instanceof ActionProblem && err.status === "ambiguous") throw err;
+      // More than one match, or Finder refused: say so, rather than trying
+      // the name as an app or a website instead.
+      if (err instanceof ActionProblem && (err.status === "ambiguous" || err.status === "needs_permission")) throw err;
       return null;
     });
     if (local) return this.preparePath(local.path, local.scope.value);
@@ -80,6 +82,8 @@ export class OpenTool implements ActionTool {
   }
 
   private async preparePath(full: string, said: string): Promise<PreparedAction> {
+    // Hidden, system and outside-home places stay closed, including through a link.
+    await this.files.ensureAllowed(full, "open");
     const stat = await fs.stat(full);
     const ext = path.extname(full).toLowerCase();
     if (full.endsWith(".app") && stat.isDirectory()) return this.prepareApp(path.basename(full, ".app"));

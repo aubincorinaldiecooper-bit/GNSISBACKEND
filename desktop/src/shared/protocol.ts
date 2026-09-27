@@ -60,6 +60,16 @@ export type ClientControl =
   // keep-alive while the person is still deciding whether to allow it.
   | { type: "tool.response"; call_id: string; content: Record<string, unknown> }
   | { type: "tool.progress"; call_id: string; state: string }
+  // The person's own words, transcribed from this machine's microphone.
+  | {
+      type: "turn.final";
+      turn_id: string;
+      text: string;
+      start_ms: number;
+      end_ms: number;
+      timestamp_ms: number;
+      timezone: string;
+    }
   | AudioFrameHeader;
 
 export type ServerControl =

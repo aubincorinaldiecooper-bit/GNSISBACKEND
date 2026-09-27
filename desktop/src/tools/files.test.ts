@@ -121,3 +121,88 @@ test("list and find read only, newest first", async () => {
   assert.equal((found.detail?.found as string[]).length, 1);
   assert.match((found.detail?.found as string[])[0], /^~\/Downloads\/report\.pdf/);
 });
+
+test("a folder that is really a link into a hidden folder or out of home is refused like where it leads", async () => {
+  const root = await home();
+  await fs.mkdir(path.join(root, ".ssh"));
+  await fs.writeFile(path.join(root, ".ssh", "id_ed25519"), "secret");
+  await fs.symlink(path.join(root, ".ssh"), path.join(root, "Documents", "safe"));
+  await fs.symlink(os.tmpdir(), path.join(root, "Documents", "elsewhere"));
+  const files = new FilesTool({ home: root });
+  for (const args of [
+    { action: "list", path: "~/Documents/safe" },
+    { action: "list", path: "~/Documents/elsewhere" },
+    { action: "move", path: "notes.txt", to: "~/Documents/safe" },
+    { action: "new_folder", path: "~/Documents/safe", name: "x" },
+    { action: "find", path: "~/Documents/safe", query: "id" },
+  ]) {
+    assert.equal((await problem(files.prepare(args))).status, "refused", JSON.stringify(args));
+  }
+  // The link itself is not moved or renamed either.
+  assert.equal((await problem(files.prepare({ action: "rename", path: "~/Documents/safe", name: "fine" }))).status, "refused");
+  assert.equal(await fs.readFile(path.join(root, ".ssh", "id_ed25519"), "utf8"), "secret");
+  await fs.access(path.join(root, "Downloads", "notes.txt"));
+});
+
+test("a file that appears while the person decides is never replaced", async () => {
+  const root = await home();
+  const files = new FilesTool({ home: root });
+  const rename = await files.prepare({ action: "rename", path: "notes.txt", name: "todo.txt" });
+  const move = await files.prepare({ action: "move", path: "report.pdf", to: "Projects" });
+  // Meanwhile, something else creates both names.
+  await fs.writeFile(path.join(root, "Downloads", "todo.txt"), "someone else's");
+  await fs.writeFile(path.join(root, "Documents", "Projects", "report.pdf"), "a different report");
+  assert.equal((await problem(rename.run())).status, "refused");
+  assert.equal((await problem(move.run())).status, "refused");
+  assert.equal(await fs.readFile(path.join(root, "Downloads", "todo.txt"), "utf8"), "someone else's");
+  assert.equal(await fs.readFile(path.join(root, "Documents", "Projects", "report.pdf"), "utf8"), "a different report");
+  assert.equal(await fs.readFile(path.join(root, "Downloads", "notes.txt"), "utf8"), "txt");
+  assert.equal(await fs.readFile(path.join(root, "Downloads", "report.pdf"), "utf8"), "pdf");
+});
+
+test("folders move without replacing, and a change of case is still a rename", async () => {
+  const root = await home();
+  await fs.mkdir(path.join(root, "Desktop", "Old stuff"));
+  await fs.writeFile(path.join(root, "Desktop", "Old stuff", "a.txt"), "a");
+  const files = new FilesTool({ home: root });
+  const move = await files.prepare({ action: "move", path: "~/Desktop/Old stuff", to: "Documents" });
+  await move.run();
+  assert.equal(await fs.readFile(path.join(root, "Documents", "Old stuff", "a.txt"), "utf8"), "a");
+  const recase = await files.prepare({ action: "rename", path: "notes.txt", name: "Notes.txt" });
+  await recase.run();
+  assert.deepEqual((await fs.readdir(path.join(root, "Downloads"))).filter((n) => n.toLowerCase() === "notes.txt"), ["Notes.txt"]);
+});
+
+test("when Finder refuses, GNSIS says so instead of quietly using another folder", async () => {
+  const root = await home();
+  const refused = new ActionProblem("needs_permission", "macOS has not let GNSIS control Finder.", { permission: "automation", app: "Finder" });
+  const finder: FinderBridge = {
+    selection: async () => { throw refused; },
+    frontFolder: async () => { throw refused; },
+  };
+  const files = new FilesTool({ home: root, finder });
+  // Where to list or make a folder depended on the open window: reported.
+  assert.equal((await problem(files.prepare({ action: "list" }))).status, "needs_permission");
+  assert.equal((await problem(files.prepare({ action: "new_folder", name: "X" }))).status, "needs_permission");
+  // A name that is in the usual folders is still found without Finder.
+  const found = await files.prepare({ action: "move", path: "report.pdf", to: "Projects" });
+  assert.equal(found.action, "move");
+  // A name that is not: the refusal is what the person hears, not "not found".
+  assert.equal((await problem(files.prepare({ action: "move", path: "report.pdf", to: "Taxes" }))).status, "needs_permission");
+});
+
+test("cloud folders reached through a link are the person's own files; the rest of Library is not", async () => {
+  const root = await home();
+  await fs.mkdir(path.join(root, "Library", "CloudStorage", "Dropbox"), { recursive: true });
+  await fs.writeFile(path.join(root, "Library", "CloudStorage", "Dropbox", "plan.txt"), "plan");
+  await fs.symlink(path.join(root, "Library", "CloudStorage", "Dropbox"), path.join(root, "Dropbox"));
+  await fs.mkdir(path.join(root, "Library", "Keychains"), { recursive: true });
+  await fs.symlink(path.join(root, "Library", "Keychains"), path.join(root, "Documents", "keys"));
+  const files = new FilesTool({ home: root });
+  const listed = await (await files.prepare({ action: "list", path: "~/Dropbox" })).run();
+  assert.equal(listed.detail?.count, 1);
+  const move = await files.prepare({ action: "move", path: "report.pdf", to: "~/Dropbox" });
+  await move.run();
+  await fs.access(path.join(root, "Library", "CloudStorage", "Dropbox", "report.pdf"));
+  assert.equal((await problem(files.prepare({ action: "list", path: "~/Documents/keys" }))).status, "refused");
+});

@@ -64,6 +64,8 @@ export interface ActionBrokerDeps {
   accessibility(prompt: boolean): boolean;
   /** The person's latest trusted turn, if any. */
   latestTurn(): TrustedTurn | null;
+  /** Resolves once the person has stopped talking and their words are in (bounded). */
+  waitForWords?(): Promise<void>;
   log(area: string, line: string): void;
   notify?(update: ActionUpdate): void;
   /** Wait until the runtime has a view of the screen taken after `sinceMs`. */
@@ -169,6 +171,9 @@ export class ActionBroker {
     if (argumentProblem) throw new ActionProblem("failed", `The request did not match the ${tool} tool: ${argumentProblem}.`);
 
     const prepared = await this.deps.registry.prepareAction(tool, args);
+    // The model often answers before the person's last words are transcribed;
+    // judge the action with those words, not without them.
+    await this.deps.waitForWords?.();
     const verdict = judge(prepared, this.deps.latestTurn(), this.now());
     this.deps.event({
       type: "action.policy",

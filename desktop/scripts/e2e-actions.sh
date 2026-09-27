@@ -5,6 +5,7 @@
 #
 #   desktop/scripts/e2e-actions.sh files-move
 #   desktop/scripts/e2e-actions.sh files-move-asked
+#   desktop/scripts/e2e-actions.sh files-move-spoken
 #   desktop/scripts/e2e-actions.sh open-app '{"name":"open","arguments":{"target":"TextEdit"}}'
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,8 +14,12 @@ MOVE='{"name":"files","arguments":{"action":"move","path":"report.pdf","to":"Pro
 CALL="${2:-$MOVE}"
 PORT="${E2E_PORT:-18765}"
 WORK="$(mktemp -d)"
+ASR=()
+if [ "$SCENARIO" = "files-move-spoken" ]; then
+  ASR=(--asr-text "Move that report into the Projects folder.")
+fi
 python3 "$ROOT/runtime/gnsis_runtime/tests/scripted_runtime.py" \
-  --port "$PORT" --media-dir "$WORK/media" --call "$CALL" >"$WORK/runtime.log" 2>&1 &
+  --port "$PORT" --media-dir "$WORK/media" --call "$CALL" "${ASR[@]}" >"$WORK/runtime.log" 2>&1 &
 RUNTIME_PID=$!
 trap 'kill "$RUNTIME_PID" 2>/dev/null || true' EXIT
 for _ in $(seq 1 150); do

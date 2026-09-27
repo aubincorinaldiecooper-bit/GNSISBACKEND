@@ -123,11 +123,15 @@ listing, finding, moving and renaming files need none of these.
 
 When GNSIS asks before acting: anything that changes files, types or clicks,
 or loads a web address runs straight away only when the person's own
-transcribed words name what it acts on. This build has no transcript of the
-person's words (the runtime's speech-to-text is off), so those actions show
-an Allow / Don't Allow alert first. Quitting apps, emptying the Trash,
-sending, buying or deleting are always asked about. Deleting, moving to the
-Trash and replacing files are never done.
+transcribed words name what it acts on. The desktop sends each thing the
+person says to the runtime's speech-to-text (`/api/asr/transcribe`) and hands
+the words back as `turn.final`; only turns the runtime accepts count. The
+production runtime has speech-to-text off (`asr.mode: disabled`), so there are
+no such words and those actions show an Allow / Don't Allow alert first; the
+host log says `no speech-to-text at the runtime` once. Quitting apps, emptying
+the Trash, sending, buying or deleting are always asked about. Deleting,
+moving to the Trash and replacing files are never done, and a folder that is
+really a link into a hidden, system or outside place is treated as that place.
 
 ### Checking it on a Mac
 

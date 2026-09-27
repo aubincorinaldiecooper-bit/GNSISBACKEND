@@ -11,7 +11,7 @@
  * or touch system and credential folders. Those are refused before anything
  * is prepared, so no confirmation can talk it into them.
  */
-import { promises as fs, type Dirent } from "node:fs";
+import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import {
   ActionProblem,
@@ -85,7 +85,7 @@ export class FilesTool implements ActionTool {
     const folder = str(args, "path")
       ? (await this.resolve(str(args, "path")!, "folder")).path
       : (await this.defaultFolder());
-    this.refuseSensitive(folder, "look in");
+    await this.ensureAllowed(folder, "look in");
     return {
       tool: this.name,
       action: "list",
@@ -113,7 +113,7 @@ export class FilesTool implements ActionTool {
   private async prepareFind(args: Record<string, unknown>): Promise<PreparedAction> {
     const query = required(args, "query", "what to look for");
     const folder = str(args, "path") ? (await this.resolve(str(args, "path")!, "folder")).path : this.opts.home;
-    this.refuseSensitive(folder, "look in");
+    await this.ensureAllowed(folder, "look in");
     return {
       tool: this.name,
       action: "find",
@@ -143,8 +143,8 @@ export class FilesTool implements ActionTool {
   private async prepareMove(args: Record<string, unknown>): Promise<PreparedAction> {
     const source = await this.resolve(required(args, "path", "what to move"), "any");
     const destination = await this.resolve(required(args, "to", "where to move it"), "folder");
-    this.refuseChange(source.path, "move");
-    this.refuseSensitive(destination.path, "move things into");
+    await this.ensureChangeable(source.path, "move");
+    await this.ensureAllowed(destination.path, "move things into");
     if (isTrash(destination.path, this.opts.home)) {
       throw new ActionProblem("refused", "GNSIS does not delete files or move them to the Trash.");
     }
@@ -189,7 +189,7 @@ export class FilesTool implements ActionTool {
   private async prepareRename(args: Record<string, unknown>): Promise<PreparedAction> {
     const source = await this.resolve(required(args, "path", "what to rename"), "any");
     const requested = required(args, "name", "the new name");
-    this.refuseChange(source.path, "rename");
+    await this.ensureChangeable(source.path, "rename");
     const stat = await fs.stat(source.path);
     const newName = keepExtension(path.basename(source.path), cleanName(requested), stat.isDirectory());
     const target = path.join(path.dirname(source.path), newName);
@@ -206,7 +206,9 @@ export class FilesTool implements ActionTool {
       summary: `Rename “${path.basename(source.path)}” to “${newName}”`,
       scope: [source.scope, { value: requested, source: "named" }],
       run: async () => {
-        await fs.rename(source.path, target);
+        // The name may have been taken while the person read the question:
+        // the no-replace check happens again, atomically, as it runs.
+        await moveNoClobber(source.path, target);
         if (!(await exists(target))) {
           throw new ActionProblem("failed", "The rename did not take.");
         }
@@ -222,7 +224,7 @@ export class FilesTool implements ActionTool {
   private async prepareNewFolder(args: Record<string, unknown>): Promise<PreparedAction> {
     const name = cleanName(required(args, "name", "the folder's name"));
     const parent = str(args, "path") ? (await this.resolve(str(args, "path")!, "folder")).path : await this.defaultFolder();
-    this.refuseSensitive(parent, "make folders in");
+    await this.ensureAllowed(parent, "make folders in");
     const target = path.join(parent, name);
     if (await exists(target)) {
       throw new ActionProblem("failed", `${this.show(parent)} already has something called ${name}.`);
@@ -234,7 +236,11 @@ export class FilesTool implements ActionTool {
       summary: `Make a folder “${name}” in ${this.show(parent)}`,
       scope: [{ value: name, source: "named" }],
       run: async () => {
-        await fs.mkdir(target);
+        // mkdir without `recursive` fails if anything is already there.
+        await fs.mkdir(target).catch((err: NodeJS.ErrnoException) => {
+          if (err.code === "EEXIST") throw new ActionProblem("failed", `${this.show(parent)} already has something called ${name}.`);
+          throw err;
+        });
         const made = await fs.stat(target).then((s) => s.isDirectory(), () => false);
         if (!made) throw new ActionProblem("failed", "The folder was not made.");
         return { verified: "disk", message: `Made ${this.show(target)}.`, detail: { folder: this.show(target) } };
@@ -283,7 +289,7 @@ export class FilesTool implements ActionTool {
     if (matches.length === 0) {
       throw new ActionProblem(
         "not_found",
-        `No ${kind === "folder" ? "folder" : kind === "file" ? "file" : "file or folder"} called ${text} in the open Finder window, Desktop, Documents, Downloads or the home folder.`,
+        `No ${kind === "folder" ? "folder" : kind === "file" ? "file" : "file or folder"} called ${text} in ${this.opts.finder ? "the open Finder window, " : ""}Desktop, Documents, Downloads or the home folder.`,
       );
     }
     if (matches.length > 1) {
@@ -295,7 +301,23 @@ export class FilesTool implements ActionTool {
   }
 
   private async lookFor(name: string, kind: "file" | "folder" | "any"): Promise<string[]> {
-    const front = await this.opts.finder?.frontFolder().catch(() => null);
+    // The open Finder window is looked in first. If Finder cannot be asked
+    // (the person has not allowed it), the usual folders are still searched,
+    // and if the name is not in them the refusal is what is reported — never
+    // a "not found" that claims the window was looked in.
+    let front: string | null = null;
+    let finderProblem: ActionProblem | null = null;
+    try {
+      front = (await this.opts.finder?.frontFolder()) ?? null;
+    } catch (err) {
+      finderProblem = err instanceof ActionProblem ? err : new ActionProblem("failed", `Finder did not answer: ${String(err)}`);
+    }
+    const found = await this.lookIn(name, kind, front);
+    if (found.length === 0 && finderProblem) throw finderProblem;
+    return found;
+  }
+
+  private async lookIn(name: string, kind: "file" | "folder" | "any", front: string | null): Promise<string[]> {
     const roots = unique(
       [front, "Desktop", "Documents", "Downloads", ""].flatMap((r) =>
         r == null ? [] : [r.startsWith("/") ? r : path.join(this.opts.home, r)],
@@ -361,8 +383,9 @@ export class FilesTool implements ActionTool {
     return found;
   }
 
+  /** The folder the person has open in Finder, else Desktop. A Finder refusal is reported, not papered over. */
   private async defaultFolder(): Promise<string> {
-    const front = await this.opts.finder?.frontFolder().catch(() => null);
+    const front = (await this.opts.finder?.frontFolder()) ?? null;
     return front ?? path.join(this.opts.home, "Desktop");
   }
 
@@ -375,25 +398,65 @@ export class FilesTool implements ActionTool {
 
   // --- what is off limits ---------------------------------------------------
 
-  private refuseChange(full: string, verb: string): void {
-    this.refuseSensitive(full, verb);
+  /** Refuse to change a protected path, or a link, wherever it really leads. */
+  private async ensureChangeable(full: string, verb: string): Promise<void> {
+    await this.ensureAllowed(full, verb);
+    const stat = await fs.lstat(full);
+    if (stat.isSymbolicLink()) {
+      throw new ActionProblem("refused", `${path.basename(full)} is a link to somewhere else. GNSIS does not ${verb} links.`);
+    }
     const home = this.opts.home;
     const protectedRoots = [home, ...Object.values(KNOWN_FOLDERS).filter(Boolean).map((f) => path.join(home, f))];
-    if (protectedRoots.includes(full)) {
+    const real = await this.realOf(full);
+    const realRoots = await Promise.all(protectedRoots.map((root) => this.realOf(root)));
+    if (protectedRoots.includes(full) || realRoots.includes(real)) {
       throw new ActionProblem("refused", `GNSIS does not ${verb} ${this.show(full)} itself.`);
     }
   }
 
-  private refuseSensitive(full: string, verb: string): void {
-    const home = this.opts.home;
+  /**
+   * Refuse a path outside the person's own files, or in hidden and system
+   * folders — both as written and where it really leads, so a folder that is
+   * a link into ~/.ssh or out of the home folder is refused like the place it
+   * points at. A path that does not exist yet is judged by its folder.
+   */
+  async ensureAllowed(full: string, verb: string): Promise<void> {
+    this.refuseSensitive(full, verb, this.opts.home);
+    const real = await this.realOf(full);
+    this.refuseSensitive(real, verb, await this.realOf(this.opts.home), true);
+  }
+
+  /** Where a path really is: links resolved; for a new path, its folder's. */
+  private async realOf(full: string): Promise<string> {
+    const real = await fs.realpath(full).catch(() => null);
+    if (real) return real;
+    const parent = await fs.realpath(path.dirname(full)).catch(() => path.dirname(full));
+    return path.join(parent, path.basename(full));
+  }
+
+  private refuseSensitive(full: string, verb: string, home: string, resolved = false): void {
     const insideHome = full === home || full.startsWith(home + path.sep);
     const relative = insideHome ? path.relative(home, full) : "";
-    const first = relative.split(path.sep)[0] ?? "";
+    const parts = relative.split(path.sep).filter(Boolean).map((p) => p.toLowerCase());
     if (!insideHome && !full.startsWith("/Volumes/")) {
-      throw new ActionProblem("refused", `GNSIS only works with your own files, not ${full}.`);
+      throw new ActionProblem(
+        "refused",
+        resolved
+          ? `That leads outside your own files. GNSIS does not ${verb} it.`
+          : `GNSIS only works with your own files, not ${full}.`,
+      );
     }
-    if (first === "Library" || first.startsWith(".") || relative.split(path.sep).some((p) => p.startsWith("."))) {
-      throw new ActionProblem("refused", `GNSIS does not ${verb} hidden or system folders.`);
+    // Library is system territory, except where macOS keeps the person's own
+    // cloud files: iCloud Drive, and Dropbox / Google Drive / OneDrive, which
+    // are often reached through a link from the home folder.
+    const cloud = parts[0] === "library" && (parts[1] === "mobile documents" || parts[1] === "cloudstorage");
+    if ((parts[0] === "library" && !cloud) || parts.some((p) => p.startsWith("."))) {
+      throw new ActionProblem(
+        "refused",
+        resolved
+          ? `That leads into a hidden or system folder. GNSIS does not ${verb} it.`
+          : `GNSIS does not ${verb} hidden or system folders.`,
+      );
     }
   }
 
@@ -476,15 +539,65 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
-/** Move without ever replacing something already at the destination. */
+/**
+ * Move without ever replacing something already at the destination — checked
+ * atomically at the moment of the move, not only when it was prepared, since
+ * a file can appear there while the person reads the confirmation.
+ *
+ * The destination name is claimed with an operation that itself fails if the
+ * name is taken: a hard link for a file (then the original name is removed),
+ * a fresh empty folder for a folder (which the rename then replaces — the only
+ * thing a folder rename may replace is an empty folder). If the name turns out
+ * to be the very same file (a change of case on a case-insensitive disk), it
+ * is renamed in place.
+ */
 async function moveNoClobber(from: string, to: string): Promise<void> {
-  if (await exists(to)) throw new ActionProblem("refused", "Something with that name is already there.");
-  try {
-    await fs.rename(from, to);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
-    // Another disk: copy, check, then remove the original.
-    await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
-    await fs.rm(from, { recursive: true });
+  const taken = () => new ActionProblem("refused", "Something with that name is already there. GNSIS does not replace files.");
+  const stat = await fs.lstat(from);
+  if (stat.isSymbolicLink()) throw new ActionProblem("refused", `${path.basename(from)} is a link. GNSIS does not move links.`);
+  if (stat.isDirectory()) {
+    try {
+      await fs.mkdir(to);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      if (await sameEntry(from, to)) return fs.rename(from, to);
+      throw taken();
+    }
+    try {
+      await fs.rename(from, to);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EXDEV") {
+        await fs.rmdir(to).catch(() => {});
+        throw err;
+      }
+      // Another disk: copy into the folder just claimed, then remove the original.
+      await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
+      await fs.rm(from, { recursive: true });
+    }
+    return;
   }
+  try {
+    await fs.link(from, to);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "";
+    if (code === "EEXIST") {
+      if (await sameEntry(from, to)) return fs.rename(from, to);
+      throw taken();
+    }
+    if (!["EXDEV", "EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].includes(code)) throw err;
+    // Another disk, or one without hard links: an exclusive copy.
+    try {
+      await fs.copyFile(from, to, fsConstants.COPYFILE_EXCL);
+    } catch (copyErr) {
+      if ((copyErr as NodeJS.ErrnoException).code === "EEXIST") throw taken();
+      throw copyErr;
+    }
+  }
+  await fs.unlink(from);
+}
+
+/** Two names for the same file or folder (a change of case on a case-insensitive disk). */
+async function sameEntry(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([fs.lstat(a).catch(() => null), fs.lstat(b).catch(() => null)]);
+  return x != null && y != null && x.ino === y.ino && x.dev === y.dev;
 }

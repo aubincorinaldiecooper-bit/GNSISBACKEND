@@ -19,17 +19,16 @@ export class MacFinder implements FinderBridge {
     return parseList(out).map(stripSlash);
   }
 
+  /**
+   * The folder the front Finder window shows; null only when no Finder
+   * window is open. A refusal (Automation) or a failure is thrown, never
+   * turned into "no window" — that would quietly act on another folder.
+   */
   async frontFolder(): Promise<string | null> {
-    try {
-      const out = await this.script(
-        `const f = Application("Finder"); f.finderWindows.length ? decodeURI(f.finderWindows[0].target().url()).replace(/^file:\\/\\//, "") : ""`,
-      );
-      return out ? stripSlash(out) : null;
-    } catch (err) {
-      // No window is an answer; a refusal still surfaces through selection().
-      if (err instanceof ActionProblem && err.status === "needs_permission") return null;
-      return null;
-    }
+    const out = await this.script(
+      `const f = Application("Finder"); f.finderWindows.length ? decodeURI(f.finderWindows[0].target().url()).replace(/^file:\\/\\//, "") : ""`,
+    );
+    return out ? stripSlash(out) : null;
   }
 
   async search(folder: string, query: string): Promise<string[] | null> {
