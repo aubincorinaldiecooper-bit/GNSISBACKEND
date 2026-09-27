@@ -14,12 +14,16 @@ MOVE='{"name":"files","arguments":{"action":"move","path":"report.pdf","to":"Pro
 CALL="${2:-$MOVE}"
 PORT="${E2E_PORT:-18765}"
 WORK="$(mktemp -d)"
-ASR=()
+# Two plain branches rather than an optional-arguments array: macOS ships
+# bash 3.2, where expanding an empty array under `set -u` is an error.
 if [ "$SCENARIO" = "files-move-spoken" ]; then
-  ASR=(--asr-text "Move that report into the Projects folder.")
+  python3 "$ROOT/runtime/gnsis_runtime/tests/scripted_runtime.py" \
+    --port "$PORT" --media-dir "$WORK/media" --call "$CALL" \
+    --asr-text "Move that report into the Projects folder." >"$WORK/runtime.log" 2>&1 &
+else
+  python3 "$ROOT/runtime/gnsis_runtime/tests/scripted_runtime.py" \
+    --port "$PORT" --media-dir "$WORK/media" --call "$CALL" >"$WORK/runtime.log" 2>&1 &
 fi
-python3 "$ROOT/runtime/gnsis_runtime/tests/scripted_runtime.py" \
-  --port "$PORT" --media-dir "$WORK/media" --call "$CALL" "${ASR[@]}" >"$WORK/runtime.log" 2>&1 &
 RUNTIME_PID=$!
 trap 'kill "$RUNTIME_PID" 2>/dev/null || true' EXIT
 for _ in $(seq 1 150); do
