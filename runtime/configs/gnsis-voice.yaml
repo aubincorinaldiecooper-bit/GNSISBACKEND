@@ -35,7 +35,14 @@ server:
   cuda_visible_devices: "0,1"
 
 asr:
-  mode: disabled
+  # Side-channel transcript for trusted spoken intent. Raw microphone audio
+  # still goes directly to the Omni model; this does not replace native audio
+  # understanding. The transcript is used by the desktop action policy.
+  mode: managed
+  model_path: /opt/gnsis-asr/faster-whisper-small.en
+  device: cpu
+  compute_type: int8
+  beam_size: 3
 
 duplex:
   checkpoint: /models/GNSIS/thinker
