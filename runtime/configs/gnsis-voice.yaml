@@ -68,8 +68,20 @@ duplex:
   # Real-edge pass: no profiling prefill. The warm container should expose
   # user-facing startup and live-vision behavior without benchmark-only work.
   startup_probe: false
+  # The action layer. These are the things the GNSIS desktop can do on the
+  # person's own Mac: open apps, sites, files and folders; see, move and
+  # rename files; use their open browser; type, press keys and click. The
+  # model is shown only the ones the connected desktop says it can run when
+  # it connects, and a web session is shown none of them. The desktop carries
+  # the same file, so the two cannot describe different tools.
+  host_tools_path: /workspace/runtime/configs/gnsis-host-tools.json
+  # The four desktop tools and the three task tools do not fit the model
+  # core's default allowance of six schemas and 1024 tokens.
+  max_tool_schemas: 8
+  max_tool_schema_tokens: 1792
 
-# The MVP has no action layer. Native task tools remain protocol-compatible,
-# but there is intentionally no worker to dispatch them to.
+# No background worker runs next to the voice runtime, so task_start answers
+# that nothing can take the task. Actions on the person's Mac do not come
+# through here: they go to the connected desktop (duplex.host_tools_path).
 worker:
   provider: none

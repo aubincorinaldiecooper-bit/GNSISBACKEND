@@ -37,6 +37,7 @@ class FakeBridge implements GnsisBridge {
   onClosed = (fn: (code: number, reason: string) => void) => { this.handlers.closed = fn; };
   onScreen = (fn: (u: ScreenUpdate) => void) => { this.handlers.screen = fn; };
   onInterrupted = (fn: () => void) => { this.handlers.interrupted = fn; };
+  onAction = (fn: (update: import("./bridge.js").ActionUpdate) => void) => { this.handlers.action = fn as (u: unknown) => void; };
   // the main process talking to us
   control(c: unknown) { this.handlers.control?.(c); }
   audio(pcm: Uint8Array) { this.handlers.audio?.(pcm); }

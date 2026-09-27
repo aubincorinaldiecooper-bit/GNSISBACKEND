@@ -56,11 +56,19 @@ export type ClientControl =
       source_ts_ms?: number;
     }
   | { type: "host.event"; event: Record<string, unknown> }
+  // The answer to the runtime's `tool.call` with the same call_id, and a
+  // keep-alive while the person is still deciding whether to allow it.
+  | { type: "tool.response"; call_id: string; content: Record<string, unknown> }
+  | { type: "tool.progress"; call_id: string; state: string }
+  // The person's own words, transcribed from this machine's microphone.
   | {
-      type: "tool.call";
-      tool: string;
-      args: Record<string, unknown>;
-      call_id: string;
+      type: "turn.final";
+      turn_id: string;
+      text: string;
+      start_ms: number;
+      end_ms: number;
+      timestamp_ms: number;
+      timezone: string;
     }
   | AudioFrameHeader;
 

@@ -76,6 +76,9 @@ are configured.
 - `device.audio-input` / `device.camera` — mic/camera access. Screen
   recording is TCC user consent (Info.plist usage description), not an
   entitlement.
+- `automation.apple-events` — lets GNSIS ask to control Finder, the browser
+  and System Events for actions. macOS still asks the person once per app;
+  `NSAppleEventsUsageDescription` is the sentence that prompt shows.
 
 ## What's inside the package
 
@@ -94,3 +97,58 @@ run time: the page's content policy allows only its own files. See
 On first use the installed app requests microphone, camera (when used), and
 screen recording through the usual macOS prompts. Denied permission surfaces
 as a state, not a crash — other functionality remains usable.
+
+## Actions on the Mac
+
+When the model asks GNSIS to do something — open an app or a site, move or
+rename a file, use the open browser, type or click — the runtime sends it to
+this app, which does it and answers. The four tools are listed in
+`runtime/configs/gnsis-host-tools.json`; the runtime shows the model only the
+ones this app offers when it connects, and this app offers them only to
+`https://gnsis.studio` or a runtime on the same machine. `"actions": false`
+in `gnsis.json` (or `GNSIS_ACTIONS=off`) turns them off; `"actions": true`
+allows them for another runtime address the person chose.
+
+What macOS will ask, the first time each is needed:
+
+| When GNSIS first… | macOS asks | Where to change it later |
+| --- | --- | --- |
+| uses what is selected in Finder, or the open Finder window | “GNSIS wants to control Finder” | Privacy & Security → Automation |
+| uses the browser (tabs, go to an address) | “GNSIS wants to control Google Chrome / Safari / …”, once per browser | Privacy & Security → Automation |
+| types, presses keys or clicks | GNSIS must be switched on under Accessibility; GNSIS opens that prompt and says so | Privacy & Security → Accessibility |
+
+A refusal is never silent: the model is told which permission is missing and
+where it is, and says so. Opening apps, sites, files and folders, and
+listing, finding, moving and renaming files need none of these.
+
+When GNSIS asks before acting: anything that changes files, types or clicks,
+or loads a web address runs straight away only when the person's own
+transcribed words name what it acts on. The desktop sends each thing the
+person says to the runtime's speech-to-text (`/api/asr/transcribe`) and hands
+the words back as `turn.final`; only turns the runtime accepts count. The
+production runtime has speech-to-text off (`asr.mode: disabled`), so there are
+no such words and those actions show an Allow / Don't Allow alert first; the
+host log says `no speech-to-text at the runtime` once. Quitting apps, emptying
+the Trash, sending, buying or deleting are always asked about. Deleting,
+moving to the Trash and replacing files are never done, and a folder that is
+really a link into a hidden, system or outside place is treated as that place.
+
+### Checking it on a Mac
+
+1. Deploy the runtime from this commit (`modal deploy modal/gnsis_voice.py`,
+   or the worker's deploy route), then run `scripts/verify-modal-gnsis.py`:
+   `/health` lists `host_tools` with version `desktop-v1`.
+2. Install the DMG from this commit's `desktop-dmg` run, point
+   `gnsis.json` at `https://gnsis.studio`, start it. The host log
+   (`~/Library/Application Support/GNSIS/logs/gnsis-host.log`) shows
+   `actions offered: open,files,browser,input` and `tools agreed with runtime:`
+   with the same four.
+3. Share the screen, start live voice, and say “Move that file into the
+   Projects folder” with a file selected in Finder. Expect: an Allow alert
+   naming the file and the folder, the file in Projects, a “Done: Moved …”
+   line in the chat, and GNSIS saying it is done.
+4. “Open example.com and find the word domain”: an alert for example.com,
+   the page in the browser, then GNSIS looking and answering.
+5. In the host log every step carries the call id: `call … files → done`,
+   and the runtime's timeline has `tool.requested` → `action.*` →
+   `tool.response.injected` for the same id.

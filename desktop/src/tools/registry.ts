@@ -12,6 +12,8 @@
  * GNSIS_SEARCH_URL names. Adding an action tool is register(), not plumbing.
  */
 
+import { ActionProblem, type ActionTool, type PreparedAction } from "./actions.js";
+
 export interface ToolResult {
   ok: boolean;
   tool: string;
@@ -29,6 +31,7 @@ export interface ToolSpec {
 
 export class ToolRegistry {
   private readonly specs = new Map<string, ToolSpec>();
+  private readonly actions = new Map<string, ActionTool>();
   private readonly runtimeUrl: string;
   private readonly searchUrl: string;
 
@@ -48,6 +51,31 @@ export class ToolRegistry {
       name: s.name,
       description: s.description,
     }));
+  }
+
+  /**
+   * An action the model can ask for through the runtime. Registered here
+   * beside the renderer's tools — one registry, one execution path — but only
+   * offered to the runtime on the platforms it runs on.
+   */
+  registerAction(tool: ActionTool): void {
+    if (this.specs.has(tool.name) || this.actions.has(tool.name)) {
+      throw new Error(`duplicate tool ${tool.name}`);
+    }
+    this.actions.set(tool.name, tool);
+  }
+
+  /** Action names this machine can run, in catalog order. */
+  actionNames(platform: NodeJS.Platform, catalogOrder: readonly string[]): string[] {
+    return catalogOrder.filter((name) => this.actions.get(name)?.platforms.includes(platform));
+  }
+
+  async prepareAction(name: string, args: Record<string, unknown>): Promise<PreparedAction> {
+    const tool = this.actions.get(name);
+    if (!tool || !tool.platforms.includes(process.platform)) {
+      throw new ActionProblem("unsupported", `${name} is not available on this computer.`);
+    }
+    return tool.prepare(args);
   }
 
   async call(name: string, args: Record<string, unknown>): Promise<ToolResult> {

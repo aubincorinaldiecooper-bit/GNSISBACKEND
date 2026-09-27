@@ -76,7 +76,40 @@ export type HostEvent =
       output_epoch: number;
       reason: string;
       ts_ms: number;
-    };
+    }
+  | ActionEvent;
+
+/**
+ * One step of an action the runtime asked this Host to carry out, recorded on
+ * the session timeline under the call's id: requested → policy →
+ * (confirmation) → started → completed | failed. Never carries file contents,
+ * page contents or credentials — names and outcomes only.
+ */
+export interface ActionEvent {
+  type:
+    | "action.requested"
+    | "action.policy"
+    | "action.confirmation"
+    | "action.started"
+    | "action.completed"
+    | "action.failed";
+  call_id: string;
+  tool: string;
+  ts_ms: number;
+  action?: string;
+  effect?: string;
+  provenance?: string;
+  decision?: string;
+  reason?: string;
+  turn_id?: string | null;
+  status?: string;
+  verified?: string;
+  /** Whether a view of the screen taken after the action reached the runtime. */
+  screen?: string;
+  category?: string;
+  latency_ms?: number;
+  redelivered?: boolean;
+}
 
 /** Neutral media frame headers (payload follows as binary). */
 export type { AudioFrameHeader };

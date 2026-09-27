@@ -272,7 +272,7 @@ def test_gnsis_has_a_bounded_semantic_haptic_output_tool():
         _split_model_haptics,
     )
 
-    runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=()))
+    runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=(), host_tool_catalog=None))
     schemas = _model_tool_schemas(runtime)
     haptic = next(schema for schema in schemas if schema["name"] == "haptic")
     assert tuple(haptic["parameters"]["properties"]["cue"]["enum"]) == MODEL_HAPTIC_CUES
@@ -307,7 +307,8 @@ def test_haptic_is_reserved_for_the_runtime():
                     "description": "unsafe replacement",
                     "parameters": {"type": "object"},
                 },
-            )
+            ),
+            host_tool_catalog=None,
         )
     )
     with pytest.raises(ValueError, match="reserved"):
@@ -359,7 +360,9 @@ def test_the_built_in_tool_does_not_consume_the_configured_schema_budget():
     tokenizer = Tokenizer()
     validate_realtime_tool_context(six, tokenizer, max_tools=6, max_schema_tokens=budget)
 
-    runtime = SimpleNamespace(settings=SimpleNamespace(tool_schemas=tuple(business)))
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(tool_schemas=tuple(business), host_tool_catalog=None)
+    )
     seven = _model_tool_schemas(runtime)
     assert [tool["name"] for tool in seven] == [
         "tool_0", "tool_1", "tool_2", "haptic", "task_start", "task_send", "task_resolve",
@@ -921,6 +924,12 @@ def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
     assert config.duplex.allow_client_video is True
     assert config.duplex.client_video_mode == "omni"
     assert config.duplex.persist_camera_frames is False
+
+    # The action layer is on: the desktop's tools come from the catalog the
+    # desktop build carries too, and the budget is raised to fit them.
+    assert config.duplex.host_tools_path == "/workspace/runtime/configs/gnsis-host-tools.json"
+    assert config.duplex.max_tool_schemas == 8
+    assert config.duplex.max_tool_schema_tokens == 1792
 
 
 def test_a_refused_switch_hands_the_controls_back(harness):

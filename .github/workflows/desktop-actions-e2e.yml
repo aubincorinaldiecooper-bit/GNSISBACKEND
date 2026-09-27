@@ -1,0 +1,51 @@
+name: desktop-actions-e2e
+
+# The action path end to end, minus the neural model: the real runtime app
+# (host-tool negotiation, call ids, coordinator, timeline) serving a scripted
+# model, and the desktop's real HostSession, ActionBroker, ToolRegistry and
+# action adapters doing a real thing on the machine. On macOS that includes
+# launching a real app. This is not the person's Mac and not the packaged
+# app with the real model: that acceptance is run on a Mac, by a person.
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "runtime/**"
+      - ".github/workflows/desktop-actions-e2e.yml"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      # The desktop's action modules run under Node; Electron is not needed.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install the runtime (no model weights) and the desktop
+        run: |
+          python -m pip install fastapi "uvicorn>=0.29" websockets pyyaml pillow "numpy>=1.26,<2"
+          python -m pip install --no-deps -e ./runtime/minicpm_ft -e ./runtime/gnsis_runtime
+          cd desktop && npm ci
+      - name: Move a real file; the person's own words cover it, so no ask
+        run: desktop/scripts/e2e-actions.sh files-move
+      - name: Move a real file; no words on record, so the person is asked first
+        run: desktop/scripts/e2e-actions.sh files-move-asked
+      - name: Move a real file; the person's words, transcribed through the runtime, cover it
+        run: desktop/scripts/e2e-actions.sh files-move-spoken
+      - name: Open a real Mac app through the same path
+        if: runner.os == 'macOS'
+        run: desktop/scripts/e2e-actions.sh open-app '{"name":"open","arguments":{"target":"TextEdit"}}'

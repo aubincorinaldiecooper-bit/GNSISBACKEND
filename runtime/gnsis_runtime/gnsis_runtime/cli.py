@@ -20,6 +20,7 @@ from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
 from mcpmft.tool_protocol import ensure_lean_task_tools, normalize_tool_schema
 
 from .asr_process import AsrConfig, AsrService, asr_base_url, validate_asr_config
+from .host_tools import load_host_tool_catalog
 from .media_mode import VIDEO_SOURCES
 
 LOGGER = logging.getLogger(__name__)
@@ -55,6 +56,20 @@ class DuplexConfig:
     system_prompt: str = GNSIS_DUPLEX_SYSTEM_PROMPT
     ref_audio_path: str | None = None
     tools_path: str | None = None
+    # The reviewed catalog of tools a connected desktop may run on the
+    # person's own machine ({"version", "tools"}). A session is shown only the
+    # ones its Host offers when it connects; unset, no session ever is.
+    host_tools_path: str | None = None
+    # How long the desktop has to answer one of those calls before the model
+    # is told it timed out, and the most `tool.progress` can extend that while
+    # the person reads a confirmation.
+    external_tool_timeout_sec: float = 60.0
+    external_tool_max_wait_sec: float = 300.0
+    # The realtime tool budget: how many schemas the model may be shown and
+    # how many tokens they may take, not counting the runtime's own built-ins.
+    # A catalog that does not fit fails the boot, not the first session.
+    max_tool_schemas: int = 6
+    max_tool_schema_tokens: int = 1024
     trailing_silence_sec: float = 8.0
     turn_bind_grace_sec: float = 5.0
     # The longest one visitor may hold the model, and so the GPU. None keeps
@@ -355,6 +370,18 @@ def preflight_config(config: ReleaseConfig) -> None:
     if config.duplex.tools_path:
         _require_file("duplex.tools_path", config.duplex.tools_path)
         _tool_schemas(config.duplex.tools_path)
+    if config.duplex.host_tools_path:
+        _require_file("duplex.host_tools_path", config.duplex.host_tools_path)
+        load_host_tool_catalog(config.duplex.host_tools_path)
+    if config.duplex.external_tool_timeout_sec <= 0:
+        raise ValueError("duplex.external_tool_timeout_sec must be positive")
+    if config.duplex.external_tool_max_wait_sec < config.duplex.external_tool_timeout_sec:
+        raise ValueError(
+            "duplex.external_tool_max_wait_sec cannot be shorter than "
+            "duplex.external_tool_timeout_sec"
+        )
+    if config.duplex.max_tool_schemas < 1 or config.duplex.max_tool_schema_tokens < 1:
+        raise ValueError("duplex tool budget limits must be positive")
     if needs_worker:
         _require_directory("worker.cwd", config.worker.cwd)
         if config.coordinator.cwd:
@@ -486,6 +513,8 @@ def _duplex_params(config: DuplexConfig) -> DuplexParams:
         max_new_speak_tokens_per_chunk=max_new_speak,
         max_new_tool_tokens=config.max_new_tool_tokens,
         max_tool_response_tokens=config.max_tool_response_tokens,
+        max_tool_schemas=config.max_tool_schemas,
+        max_tool_schema_tokens=config.max_tool_schema_tokens,
         context_max_units=config.context_max_units,
         context_previous_max_tokens=config.context_previous_max_tokens,
         memory_slate_max_tokens=config.memory_slate_max_tokens,
@@ -534,6 +563,9 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
         codex_frame_rate_multiplier=duplex.codex_frame_rate_multiplier,
         codex_screen_history_seconds=duplex.codex_screen_history_seconds,
         tool_schemas=_tool_schemas(duplex.tools_path),
+        host_tool_catalog=load_host_tool_catalog(duplex.host_tools_path),
+        external_tool_timeout_sec=duplex.external_tool_timeout_sec,
+        external_tool_max_wait_sec=duplex.external_tool_max_wait_sec,
         expose_task_slate_to_model=duplex.expose_task_slate_to_model,
         playback_ack_required=duplex.playback_ack_required,
         playback_ack_timeout_sec=duplex.playback_ack_timeout_sec,

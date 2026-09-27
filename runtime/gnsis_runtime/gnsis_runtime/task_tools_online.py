@@ -4,7 +4,9 @@ import asyncio
 import dataclasses
 import logging
 import os
+import secrets
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,44 @@ from .timeline import SessionTimeline
 LOGGER = logging.getLogger(__name__)
 _TASK_TOOLS = frozenset({"task_start", "task_send", "task_resolve"})
 MAX_TASK_TOOL_CALLS_PER_UNIT = 4
+# How many answered or expired call ids are remembered, so a late or replayed
+# `tool.response` is recognised as stale instead of being fed to the model.
+MAX_FINISHED_EXTERNAL_CALLS = 64
+
+
+class StaleToolResponse(RuntimeError):
+    """A `tool.response` for a call that is no longer the one waiting."""
+
+    def __init__(self, call_id: str, reason: str) -> None:
+        super().__init__(f"tool response {call_id!r} is stale: {reason}")
+        self.call_id = call_id
+        self.reason = reason
+
+
+@dataclass
+class _ExternalCall:
+    """The one external tool call a client owes the model an answer for."""
+
+    call_id: str
+    name: str
+    arguments: dict[str, Any]
+    turn_id: str | None
+    issued_ms: int
+    deadline: float
+    hard_deadline: float
+    resolving: bool = False
+
+    def dispatch_payload(self, *, redelivered: bool) -> dict[str, Any]:
+        return {
+            "type": "tool.call",
+            "call_id": self.call_id,
+            "dispatch": "client",
+            "tool_calls": [{"name": self.name, "arguments": self.arguments}],
+            "tool_response_expected": True,
+            "turn_id": self.turn_id,
+            "issued_ms": self.issued_ms,
+            "redelivered": redelivered,
+        }
 
 
 @dataclass(frozen=True)
@@ -80,6 +120,8 @@ class TaskToolsRealtimeCoordinator:
         timeline: SessionTimeline | None = None,
         playback_ack_required: bool = False,
         playback_ack_timeout_sec: float = 15.0,
+        external_tool_timeout_sec: float = 60.0,
+        external_tool_max_wait_sec: float = 300.0,
     ) -> None:
         if delivery_poll_sec <= 0:
             raise ValueError("delivery_poll_sec must be positive")
@@ -91,6 +133,12 @@ class TaskToolsRealtimeCoordinator:
             raise ValueError("max_turn_text_chars must be positive")
         if turn_bind_grace_sec < 0:
             raise ValueError("turn_bind_grace_sec cannot be negative")
+        if external_tool_timeout_sec <= 0:
+            raise ValueError("external_tool_timeout_sec must be positive")
+        if external_tool_max_wait_sec < external_tool_timeout_sec:
+            raise ValueError(
+                "external_tool_max_wait_sec cannot be shorter than external_tool_timeout_sec"
+            )
         self.gateway = gateway
         self.owner_id = owner_id
         self.session_id = session_id
@@ -142,6 +190,14 @@ class TaskToolsRealtimeCoordinator:
         self._pending_task_calls: tuple[dict[str, Any], ...] | None = None
         self._pending_task_nonce = 0
         self._external_tool_pending: str | None = None
+        # The call behind `_external_tool_pending`: its id, the trusted turn it
+        # was bound to, and how long the client has to answer it.
+        self._external_call: _ExternalCall | None = None
+        self._finished_external_calls: deque[str] = deque(
+            maxlen=MAX_FINISHED_EXTERNAL_CALLS
+        )
+        self.external_tool_timeout_sec = float(external_tool_timeout_sec)
+        self.external_tool_max_wait_sec = float(external_tool_max_wait_sec)
         self._delivery_inflight = False
         self._delivery_outputs_pending: set[tuple[str, str, int]] = set()
         self._recovering_tool_error = False
@@ -588,11 +644,46 @@ class TaskToolsRealtimeCoordinator:
         with self._state_lock:
             if self._external_tool_pending is not None:
                 detail = f"tool {self._external_tool_pending!r} is still pending"
+                record = None
             else:
                 detail = ""
+                turn = self._latest_turn
+                started = time.monotonic()
+                record = _ExternalCall(
+                    call_id=f"call_{secrets.token_hex(8)}",
+                    name=name,
+                    arguments=dict(arguments),
+                    turn_id=turn.turn_id if turn is not None else None,
+                    issued_ms=now_ms(),
+                    deadline=started + self.external_tool_timeout_sec,
+                    hard_deadline=started + self.external_tool_max_wait_sec,
+                )
+                self._external_call = record
                 self._external_tool_pending = name
         if detail:
             self._spawn(self._deliver_tool_error(detail), "external-tool-overlap")
+            return
+        assert record is not None
+        # The id rides on the event itself, so the tool.call the client
+        # receives is the one it answers: it is the only way a response can be
+        # matched to this call rather than to whichever call happens to wait.
+        event.call_id = record.call_id
+        event.dispatch = "client"
+        event.turn_id = record.turn_id
+        self.timeline.emit(
+            "tool.requested",
+            component="tools",
+            correlation_id=record.call_id,
+            fields={
+                "tool": name,
+                "argument_keys": sorted(record.arguments),
+                "turn_id": record.turn_id,
+                "timeout_sec": self.external_tool_timeout_sec,
+            },
+        )
+        self._spawn(
+            self._expire_external_call(record.call_id), "external-tool-deadline"
+        )
 
     def _next_context_seq(self) -> int:
         self._context_seq += 1
@@ -619,19 +710,157 @@ class TaskToolsRealtimeCoordinator:
         self.gateway.record_realtime_context(owner_id=self.owner_id, event=event)
         return event
 
-    async def inject_external_tool_response(self, response: Any) -> Any | None:
+    async def inject_external_tool_response(
+        self,
+        response: Any,
+        *,
+        call_id: str | None = None,
+    ) -> Any | None:
+        """Feed the client's answer to the call that is waiting for it.
+
+        A response naming a call that already finished, timed out, or was never
+        issued is refused as stale, so a late or replayed answer can never be
+        read by the model as the result of a different action. A response with
+        no id is the legacy single-call form and is matched to the waiting call.
+
+        The returned event is not observed here: the caller emits it, and
+        emitting is where every model event is observed, exactly once.
+        """
+
         self._ensure_open()
+        if call_id is not None and not isinstance(call_id, str):
+            raise ValueError("tool.response call_id must be a string")
         with self._state_lock:
+            record = self._external_call
             name = self._external_tool_pending
-        if name is None:
-            raise RuntimeError("there is no pending external tool call")
-        event = await self._call_session("feed_tool_response", response)
+            if call_id is not None and call_id in self._finished_external_calls:
+                raise StaleToolResponse(call_id, "already_finished")
+            if name is None:
+                if call_id is not None:
+                    raise StaleToolResponse(call_id, "not_pending")
+                raise RuntimeError("there is no pending external tool call")
+            if record is not None and call_id is not None and call_id != record.call_id:
+                raise StaleToolResponse(call_id, "not_pending")
+            if record is not None:
+                if record.resolving:
+                    raise StaleToolResponse(record.call_id, "already_finished")
+                record.resolving = True
+        correlation = record.call_id if record is not None else None
+        self.timeline.emit(
+            "tool.response.received",
+            component="tools",
+            correlation_id=correlation,
+            fields={"tool": name, "correlated": call_id is not None},
+        )
+        try:
+            event = await self._call_session("feed_tool_response", response)
+        except BaseException:
+            # The model did not take it (too long, malformed): the call is
+            # still waiting, and the client may answer it again.
+            with self._state_lock:
+                if record is not None:
+                    record.resolving = False
+            raise
         with self._state_lock:
             if self._external_tool_pending == name:
                 self._external_tool_pending = None
-        if event is not None:
-            self.observe_frontbrain(event)
+            if record is not None and self._external_call is record:
+                self._external_call = None
+                self._finished_external_calls.append(record.call_id)
+        self.timeline.emit(
+            "tool.response.injected",
+            component="tools",
+            correlation_id=correlation,
+            fields={"tool": name, "model_event": event is not None},
+        )
         return event
+
+    def note_external_tool_progress(self, call_id: Any, state: Any) -> bool:
+        """The client is still working on the call (or waiting on the person).
+
+        Moves the deadline out by one timeout, never past the call's hard limit,
+        so an action waiting on a confirmation is not declared lost while the
+        person is still reading it.
+        """
+
+        self._ensure_open()
+        if not isinstance(call_id, str) or not call_id:
+            raise ValueError("tool.progress requires call_id")
+        label = str(state or "working")[:64]
+        with self._state_lock:
+            record = self._external_call
+            if record is None or record.call_id != call_id or record.resolving:
+                return False
+            record.deadline = min(
+                record.hard_deadline,
+                time.monotonic() + self.external_tool_timeout_sec,
+            )
+        self.timeline.emit(
+            "tool.progress",
+            component="tools",
+            correlation_id=call_id,
+            fields={"tool": record.name, "state": label},
+        )
+        return True
+
+    def pending_external_dispatch(self) -> dict[str, Any] | None:
+        """The waiting call, re-sent to a client that reconnected mid-call.
+
+        The client executes a given call id at most once; a resend lets it
+        answer a call whose result was lost with the old socket.
+        """
+
+        with self._state_lock:
+            record = self._external_call
+            if record is None or record.resolving:
+                return None
+            return record.dispatch_payload(redelivered=True)
+
+    async def _expire_external_call(self, call_id: str) -> None:
+        while True:
+            with self._state_lock:
+                record = self._external_call
+                if record is None or record.call_id != call_id or record.resolving:
+                    return
+                remaining = record.deadline - time.monotonic()
+                if remaining <= 0:
+                    record.resolving = True
+                    break
+            await asyncio.sleep(min(remaining, 1.0))
+        self.timeline.emit(
+            "tool.timeout",
+            component="tools",
+            correlation_id=call_id,
+            fields={"tool": record.name},
+        )
+        self._emit_control(
+            {"type": "tool.timeout", "call_id": call_id, "tool": record.name}
+        )
+        event = None
+        try:
+            event = await self._call_session(
+                "feed_tool_response",
+                {
+                    "status": "timeout",
+                    "tool": record.name,
+                    "message": (
+                        "The computer did not answer in time. The action may or "
+                        "may not have happened; look at the screen before saying "
+                        "it did."
+                    ),
+                },
+            )
+        except Exception as exc:
+            LOGGER.warning("could not answer timed-out tool call %s: %s", call_id, exc)
+        finally:
+            with self._state_lock:
+                if self._external_call is record:
+                    self._external_call = None
+                if self._external_tool_pending == record.name:
+                    self._external_tool_pending = None
+                self._finished_external_calls.append(call_id)
+        if event is not None:
+            await self._outputs.put(TaskToolsOnlineOutput("model", event))
 
     async def inject_memory_episode(self, episode: Any) -> bool:
         self._ensure_open()
@@ -904,7 +1133,7 @@ class TaskToolsRealtimeCoordinator:
             }
             event = await self._call_session("feed_tool_response", response)
             if event is not None:
-                self.observe_frontbrain(event)
+                # Observed once, when the output loop emits it.
                 await self._outputs.put(TaskToolsOnlineOutput("model", event))
         except asyncio.CancelledError:
             raise
@@ -951,7 +1180,7 @@ class TaskToolsRealtimeCoordinator:
                 },
             )
             if event is not None:
-                self.observe_frontbrain(event)
+                # Observed once, when the output loop emits it.
                 await self._outputs.put(TaskToolsOnlineOutput("model", event))
         except Exception as exc:
             self._emit_control(
@@ -1015,7 +1244,7 @@ class TaskToolsRealtimeCoordinator:
                         delivery_attempt=delivery.attempts,
                     )
                     if event is not None:
-                        self.observe_frontbrain(event)
+                        # Observed once, when the output loop emits it.
                         await self._outputs.put(
                             TaskToolsOnlineOutput(
                                 "model",

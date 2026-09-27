@@ -14,6 +14,7 @@ import {
   type HostEvent,
 } from "./protocol.js";
 import type {
+  ClientControl,
   ScreenChannelConfig,
   ScreenFrameMetadata,
 } from "../shared/protocol.js";
@@ -23,6 +24,8 @@ export interface HostSessionOptions {
   hostId: string;
   chassis: string;
   capabilities: HostCapabilities;
+  /** The actions this Host can run, offered to the runtime on connect. */
+  hostTools?: { names: readonly string[]; version: string };
   onControl?: (control: unknown) => void;
   onAudio?: (pcm: Buffer) => void;
   onClosed?: (code: number) => void;
@@ -35,6 +38,10 @@ export class HostSession {
   private screen: ScreenClient | null = null;
   private callEpoch = 0;
   private sessionId: string | null = null;
+  // From the runtime's `ready`. Reconnecting with it picks the same session
+  // back up — its conversation, and any action call still owed an answer —
+  // instead of being refused as busy until the old one expires.
+  private resumeToken: string | null = null;
   private readonly opts: HostSessionOptions;
 
   constructor(opts: HostSessionOptions) {
@@ -46,16 +53,26 @@ export class HostSession {
   }
 
   connect(sessionId: string): void {
+    if (sessionId !== this.sessionId) this.resumeToken = null;
     this.sessionId = sessionId;
     this.duplex?.close();
     this.screen?.close();
+    const tools = this.opts.hostTools;
     this.duplex = new DuplexClient({
       url: this.opts.runtimeUrl,
       sessionId,
+      query: () => ({
+        host_tools: tools?.names.length ? tools.names.join(",") : undefined,
+        host_tools_version: tools?.names.length ? tools.version : undefined,
+        resume_token: this.resumeToken ?? undefined,
+      }),
     });
     this.screen = new ScreenClient({ url: this.opts.runtimeUrl, sessionId });
     this.duplex.on("control", (c) => {
-      const control = c as { type?: string; screen?: ScreenChannelConfig };
+      const control = c as { type?: string; screen?: ScreenChannelConfig; resume_token?: unknown };
+      if (control.type === "ready" && typeof control.resume_token === "string") {
+        this.resumeToken = control.resume_token;
+      }
       if (
         (control.type === "ready" || control.type === "media.mode.done") &&
         control.screen
@@ -147,12 +164,18 @@ export class HostSession {
     this.duplex?.sendControl({ type: "host.event", event } as never);
   }
 
+  /** A control for the runtime on this session's duplex socket. */
+  sendControl(control: ClientControl): void {
+    this.duplex?.sendControl(control);
+  }
+
   sendAudioFrame(header: AudioFrameHeader, pcm: Buffer): void {
     this.duplex?.sendAudioFrame(header, pcm);
   }
 
-  sendScreenFrame(metadata: ScreenFrameMetadata, payload: Buffer): void {
-    this.screen?.sendFrame(metadata, payload);
+  /** Returns whether the frame actually went out on the screen socket. */
+  sendScreenFrame(metadata: ScreenFrameMetadata, payload: Buffer): boolean {
+    return this.screen?.sendFrame(metadata, payload) ?? false;
   }
 
   interrupt(reason: string): void {
