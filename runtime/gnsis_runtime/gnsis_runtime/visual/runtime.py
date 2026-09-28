@@ -89,15 +89,18 @@ def recent_motion(
         return 0.0
     ordered = sorted(
         (frame for frame in frames if frame.captured_at_ms is not None),
-        key=lambda frame: int(frame.captured_at_ms or 0),
+        key=lambda frame: int(frame.captured_at_ms) if frame.captured_at_ms is not None else -1,
     )
     if len(ordered) < 2:
         return 0.0
-    newest = int(ordered[-1].captured_at_ms or 0)
+    newest_value = ordered[-1].captured_at_ms
+    assert newest_value is not None
+    newest = int(newest_value)
     ordered = [
         frame
         for frame in ordered
-        if newest - int(frame.captured_at_ms or newest) <= window_ms
+        if frame.captured_at_ms is not None
+        and newest - int(frame.captured_at_ms) <= window_ms
     ]
     if len(ordered) < 2:
         return 0.0
