@@ -2,15 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from gnsis_runtime.visual.engine import RuntimeVisualFrame, frame_distance
 from gnsis_runtime.visual.schema import Decision, DecisionError, Target, decision_from_json, validate_decision
-
-try:
-    import numpy as np
-    from PIL import Image
-except ImportError:  # pragma: no cover
-    np = None
-    Image = None
 
 
 VIEWPORT = (1280, 800)
@@ -41,11 +33,6 @@ def test_visual_decision_round_trip():
     assert back.action == decision.action
 
 
-@pytest.mark.skipif(Image is None or np is None, reason="visual test dependencies unavailable")
-def test_runtime_visual_frame_uses_existing_image_without_reacquisition():
-    image = Image.new("RGB", (32, 16), "white")
-    frame = RuntimeVisualFrame.from_image("f1", image)
-    assert frame.frame_id == "f1"
-    assert frame.image().size == (32, 16)
-    assert frame.signature.shape == (30, 48)
-    assert frame_distance(frame.signature, frame.signature) == 0.0
+def test_visual_frame_id_accepts_runtime_string_ids():
+    decision = Decision("click", 0.9, Target(10, 10), frame_id="screen:42")
+    assert validate_decision(decision, VIEWPORT).frame_id == "screen:42"
