@@ -1,19 +1,8 @@
 """GNSIS System-1 visual decision core.
 
-This package owns model-side visual perception, decision, and pixel-only grounding.
-Environment-specific capture and execution adapters live outside this package.
+Model-side visual perception and grounding live here. Heavy model dependencies are
+imported from their concrete modules so the base realtime runtime can remain
+lightweight when System-1 vision is not enabled.
 """
 
-from .engine import DecisionPolicy, JEVEngine, VisualCache
-from .schema import ACTIONS, Decision, DecisionError, Target, validate_decision
-
-__all__ = [
-    "ACTIONS",
-    "Decision",
-    "DecisionError",
-    "DecisionPolicy",
-    "JEVEngine",
-    "Target",
-    "VisualCache",
-    "validate_decision",
-]
+__all__: list[str] = []
