@@ -125,10 +125,14 @@ class PersistentVisualDecisionSession:
         screen_frames: LatestScreenFrameBuffer,
         *,
         cache: Any = None,
+        required_surface: str | None = "browser_tab",
+        surface_id: str | None = None,
     ) -> None:
         self.policy = policy
         self.screen_frames = screen_frames
         self.cache = cache
+        self.required_surface = required_surface
+        self.surface_id = surface_id
         self.goal: str | None = None
         self.history: list[dict] = []
 
@@ -143,11 +147,33 @@ class PersistentVisualDecisionSession:
         self.goal = None
         self.history = []
 
+    def _matches_surface(self, frame: ScreenFrame) -> bool:
+        if self.required_surface is not None and frame.metadata.get("visual_surface") != self.required_surface:
+            return False
+        if self.surface_id is not None and frame.metadata.get("surface_id") != self.surface_id:
+            return False
+        return True
+
+    def _eligible_frames(
+        self,
+        *,
+        within_ms: float | None = None,
+    ) -> tuple[ScreenFrame, ...]:
+        return tuple(
+            frame
+            for frame in self.screen_frames.recent_frames(within_ms=within_ms)
+            if self._matches_surface(frame)
+        )
+
     def latest_frame(self) -> ScreenFrame:
-        frame = self.screen_frames.latest_frame()
-        if frame is None:
-            raise RuntimeError("no consumed visual frame is available")
-        return frame
+        frames = self._eligible_frames()
+        if not frames:
+            surface = self.required_surface or "any"
+            suffix = f" ({self.surface_id})" if self.surface_id is not None else ""
+            raise RuntimeError(
+                f"no consumed visual frame is available for surface {surface}{suffix}"
+            )
+        return frames[0]
 
     def decide(self) -> Decision:
         if not self.goal:
@@ -155,7 +181,7 @@ class PersistentVisualDecisionSession:
         source = self.latest_frame()
         view = RuntimeFrameView.from_screen_frame(source)
         viewport = view.image().size
-        recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
+        recent = self._eligible_frames(within_ms=MOTION_WINDOW_MS)
         motion = recent_motion(recent)
         decision = self.policy.decide(
             view,
@@ -184,11 +210,17 @@ class PersistentVisualDecisionSession:
     def is_current(self, decision: Decision) -> bool:
         """Whether a target was produced from the runtime's current consumed frame."""
 
-        frame = self.screen_frames.latest_frame()
-        return frame is not None and decision.frame_id == frame.frame_id
+        try:
+            frame = self.latest_frame()
+        except RuntimeError:
+            return False
+        return decision.frame_id == frame.frame_id
 
     def state(self) -> dict[str, Any]:
-        frame = self.screen_frames.latest_frame()
+        try:
+            frame = self.latest_frame()
+        except RuntimeError:
+            frame = None
         return {
             "policy": self.policy.name,
             "goal": self.goal,
@@ -198,5 +230,15 @@ class PersistentVisualDecisionSession:
                 frame.metadata.get("video_source")
                 if frame is not None
                 else None
+            ),
+            "visual_surface": (
+                frame.metadata.get("visual_surface")
+                if frame is not None
+                else self.required_surface
+            ),
+            "surface_id": (
+                frame.metadata.get("surface_id")
+                if frame is not None
+                else self.surface_id
             ),
         }
