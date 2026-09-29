@@ -363,9 +363,16 @@ class BrowserHubPeer:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
-        for future in self._pending.values():
+        for call_id, future in self._pending.items():
             if not future.done():
-                future.set_result({"type": "error", "message": "the browser connection closed"})
+                future.set_result(
+                    {
+                        "type": "error",
+                        "call_id": call_id,
+                        "message": "the browser connection closed",
+                        "outcome_unknown": True,
+                    }
+                )
         self._pending.clear()
 
     async def wait_connected(self, timeout_s: float = 30.0) -> str:
@@ -395,9 +402,16 @@ class BrowserHubPeer:
                 self.hub_session_id = None
                 if self._connected is not None:
                     self._connected.clear()
-                for future in self._pending.values():
+                for call_id, future in self._pending.items():
                     if not future.done():
-                        future.set_result({"type": "error", "message": "the browser connection closed"})
+                        future.set_result(
+                            {
+                                "type": "error",
+                                "call_id": call_id,
+                                "message": "the browser connection closed",
+                                "outcome_unknown": True,
+                            }
+                        )
 
     async def _dispatch(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
