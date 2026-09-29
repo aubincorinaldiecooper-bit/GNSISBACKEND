@@ -21,6 +21,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
+import { BrowserHubServer } from "../host/browserHub.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { ScreenWatch } from "../host/screenWatch.js";
@@ -39,6 +40,7 @@ import { FilesTool } from "../tools/files.js";
 import { MacFinder } from "../tools/mac/finder.js";
 import { OpenTool } from "../tools/mac/open.js";
 import { BrowserTool } from "../tools/mac/browser.js";
+import { BrowserAgentTool } from "../tools/mac/browserAgent.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
 
@@ -84,6 +86,7 @@ const permissions = new ElectronPermissions();
 const shortcuts = new ElectronShortcuts();
 const notifications = new ElectronNotifications();
 const tools = new ToolRegistry({ runtimeUrl: RUNTIME_URL });
+const browserHub = new BrowserHubServer(Number(process.env.GNSIS_BROWSER_HUB_PORT ?? "8790"));
 
 // The actions GNSIS can take on this machine when the model asks. Offered to
 // the runtime on connect, so the model is only ever told about what this
@@ -97,6 +100,7 @@ const inputTool = new InputTool(systemShell, {
 tools.registerAction(new OpenTool(systemShell, filesTool));
 tools.registerAction(filesTool);
 tools.registerAction(new BrowserTool(systemShell, (combo) => inputTool.press(combo)));
+tools.registerAction(new BrowserAgentTool(browserHub));
 tools.registerAction(inputTool);
 const ACTIONS_TRUST = actionsAllowed(
   RUNTIME_URL,
@@ -272,6 +276,25 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(async () => {
+  try {
+    const port = await browserHub.start();
+    hostLog("browser", `hub listening on 127.0.0.1:${port}; extension=${browserHub.extensionUrl}`);
+    if (process.platform === "darwin" && process.env.GNSIS_BROWSER_AUTO_OPEN !== "off") {
+      // Best effort only: if Chrome or the extension is not installed, the
+      // browser_agent tool will return the exact connection instruction.
+      void systemShell
+        .run("/usr/bin/open", ["-a", "Google Chrome", browserHub.extensionUrl], { timeoutMs: 5_000 })
+        .then((result) => {
+          if (result.code !== 0) {
+            hostLog("browser", `could not auto-open extension hub: ${result.stderr || result.stdout}`);
+          }
+        })
+        .catch((err) => hostLog("browser", `could not auto-open extension hub: ${String(err)}`));
+    }
+  } catch (err) {
+    hostLog("browser", `hub failed to start: ${String(err)}`);
+  }
+
   hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
   hostLog(
     "execution",
@@ -386,6 +409,7 @@ app.on("will-quit", () => {
   hostLog("host", "will-quit");
   shortcuts.unregisterAll();
   host.disconnect("app_quit");
+  void browserHub.close();
 });
 
 app.on("window-all-closed", () => {

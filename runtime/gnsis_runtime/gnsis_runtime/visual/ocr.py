@@ -12,10 +12,13 @@ import re
 import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 from PIL import Image
+
+if TYPE_CHECKING:  # tensors are only indexed here; reading text needs no torch
+    import torch
 
 MAX_LABEL_WORDS = 5
 MIN_MATCH = 0.85
