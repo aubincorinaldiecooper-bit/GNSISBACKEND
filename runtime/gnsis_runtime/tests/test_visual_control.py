@@ -164,8 +164,32 @@ def test_ambiguous_looks_again_a_bounded_number_of_times_then_escalates(tmp_path
     assert outcome.verification.status == "ambiguous"
     assert outcome.first_attempt_success is None
     verification = next(timeline.kinds("visual.verification"))
-    assert verification.fields["looks"] == 3
+    assert verification.fields["looks"] == 2
     assert len(executor.steps) == 1
+
+
+def test_unknown_execution_outcome_never_triggers_an_automatic_retry(tmp_path):
+    ctl, screen, executor, _, _ = controller(tmp_path, [None])
+    original_execute = executor.execute
+
+    def unknown(step_):
+        report = original_execute(step_)
+        return ExecutionReport(
+            execution=Execution(actuator_success=None, call_id=report.execution.call_id),
+            acted_at_ms=report.acted_at_ms,
+            viewport=report.viewport,
+            metadata={"outcome_unknown": True, "bridge": {"error": "cancellation unconfirmed"}},
+        )
+
+    executor.execute = unknown
+    outcome = ctl.run_step(
+        step(screen.frame()),
+        reground=lambda s, v: step(screen.buffer.latest_frame().frame_id),
+    )
+    assert outcome.status == "escalated"
+    assert outcome.recovery_attempted is False
+    assert len(executor.steps) == 1
+    assert "will not be retried automatically" in outcome.reason
 
 
 def test_a_step_with_no_expected_result_continues_unverified(tmp_path):
