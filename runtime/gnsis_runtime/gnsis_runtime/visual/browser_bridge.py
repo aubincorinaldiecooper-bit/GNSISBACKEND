@@ -98,11 +98,19 @@ def build_action_request(
     if step.resolve_target:
         decision["resolve_target"] = True
         decision["max_radius_px"] = 24 if step.max_radius_px is None else step.max_radius_px
+    authority = step.authority
+    if authority is None:
+        raise PermissionError("browser action has no trusted user-intent authority")
+    if not authority.execution_allowed:
+        raise PermissionError(
+            f"browser action policy did not allow execution: {authority.policy_decision} ({authority.policy_reason})"
+        )
     return {
         "type": "browser.action",
         "call_id": call_id,
         "frame_id": step.frame_id,
         "source_tab_id": source_tab_id,
+        "authority": authority.to_json(),
         "decision": decision,
     }
 
@@ -152,16 +160,26 @@ def report_from_bridge(
 
     if message.get("type") != "browser.action.result" or message.get("success") is not True:
         error = str(message.get("message") or "the browser did not report a result")[:MAX_ERROR]
+        outcome_unknown = bool(message.get("outcome_unknown"))
+        policy_blocked = bool(message.get("policy_blocked"))
         candidates: dict[str, Candidate] = {}
         if raw is not None:
             candidates["raw"] = raw
             if decision.get("resolve_target") and "abstained" in error.lower():
                 candidates["raw+r24"] = Candidate("abstained", method="abstained")
         return ExecutionReport(
-            execution=Execution(actuator_success=False, call_id=call_id, error=error),
+            execution=Execution(
+                actuator_success=None if outcome_unknown else False,
+                call_id=call_id,
+                error=None if outcome_unknown else error,
+            ),
             viewport=frame_size,
             candidates=candidates,
-            metadata={"bridge": {"error": error}},
+            metadata={
+                "bridge": {"error": error},
+                "outcome_unknown": outcome_unknown,
+                "policy_blocked": policy_blocked,
+            },
         )
 
     evidence = message.get("evidence") if isinstance(message.get("evidence"), Mapping) else {}
@@ -293,6 +311,7 @@ def parse_capture_frame(message: Mapping[str, Any]) -> CapturedFrame:
 
 
 FrameSink = Callable[[CapturedFrame], "Awaitable[None] | None"]
+CaptureStopSink = Callable[[Mapping[str, Any]], "Awaitable[None] | None"]
 
 
 class BrowserHubPeer:
@@ -310,13 +329,16 @@ class BrowserHubPeer:
         port: int = 0,
         allowed_origins: tuple[str, ...] | None = (DEFAULT_EXTENSION_ORIGIN,),
         on_frame: FrameSink | None = None,
+        on_capture_stopped: CaptureStopSink | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.allowed_origins = allowed_origins
         self.on_frame = on_frame
+        self.on_capture_stopped = on_capture_stopped
         self.hub_session_id: str | None = None
         self.hub_errors: list[str] = []
+        self.capture_stops: list[dict[str, Any]] = []
         self.frames_received = 0
         self.frames_rejected = 0
         self._server: Any = None
@@ -384,6 +406,20 @@ class BrowserHubPeer:
             if self.hub_session_id and self._connected is not None:
                 self._connected.set()
             return
+        if kind == "capture.stopped":
+            stop = {
+                "reason": str(message.get("reason") or "failed"),
+                "message": str(message.get("message") or "")[:MAX_ERROR],
+                "capture_session_id": str(message.get("capture_session_id") or "")[:128] or None,
+            }
+            self.capture_stops.append(stop)
+            if stop["reason"] == "failed":
+                LOGGER.warning("browser capture stopped: %s", stop["message"] or "unknown failure")
+            if self.on_capture_stopped is not None:
+                result = self.on_capture_stopped(stop)
+                if asyncio.iscoroutine(result):
+                    await result
+            return
         if kind == "capture.frame":
             try:
                 frame = parse_capture_frame(message)
@@ -425,17 +461,31 @@ class BrowserHubPeer:
         async with self._action_lock:
             future: asyncio.Future[dict[str, Any]] = self.loop.create_future()
             self._pending[call_id] = future
+            sent = False
             try:
                 await self._send(request)
+                sent = True
                 return await asyncio.wait_for(future, timeout_s)
             except asyncio.TimeoutError:
+                # A stop request is best-effort; without a terminal browser
+                # acknowledgement we cannot know whether the side effect ran.
                 try:
                     await self._send({"type": "stop", "call_id": call_id})
                 except ConnectionError:
                     pass
-                return {"type": "error", "call_id": call_id, "message": f"no answer from the browser within {timeout_s:g}s; cancelled"}
+                return {
+                    "type": "error",
+                    "call_id": call_id,
+                    "message": f"no answer from the browser within {timeout_s:g}s; cancellation unconfirmed",
+                    "outcome_unknown": True,
+                }
             except ConnectionError as exc:
-                return {"type": "error", "call_id": call_id, "message": str(exc)}
+                return {
+                    "type": "error",
+                    "call_id": call_id,
+                    "message": str(exc),
+                    "outcome_unknown": sent,
+                }
             finally:
                 self._pending.pop(call_id, None)
 
