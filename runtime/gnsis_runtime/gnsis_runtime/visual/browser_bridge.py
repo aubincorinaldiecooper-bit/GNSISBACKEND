@@ -105,6 +105,10 @@ def build_action_request(
         raise PermissionError(
             f"browser action policy did not allow execution: {authority.policy_decision} ({authority.policy_reason})"
         )
+    if step.action not in authority.allowed_actions:
+        raise PermissionError(
+            f"browser action {step.action!r} is not in capability manifest {authority.capability_manifest_id!r}"
+        )
     return {
         "type": "browser.action",
         "call_id": call_id,
