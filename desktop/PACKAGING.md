@@ -144,7 +144,7 @@ really a link into a hidden, system or outside place is treated as that place.
 
 1. Deploy the runtime from this commit (`modal deploy modal/gnsis_voice.py`,
    or the worker's deploy route), then run `scripts/verify-modal-gnsis.py`:
-   `/health` lists `host_tools` with version `desktop-v1`.
+   `/health` lists `host_tools` with version `desktop-v2`.
 2. Install the DMG from this commit's `desktop-dmg` run and start it. A
    fresh install connects to `https://gnsis.studio` automatically. The host log
    (`~/Library/Application Support/GNSIS/logs/gnsis-host.log`) shows

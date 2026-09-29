@@ -396,6 +396,17 @@ test("typing is offered only when the runtime says it answers typed turns", asyn
   await assert.rejects(host.sendText("Again"), /didn’t confirm it got your message/);
   await assert.rejects(host.sendText("   "), /nothing to send/);
 
+  // A link that ends takes typing with it, until the next ready offers it again.
+  bridge.control({ type: "session.done" });
+  assert.equal(host.capabilities().text, false, "a finished session does not keep typing on");
+  assert.deepEqual(events.at(-1), { type: "link", state: "closed", detail: "The session ended." });
+  bridge.control({ type: "ready", session_id: "s1", typed_turns: true });
+  assert.equal(host.capabilities().text, true);
+  bridge.control({ type: "transport.error" });
+  assert.equal(host.capabilities().text, false, "nor does a lost connection");
+  bridge.control({ type: "ready", session_id: "s1" });
+  assert.equal(host.capabilities().text, false, "a runtime that does not say it answers typed turns gets none");
+
   const late = harness({ state: { ready: { type: "ready", typed_turns: true }, connected: true, closed: false } });
   await tick();
   assert.equal(late.host.capabilities().text, true, "a ready that went by before the page loaded counts too");

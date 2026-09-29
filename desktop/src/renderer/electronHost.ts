@@ -441,6 +441,9 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   private setLink(state: LinkState, detail?: string): void {
+    // Typing is only as good as the `ready` that offered it: once that link
+    // is gone, it waits for the next one to say so again.
+    if (state !== "ready") this.typedTurns = false;
     this.link = state;
     this.linkDetail = detail;
     this.emit({ type: "link", state, detail });
