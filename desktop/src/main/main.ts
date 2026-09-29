@@ -46,9 +46,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Runtime resolution: GNSIS_RUNTIME_URL env var first (dev/CI), then a
 // persisted desktop setting at <userData>/gnsis.json ({"runtimeUrl": ...}),
-// then the local default. Packaged builds can't rely on env, so the JSON
-// file is the supported seam for pointing the installed app at any runtime
-// — including the future LocalGNSISProvider on 127.0.0.1.
+// then the public GNSIS service. Normal users never configure this: a fresh
+// install connects to https://gnsis.studio automatically. The env/JSON seams
+// remain for local development and future LocalGNSISProvider work.
 function readSettings(): { runtimeUrl?: unknown; actions?: unknown } {
   try {
     const cfgPath = path.join(app.getPath("userData"), "gnsis.json");
@@ -66,7 +66,7 @@ function resolveRuntimeUrl(): string {
   if (typeof SETTINGS.runtimeUrl === "string" && SETTINGS.runtimeUrl) {
     return SETTINGS.runtimeUrl;
   }
-  return "http://127.0.0.1:8080";
+  return "https://gnsis.studio";
 }
 
 const RUNTIME_URL = resolveRuntimeUrl();
