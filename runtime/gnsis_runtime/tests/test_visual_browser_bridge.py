@@ -15,7 +15,7 @@ from gnsis_runtime.visual.browser_bridge import (
     report_from_bridge,
     serve_in_thread,
 )
-from gnsis_runtime.visual.control import VisualStep
+from gnsis_runtime.visual.control import ActionAuthority, VisualStep
 from gnsis_runtime.visual.real_runs import Point, RealRunRecord
 
 
@@ -24,8 +24,29 @@ def _frame(frame_id="f-1", size=(640, 400), tab_id=7) -> ScreenFrame:
     return ScreenFrame(frame_id, Image.new("RGB", size, "white"), captured_at_ms=1000, metadata=metadata)
 
 
+def _authority(**overrides) -> ActionAuthority:
+    values = dict(
+        turn_id="turn-1",
+        provenance="direct_user",
+        policy_decision="allow",
+        policy_reason="asked for directly",
+        capability_manifest_id="browser-v1",
+        confirmation="not_required",
+    )
+    values.update(overrides)
+    return ActionAuthority(**values)
+
+
 def _step(**overrides) -> VisualStep:
-    values = dict(run_id="r", case_id="c", goal="Pick CAD", action="click", frame_id="f-1", target=Point(320, 100))
+    values = dict(
+        run_id="r",
+        case_id="c",
+        goal="Pick CAD",
+        action="click",
+        frame_id="f-1",
+        target=Point(320, 100),
+        authority=_authority(),
+    )
     values.update(overrides)
     return VisualStep(**values)
 
@@ -46,8 +67,21 @@ def test_request_uses_frame_pixels_and_the_frames_own_size():
         "call_id": "call_1",
         "frame_id": "f-1",
         "source_tab_id": 7,
+        "authority": _authority().to_json(),
         "decision": {"action": "click", "target": {"x": 320, "y": 100}, "viewport": {"width": 640, "height": 400}},
     }
+
+
+def test_request_fails_closed_without_or_without_approved_authority():
+    with pytest.raises(PermissionError):
+        build_action_request(_step(authority=None), call_id="c", frame=_frame(), source_tab_id=7)
+    with pytest.raises(PermissionError):
+        build_action_request(
+            _step(authority=_authority(policy_decision="confirm", confirmation="missing")),
+            call_id="c",
+            frame=_frame(),
+            source_tab_id=7,
+        )
 
 
 def test_target_cleanup_is_off_unless_a_step_opts_in_and_is_capped_at_24px():
@@ -255,7 +289,7 @@ def test_peer_sends_one_action_and_returns_its_correlated_answer():
     asyncio.run(scenario())
 
 
-def test_an_unanswered_action_is_cancelled_and_reported_as_not_carried_out():
+def test_an_unanswered_action_stays_indeterminate_when_cancellation_is_unconfirmed():
     async def scenario():
         peer = BrowserHubPeer(allowed_origins=None)
         port = await peer.start()
@@ -264,9 +298,32 @@ def test_an_unanswered_action_is_cancelled_and_reported_as_not_carried_out():
         await peer.wait_connected(5)
         request = build_action_request(_step(), call_id="call_slow", frame=_frame(), source_tab_id=7)
         answer = await peer.act(request, timeout_s=0.2)
-        assert answer["type"] == "error" and "cancelled" in answer["message"]
+        assert answer["type"] == "error"
+        assert answer["outcome_unknown"] is True
+        assert "cancellation unconfirmed" in answer["message"]
         await asyncio.wait_for(task, 5)
         assert hub.received[-1] == {"type": "stop", "call_id": "call_slow"}
+        await peer.close()
+
+    asyncio.run(scenario())
+
+
+def test_capture_stopped_failure_is_recorded_and_forwarded():
+    async def scenario():
+        stops = []
+        peer = BrowserHubPeer(allowed_origins=None, on_capture_stopped=stops.append)
+        await peer.start()
+        await peer._dispatch(
+            {
+                "type": "capture.stopped",
+                "reason": "failed",
+                "message": "No frame arrived from the tab for 10 s.",
+                "capture_session_id": "cap-1",
+            }
+        )
+        assert peer.capture_stops == stops
+        assert stops[0]["reason"] == "failed"
+        assert stops[0]["capture_session_id"] == "cap-1"
         await peer.close()
 
     asyncio.run(scenario())
@@ -283,6 +340,18 @@ def test_only_the_extension_origin_may_connect():
         await peer.close()
 
     asyncio.run(scenario())
+
+
+def test_executor_blocks_a_step_without_authority_before_sending():
+    peer = BrowserHubPeer(allowed_origins=None)
+    buffer = LatestScreenFrameBuffer()
+    buffer.publish(_frame(tab_id=11))
+    buffer.consume_for_unit()
+    executor = BrowserExecutor(peer, buffer, timeout_s=1)
+    report = executor.execute(_step(authority=None))
+    assert report.execution.actuator_success is False
+    assert report.metadata["policy_blocked"] is True
+    assert executor.sent == []
 
 
 def test_executor_carries_frame_provenance_and_never_reuses_a_call_id():
