@@ -267,13 +267,14 @@ function lowerFirst(text: string): string {
 const OVERLAY = (process.env.GNSIS_WINDOW ?? (process.platform === "darwin" ? "overlay" : "standard")) === "overlay";
 let clickThrough: ClickThrough | null = null;
 /**
- * How large GNSIS draws itself; 1 is the size it was designed at. 0.9 keeps
- * the cards from crowding a laptop screen. GNSIS_SCALE (0.6 to 1.25) tries
- * another size without a rebuild.
+ * How large GNSIS draws itself; 1 is the size it was designed at. 0.8 is the
+ * owner's pick after comparing 100%, 90% and 80% on a 13-inch screen: close
+ * to the text size of ordinary Mac apps, and the chat is centred there.
+ * GNSIS_SCALE (0.6 to 1.25) tries another size without a rebuild.
  */
 const UI_SCALE = (() => {
   const asked = Number(process.env.GNSIS_SCALE);
-  return Number.isFinite(asked) && asked >= 0.6 && asked <= 1.25 ? asked : 0.9;
+  return Number.isFinite(asked) && asked >= 0.6 && asked <= 1.25 ? asked : 0.8;
 })();
 
 function createWindow(): void {
