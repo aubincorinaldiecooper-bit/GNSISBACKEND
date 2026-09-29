@@ -163,3 +163,74 @@ test("browser: with no browser open, it says so instead of launching one", async
     (err: unknown) => err instanceof ActionProblem && err.status === "not_found",
   );
 });
+
+/** A browser with tabs, driven the way the tool drives it: by the scripts it sends. */
+function fakeBrowser(app: "Google Chrome" | "Safari", opts: { ignoreNewTab?: boolean; windows?: boolean } = {}) {
+  let windows = opts.windows ?? true;
+  const tabs: Array<{ title: string; url: string }> = windows ? [{ title: "Mail", url: "https://mail.example/" }] : [];
+  let active = tabs.length;
+  const scripts: string[] = [];
+  const shell = fakeShell((file, args) => {
+    if (file === "/usr/bin/lsappinfo" && args[0] === "front") return { stdout: "ASN:0x0-0x1234" };
+    if (file === "/usr/bin/lsappinfo") return { stdout: `"LSDisplayName"="${app}"` };
+    const source = args[args.length - 1];
+    scripts.push(source);
+    if (source.includes("tabs.push") || source.includes("make()")) {
+      if (opts.ignoreNewTab) return { stdout: "" };
+      const url = /url: "([^"]+)"/.exec(source)?.[1] ?? (app === "Safari" ? "" : "chrome://newtab/");
+      if (!windows) windows = true;
+      tabs.push({ title: url ? "YouTube" : "New Tab", url });
+      active = tabs.length;
+      return { stdout: "" };
+    }
+    if (source.includes("JSON.stringify(w.tabs()")) {
+      if (!windows) return { code: 1, stderr: "Can't get object." };
+      return { stdout: JSON.stringify(tabs.map((t, i) => ({ n: i + 1, title: t.title, url: t.url, active: i + 1 === active }))) };
+    }
+    return undefined;
+  });
+  return { shell, tabs, scripts, active: () => active };
+}
+
+test("browser: new_tab opens a blank tab at the end and brings it forward, and checks it did", async () => {
+  const b = fakeBrowser("Google Chrome");
+  const tool = new BrowserTool(b.shell, async () => {}, noWait);
+  const prepared = await tool.prepare({ action: "new_tab" });
+  assert.equal(prepared.effect, "open_local", "a blank tab changes nothing and sends nothing away");
+  assert.deepEqual(prepared.scope, []);
+  assert.equal(prepared.summary, "Open a new tab in Google Chrome");
+  const done = await prepared.run();
+  assert.equal(b.tabs.length, 2, "one more tab than before");
+  assert.equal(b.active(), 2, "and it is the one in front");
+  assert.equal(done.verified, "browser");
+  assert.equal(done.message, "Google Chrome opened a new tab; it now has 2 tabs.");
+  assert.ok(b.scripts.some((src) => src.includes("w.tabs.push(app.Tab({}))") && src.includes("w.activeTabIndex = w.tabs.length")));
+});
+
+test("browser: new_tab at an address is judged like going there, and waits for the page", async () => {
+  const b = fakeBrowser("Safari");
+  const tool = new BrowserTool(b.shell, async () => {}, noWait);
+  const prepared = await tool.prepare({ action: "new_tab", url: "youtube.com" });
+  assert.equal(prepared.effect, "open_remote");
+  assert.deepEqual(prepared.scope, [{ value: "youtube.com", source: "named" }]);
+  assert.equal(prepared.summary, "Open youtube.com in a new tab in Safari");
+  const done = await prepared.run();
+  assert.equal(done.verified, "browser");
+  assert.equal(done.message, "Safari opened a new tab at youtube.com; it now has 2 tabs.");
+  const script = b.scripts.find((src) => src.includes("tabs.push"))!;
+  assert.match(script, /app\.Tab\(\{ url: "https:\/\/youtube\.com\/" \}\)/, "the address is passed as one quoted string");
+  assert.match(script, /w\.currentTab = w\.tabs\[w\.tabs\.length - 1\]/);
+  await assert.rejects(tool.prepare({ action: "new_tab", url: "not a web address" }), /not a web address/);
+});
+
+test("browser: with no window open, new_tab makes one; a browser that opens nothing is reported, not assumed", async () => {
+  const empty = fakeBrowser("Google Chrome", { windows: false });
+  const done = await (await new BrowserTool(empty.shell, async () => {}, noWait).prepare({ action: "new_tab" })).run();
+  assert.equal(empty.tabs.length, 1);
+  assert.equal(done.verified, "browser");
+  assert.ok(empty.scripts.some((src) => src.includes("app.Window().make()")));
+
+  const stuck = fakeBrowser("Google Chrome", { ignoreNewTab: true });
+  const prepared = await new BrowserTool(stuck.shell, async () => {}, noWait).prepare({ action: "new_tab" });
+  await assert.rejects(prepared.run(), (err: unknown) => err instanceof ActionProblem && err.status === "failed" && /did not open a new tab/.test(err.message));
+});

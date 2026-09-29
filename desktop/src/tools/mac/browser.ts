@@ -84,6 +84,44 @@ export class BrowserTool implements ActionTool {
           },
         };
       }
+      case "new_tab": {
+        // A blank tab changes nothing and sends nothing away; one at an
+        // address is judged like going to that address.
+        const given = typeof args.url === "string" && args.url.trim() ? args.url : null;
+        const url = given ? asWebAddress(given) : null;
+        if (given && !url) throw new ActionProblem("failed", "That is not a web address.");
+        const host = url ? url.hostname.replace(/^www\./, "") : null;
+        return {
+          tool: this.name,
+          action,
+          effect: url ? "open_remote" : "open_local",
+          summary: host ? `Open ${host} in a new tab in ${browser.app}` : `Open a new tab in ${browser.app}`,
+          scope: host ? [{ value: host, source: "named" }] : [],
+          run: async () => {
+            // With no window open there is nothing to count yet; the script makes one.
+            const before = await this.tabs(browser).then((tabs) => tabs.length, () => 0);
+            await this.script(browser, newTabScript(browser, url ? url.toString() : null));
+            let opened: Tab | undefined;
+            for (let i = 0; i < 20; i += 1) {
+              const tabs = await this.tabs(browser);
+              const active = tabs.find((t) => t.active);
+              // The new tab is there and in front: one more than before, and the last one.
+              if (!opened && tabs.length > before && active && active.n === tabs.length) opened = active;
+              if (opened && (!host || (active && hostOf(active.url) === host))) {
+                const on = host ? ` at ${host}` : "";
+                return {
+                  verified: "browser",
+                  message: `${browser.app} opened a new tab${on}; it now has ${tabs.length} tab${tabs.length === 1 ? "" : "s"}.`,
+                  detail: { url: active ? hostOf(active.url) : null, tabs: tabs.length },
+                };
+              }
+              await this.wait(250);
+            }
+            if (!opened) throw new ActionProblem("failed", `${browser.app} did not open a new tab.`);
+            return { verified: "screen", message: `${browser.app} opened a new tab for ${host}; the page has not arrived yet. Look at the screen.`, detail: { url: host } };
+          },
+        };
+      }
       case "go": {
         const url = asWebAddress(required(args, "url", "the address"));
         if (!url) throw new ActionProblem("failed", "That is not a web address.");
@@ -184,6 +222,26 @@ export class BrowserTool implements ActionTool {
       throw scriptProblem(err, browser.app);
     }
   }
+}
+
+/**
+ * Open a tab at the end of the front window and bring it forward. With no
+ * window open, a new window is made instead; its one tab is the new tab.
+ */
+function newTabScript(browser: { app: string; family: Family }, url: string | null): string {
+  const props = url ? `{ url: ${literal(url)} }` : "{}";
+  if (browser.family === "chromium") {
+    return [
+      `const app = Application(${literal(browser.app)});`,
+      `if (app.windows.length === 0) { app.Window().make();${url ? ` app.windows[0].activeTab.url = ${literal(url)};` : ""} }`,
+      `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); w.activeTabIndex = w.tabs.length; }`,
+    ].join(" ");
+  }
+  return [
+    `const app = Application("Safari");`,
+    `if (app.windows.length === 0) { app.Document().make();${url ? ` app.windows[0].currentTab.url = ${literal(url)};` : ""} }`,
+    `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); w.currentTab = w.tabs[w.tabs.length - 1]; }`,
+  ].join(" ");
 }
 
 function hostOf(url: string): string {
