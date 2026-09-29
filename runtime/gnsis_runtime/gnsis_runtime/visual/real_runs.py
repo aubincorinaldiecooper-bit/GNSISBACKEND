@@ -13,11 +13,13 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from ..contracts import now_ms
+from ..screen import LatestScreenFrameBuffer
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +217,42 @@ class RealRunCoordinator:
         self.recorder.record(record)
         return record
 
+
+
+def wait_for_post_action_frames(
+    screen_frames: LatestScreenFrameBuffer,
+    *,
+    before_frame_id: str,
+    timeout_ms: int = 1500,
+    min_frames: int = 1,
+    max_frames: int = 3,
+    poll_ms: int = 25,
+) -> tuple[str, ...]:
+    """Wait for frames newer than the frame used for the action.
+
+    This observes only the shared runtime history; it does not create another
+    capture path or screenshot archive.
+    """
+    if timeout_ms < 0 or min_frames < 0 or max_frames < 1:
+        raise ValueError("invalid post-action frame wait configuration")
+
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while True:
+        recent = screen_frames.recent_frames()
+        ordered = list(reversed(recent))
+        before_index = next(
+            (index for index, frame in enumerate(ordered) if frame.frame_id == before_frame_id),
+            None,
+        )
+        if before_index is not None:
+            newer = ordered[before_index + 1 :]
+            ids = tuple(frame.frame_id for frame in newer[-max_frames:])
+            if len(ids) >= min_frames:
+                return ids
+
+        if time.monotonic() >= deadline:
+            return ()
+        time.sleep(max(0.001, poll_ms / 1000.0))
 
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
