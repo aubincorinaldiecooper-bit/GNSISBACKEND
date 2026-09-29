@@ -99,6 +99,16 @@ def test_request_fails_closed_without_or_without_approved_authority():
         )
 
 
+def test_request_refuses_actions_outside_the_capability_manifest():
+    with pytest.raises(PermissionError):
+        build_action_request(
+            _step(authority=_authority(allowed_actions=("wait",))),
+            call_id="c",
+            frame=_frame(),
+            source_tab_id=7,
+        )
+
+
 def test_target_cleanup_is_off_unless_a_step_opts_in_and_is_capped_at_24px():
     plain = build_action_request(_step(), call_id="c", frame=_frame(), source_tab_id=7)
     assert "resolve_target" not in plain["decision"]
@@ -199,6 +209,24 @@ def test_a_browser_error_is_an_action_that_was_not_carried_out():
     assert "abstained" in report.execution.error
     assert report.candidates["raw+r24"].status == "abstained"
     assert report.acted_at_ms is None
+
+
+def test_unknown_bridge_outcome_is_not_misreported_as_not_carried_out():
+    request = build_action_request(_step(), call_id="call_1", frame=_frame(), source_tab_id=7)
+    report = report_from_bridge(
+        {
+            "type": "error",
+            "call_id": "call_1",
+            "message": "cancellation unconfirmed",
+            "outcome_unknown": True,
+        },
+        request=request,
+        frame_size=(640, 400),
+    )
+    assert report.execution.actuator_success is None
+    assert report.execution.error is None
+    assert report.metadata["outcome_unknown"] is True
+    assert report.metadata["bridge"]["error"] == "cancellation unconfirmed"
 
 
 def test_reports_fit_the_canonical_record():
