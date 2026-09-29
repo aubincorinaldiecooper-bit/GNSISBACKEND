@@ -201,14 +201,27 @@ test("the simulated host plays a whole conversation into the chat", async () => 
   configure(host, identityStore);
   enterDesktop(identity, false);
   actions.startLive("gnsis");
+  await sleep(5);
+  assert.equal(getState().live?.phase, "connecting", "a moment of connecting before the microphone is on");
   await sleep(450);
   const s = getState();
+  assert.equal(s.live?.phase, "listening");
   const turns = s.convs.gnsis.turns.slice(1); // after the greeting
   const agent = turns.filter((t) => t.role === "agent").map((t) => t.text);
   const user = turns.filter((t) => t.role === "user").map((t) => t.text);
+  const lines = turns.filter((t) => t.role === "system").map((t) => t.text);
   assert.equal(agent[0], "Hi! I’m here. What’s on your mind?");
   assert.ok(agent.some((t) => t.endsWith("—")), `an interrupted reply ends on a dash: ${agent}`);
-  assert.equal(user[0], "I’m meeting the roofer tomorrow, and I’m a little nervous about it.");
+  assert.equal(user[0], "Open YouTube and search for pasta recipes.");
+  // What GNSIS did lands as lines: the outcomes, and the step it asked about.
+  assert.deepEqual(lines, [
+    "Done: Google Chrome opened a new tab at youtube.com; it now has 2 tabs.",
+    "Done: Typed it. Look at the screen to check it went where it should.",
+    "Waiting for your OK: Press enter",
+    "Done: Pressed enter. Look at the screen to see what it did.",
+  ]);
+  assert.equal(s.asking, null);
+  assert.equal(s.working, null);
   assert.ok(turns.every((t) => t.role !== "user" || (t.spoken && t.spokenMs !== undefined)), "spoken turns carry their length");
   actions.endLive();
   assert.equal(getState().live, null);

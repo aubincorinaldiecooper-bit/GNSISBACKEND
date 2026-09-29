@@ -242,13 +242,10 @@ export function demoAgents(): Record<string, Conv> {
   };
 }
 
-export interface LiveSegment {
-  who: "agent" | "user";
-  a: number;
-  b: number;
-  cut?: number;
-  text: string;
-}
+export type LiveSegment =
+  | { who: "agent" | "user"; a: number; b: number; cut?: number; text: string }
+  /** Something GNSIS does on the computer, reported the way the real host reports it. */
+  | { who: "action"; a: number; state: "working" | "waiting" | "done" | "failed"; text: string };
 
 /**
  * A scripted live conversation, in tenths of a second, for the simulated host
@@ -264,11 +261,22 @@ export function liveScript(conv: Conv | null): LiveSegment[] {
       { who: "agent", a: 200, b: 250, text: "Sure, starting with the first part." },
     ];
   }
+  // A task in the person's own browser, worded the way the real host words
+  // it: what it does, what came of it, and the step it asks about first
+  // (pressing a key the person never said). Then a reply cut off by the person.
   return [
-    { who: "agent", a: 12, b: 52, text: "Hi! I’m here. What’s on your mind?" },
-    { who: "user", a: 58, b: 112, text: "I’m meeting the roofer tomorrow, and I’m a little nervous about it." },
-    { who: "agent", a: 118, b: 200, cut: 176, text: "That makes sense. Want me to walk you through the three questions from Roofer prep, one at a time?" },
-    { who: "user", a: 170, b: 194, text: "Yes, let’s do that." },
-    { who: "agent", a: 200, b: 292, text: "First one: ask what the price includes, and what could change once the old roof is off." },
+    { who: "agent", a: 12, b: 44, text: "Hi! I’m here. What’s on your mind?" },
+    { who: "user", a: 50, b: 92, text: "Open YouTube and search for pasta recipes." },
+    { who: "agent", a: 98, b: 124, text: "Sure, opening YouTube in Chrome." },
+    { who: "action", a: 126, state: "working", text: "Open youtube.com in a new tab in Google Chrome" },
+    { who: "action", a: 146, state: "done", text: "Google Chrome opened a new tab at youtube.com; it now has 2 tabs." },
+    { who: "action", a: 150, state: "working", text: "Type “pasta recipes” into the app in front" },
+    { who: "action", a: 166, state: "done", text: "Typed it. Look at the screen to check it went where it should." },
+    { who: "action", a: 170, state: "waiting", text: "Waiting for your OK: Press enter" },
+    { who: "action", a: 230, state: "working", text: "Press enter" },
+    { who: "action", a: 236, state: "done", text: "Pressed enter. Look at the screen to see what it did." },
+    { who: "agent", a: 242, b: 330, cut: 300, text: "Done. The pasta recipes are on screen. Want me to open the first one for you?" },
+    { who: "user", a: 294, b: 316, text: "No thanks, that’s all." },
+    { who: "agent", a: 322, b: 346, text: "Okay. I’m here if you need me." },
   ];
 }

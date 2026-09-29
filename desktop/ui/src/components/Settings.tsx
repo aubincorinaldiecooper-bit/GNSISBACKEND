@@ -93,7 +93,7 @@ export function Settings() {
               </>
             )}
             {section === "voice" && (
-              <Group>
+              <Group note={inert ? NOT_YET_NOTE : undefined}>
                 <Row title="Wake gesture" desc="Starts or ends live voice with whoever is in front, same as the voice button. There is no hardware gesture yet; ⌥Space stands in while GNSIS is focused."><span className="chip">⌥Space</span></Row>
                 <Row title="Microphone"><Select label="Microphone" options={["Built-in microphone", "External microphone"]} disabled={inert} /></Row>
                 {caps.transcript && <Row title="Send when I stop talking" desc="For dictation. Sends after a short pause.">{toggle("autosend", "Send when I stop talking")}</Row>}
@@ -102,21 +102,21 @@ export function Settings() {
               </Group>
             )}
             {section === "agents" && (
-              <Group>
+              <Group note={inert ? NOT_YET_NOTE : undefined}>
                 <Row title="Ask before sending emails or messages" desc="Agents show you an approval card first.">{toggle("approve", "Ask before sending emails or messages")}</Row>
                 <Row title="Let agents use a browser" desc="Needed for tasks like finding a recipe or filling out a form.">{toggle("browser", "Let agents use a browser")}</Row>
                 <Row title="Remove finished agents from the dock" desc="They stay in All agents."><Select label="Remove finished agents from the dock" options={["After 10 minutes", "After 1 hour", "After 1 day", "Never"]} disabled={inert} /></Row>
               </Group>
             )}
             {section === "notif" && (
-              <Group>
+              <Group note={inert ? NOT_YET_NOTE : undefined}>
                 <Row title="When a background agent finishes">{toggle("nFinish", "When a background agent finishes")}</Row>
                 <Row title="When an agent needs you">{toggle("nNeeds", "When an agent needs you")}</Row>
                 <Row title="Play a sound">{toggle("nSound", "Play a sound")}</Row>
               </Group>
             )}
             {section === "appear" && (
-              <Group>
+              <Group note={inert ? NOT_YET_NOTE : undefined}>
                 <Row title="Glass transparency"><input type="range" aria-label="Glass transparency" min={20} max={85} value={glass} disabled={inert} title={notYet} onChange={(e) => setGlass(Number(e.target.value))} /></Row>
                 <Row title="Dock position">
                   <div className="segmented" role="radiogroup" aria-label="Dock position">
@@ -155,8 +155,14 @@ export function Settings() {
   );
 }
 
-function Group({ title, children }: { title?: string; children: ReactNode }) {
-  return <div>{title && <div className="group-title">{title}</div>}<div className="card rows">{children}</div></div>;
+function Group({ title, note, children }: { title?: string; note?: string; children: ReactNode }) {
+  return (
+    <div>
+      {title && <div className="group-title">{title}</div>}
+      {note && <p className="muted small group-note">{note}</p>}
+      <div className="card rows">{children}</div>
+    </div>
+  );
 }
 function Label({ title, desc }: { title: string; desc?: string }) {
   return <span className="row-label"><strong>{title}</strong>{desc && <span className="muted small">{desc}</span>}</span>;
@@ -169,3 +175,5 @@ function Select({ label, options, disabled }: { label: string; options: string[]
 }
 
 const NOT_YET = "Not in this build yet";
+/** Said above a section whose greyed controls do nothing yet, so the grey is not left to be guessed at. */
+const NOT_YET_NOTE = "The greyed-out settings here aren’t working in this build yet.";

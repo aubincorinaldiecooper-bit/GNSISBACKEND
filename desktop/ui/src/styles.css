@@ -202,7 +202,9 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .approval-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 14px 14px; }
 
 /* ---------- agent panel ---------- */
-.panel { position: absolute; bottom: 32px; border-radius: 28px; display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.8); transition: left 360ms var(--spring); }
+.panel { position: absolute; bottom: 32px; border-radius: 28px; display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.8); animation: drawer-in 260ms var(--spring); }
+/* The Activity drawer comes in from the right; the chat beside it stays where it is. */
+@keyframes drawer-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
 .panel-head { height: 72px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 10px 0 20px; border-bottom: 1px solid var(--line); }
 .panel-who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
 .panel-names { display: flex; flex-direction: column; gap: 1px; }
@@ -291,6 +293,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .row-card h2 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
 .row-card p { margin: 0; }
 .group-title { font-size: 14px; font-weight: 600; color: var(--ink-2); margin: 4px 4px 8px; }
+.group-note { margin: 0 4px 10px; }
 .card.rows { padding: 0; gap: 0; }
 .row { min-height: 68px; display: flex; align-items: center; gap: 20px; padding: 12px 18px; border-top: 1px solid rgba(20, 24, 33, 0.07); }
 .rows > .row:first-child, .rows > .field-block:first-child { border-top: 0; }

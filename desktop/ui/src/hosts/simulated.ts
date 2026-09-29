@@ -35,12 +35,14 @@ export class SimulatedLiveHost implements LiveHost {
     return () => this.listeners.delete(listener);
   }
 
+  /** Like the real host: a moment of connecting before the microphone is on. */
   async startLive(): Promise<void> {
     this.clear();
     this.muted = false;
+    const connect = this.tenth * 14;
     this.emit({ type: "link", state: "ready" });
-    this.emit({ type: "mic", state: "on" });
-    for (const seg of this.script()) this.play(seg);
+    this.at(connect, () => this.emit({ type: "mic", state: "on" }));
+    for (const seg of this.script()) this.play(seg, connect);
   }
 
   async endLive(): Promise<void> {
@@ -72,13 +74,18 @@ export class SimulatedLiveHost implements LiveHost {
 
   async stopVision(): Promise<void> {}
 
-  private play(seg: LiveSegment) {
-    const start = seg.a * this.tenth;
-    const end = (seg.cut ?? seg.b) * this.tenth;
+  private play(seg: LiveSegment, offset = 0) {
+    if (seg.who === "action") {
+      const { state, text } = seg;
+      this.at(offset + seg.a * this.tenth, () => this.emit({ type: "action", state, text }));
+      return;
+    }
+    const start = offset + seg.a * this.tenth;
+    const end = offset + (seg.cut ?? seg.b) * this.tenth;
     const words = seg.text.split(" ");
     if (seg.who === "agent") {
       const pieces = Math.max(1, Math.ceil(words.length / 3));
-      const step = (seg.b * this.tenth - start) / pieces;
+      const step = (offset + seg.b * this.tenth - start) / pieces;
       this.at(start, () => this.emit({ type: "agent.speaking", speaking: true }));
       for (let i = 0; i < pieces; i++) {
         const when = start + i * step;
