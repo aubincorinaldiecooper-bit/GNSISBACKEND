@@ -87,14 +87,15 @@ export function Greeting({ left }: { left: number }) {
   );
 }
 
-export function Toast({ left }: { left: number }) {
+/** Beside the bar at `left`, or, with no `left`, just above the open chat it is placed in. */
+export function Toast({ left }: { left?: number }) {
   const s = useStore((x) => x);
   const toast = s.toast;
   if (!toast) return null;
   const c = s.convs[toast.id];
   if (!c) return null;
   return (
-    <div data-hit role="status" className="toast popover" style={{ left }}>
+    <div data-hit role="status" className={"toast popover" + (left === undefined ? " above-chat" : "")} style={left === undefined ? undefined : { left }}>
       {c.id === "gnsis" ? <Face name={s.identity?.publicId ?? "GNSIS"} gnsis size={32} /> : <AgentFace name={c.title} size={32} />}
       <span className="grow"><strong>{c.title}</strong><span className="muted ellipsis">{toast.text}</span></span>
       <button type="button" className="btn-dark" onClick={() => { const id = getState().toast?.id; if (id) actions.openAgent(id); setState({ toast: null }); }}>Open</button>

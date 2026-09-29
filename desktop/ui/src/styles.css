@@ -33,6 +33,16 @@ body.gnsis-backdrop {
     linear-gradient(165deg, #2c5ca6 0%, #5d91ce 42%, #a8c6e6 74%, #dde8f4 100%);
 }
 
+/*
+ * Floating over the real desktop. A see-through window cannot blur what is
+ * behind it, so the glass is made more solid to keep words readable over
+ * whatever is on screen.
+ */
+body.gnsis-overlay { --glass: rgba(255, 255, 255, 0.9); --glass-strong: rgba(255, 255, 255, 0.94); }
+body.gnsis-overlay .glass, body.gnsis-overlay .popover, body.gnsis-overlay .setup-card { -webkit-backdrop-filter: none; backdrop-filter: none; }
+body.gnsis-overlay .window, body.gnsis-overlay .panel, body.gnsis-overlay .settings { background: rgba(255, 255, 255, 0.93); }
+body.gnsis-overlay .setup-card { background: linear-gradient(160deg, rgba(234, 242, 253, 0.97) 0%, rgba(214, 231, 252, 0.95) 52%, rgba(242, 247, 254, 0.97) 100%); }
+
 .glass {
   background: var(--glass);
   -webkit-backdrop-filter: blur(30px) saturate(170%);
@@ -147,7 +157,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .waveform span { width: 3px; flex-shrink: 0; border-radius: 2px; background: var(--accent); transition: height 90ms linear; }
 
 /* ---------- chat window ---------- */
-.window { border-radius: 28px; display: flex; flex-direction: column; max-height: min(560px, calc(100vh - 162px)); overflow: hidden; background: rgba(255, 255, 255, 0.8); }
+/* The chat leaves room above it for a notice (74 px), so on short screens one never pushes off the top. */
+.window { border-radius: 28px; display: flex; flex-direction: column; max-height: min(560px, calc(100vh - 236px)); overflow: hidden; background: rgba(255, 255, 255, 0.8); animation: card-in 280ms var(--spring) both; }
 .tabs { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--line); }
 .tabs-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; overflow: hidden; }
 .tab.on { flex-shrink: 0; max-width: 240px; display: flex; align-items: center; border-radius: 14px; background: rgba(255, 255, 255, 0.75); }
@@ -230,7 +241,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .browser { flex-shrink: 0; border-radius: 18px; overflow: hidden; background: #fff; box-shadow: 0 12px 32px rgba(18, 32, 64, 0.18); }
 .browser-chrome { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: #eef1f5; }
 .browser-chrome .dot { width: 9px; height: 9px; border-radius: 50%; background: #cfd3db; }
-.browser-url { flex: 1; min-width: 0; height: 26px; padding: 0 10px; border-radius: 13px; background: #fff; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.browser-url { flex: 1; min-width: 0; height: 26px; padding: 0 10px; border-radius: 13px; background: #fff; display: flex; align-items: center; justify-content: safe center; gap: 6px; font-size: 12px; color: var(--ink-2); overflow: hidden; }
+.browser-url span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .browser-page { position: relative; padding: 22px 26px 26px; display: flex; flex-direction: column; gap: 10px; }
 .browser-page h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
 .browser-page h2 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
@@ -239,6 +251,31 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .loadbar { position: absolute; left: 0; top: 0; height: 3px; background: var(--accent); transition: width 120ms linear; }
 .agent-cursor { position: absolute; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3)); transition: left 700ms cubic-bezier(0.3, 0.7, 0.2, 1), top 700ms cubic-bezier(0.3, 0.7, 0.2, 1); }
 .caption { font-size: 17px; font-weight: 500; padding-left: 4px; }
+
+/* ---------- what GNSIS sees ---------- */
+.screen-card { gap: 10px; }
+.screen-card .card-title { margin-bottom: 0; }
+/* One fixed shape for every state, so nothing jumps when sharing starts or stops. */
+.screen-frame { position: relative; width: 100%; aspect-ratio: 16 / 10; flex-shrink: 0; border: 0; border-radius: 14px; overflow: hidden; padding: 0 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; font-size: 14.5px; line-height: 1.45; }
+.screen-frame.is-empty { background: rgba(20, 24, 33, 0.05); color: var(--ink-2); }
+.screen-frame.is-dark { background: #0b0d12; color: rgba(255, 255, 255, 0.78); }
+.screen-frame.is-live { padding: 0; background: #0b0d12; cursor: zoom-in; animation: fade-in 320ms var(--spring) both; }
+.screen-frame.is-live::after { content: ""; position: absolute; inset: 0; background: rgba(11, 13, 18, 0); transition: background-color 180ms; }
+.screen-frame.is-live:hover::after, .screen-frame.is-live:focus-visible::after { background: rgba(11, 13, 18, 0.2); }
+.screen-video { display: block; width: 100%; height: 100%; object-fit: contain; background: #0b0d12; }
+.screen-open { position: absolute; z-index: 1; left: 50%; top: 50%; height: 36px; padding: 0 16px; border-radius: 18px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 8px 24px rgba(46, 84, 230, 0.35); pointer-events: none; opacity: 0; transform: translate(-50%, -50%) scale(0.92); transition: opacity 180ms var(--spring), transform 180ms var(--spring); }
+.screen-frame.is-live:hover .screen-open, .screen-frame.is-live:focus-visible .screen-open { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.screen-spin { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; animation: spin 0.9s linear infinite; }
+.screen-foot { min-height: 40px; display: flex; align-items: center; gap: 10px; }
+.live-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(31, 164, 99, 0.18); }
+.btn-secondary.compact, .btn-dark.compact { height: 36px; padding: 0 14px; border-radius: 11px; font-size: 14px; gap: 6px; }
+.screen-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(11, 13, 18, 0.32); animation: fade-in 200ms var(--spring) both; }
+.screen-viewer { width: min(960px, 90vw); display: flex; flex-direction: column; border-radius: 22px; overflow: hidden; background: #0b0d12; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45); animation: viewer-in 280ms var(--spring) both; }
+.screen-bar { height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 18px; background: rgba(255, 255, 255, 0.96); }
+.screen-bar .grow { flex-direction: row; align-items: baseline; gap: 10px; }
+.screen-viewer .screen-video { height: auto; max-height: calc(100vh - 150px); }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes viewer-in { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
 
 /* ---------- pop-overs ---------- */
 .commands { padding: 8px; display: flex; flex-direction: column; border-radius: 26px; }
@@ -254,11 +291,13 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .greeting-tail { position: absolute; left: 33px; bottom: -7px; width: 14px; height: 14px; background: rgba(255, 255, 255, 0.94); transform: rotate(45deg); border-radius: 3px; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .toast { position: absolute; bottom: 114px; width: 380px; padding: 10px 8px 10px 14px; display: flex; align-items: center; gap: 12px; animation: rise 360ms var(--spring) both; }
+.toast.above-chat { left: auto; right: 0; bottom: calc(100% + 14px); }
 .toast strong { font-size: 14.5px; }
 .toast .btn-dark { height: 40px; padding: 0 16px; border-radius: 12px; }
 
 /* ---------- setup ---------- */
-.setup-stage { position: fixed; inset: 0; display: grid; place-items: center; }
+/* Scrolls on screens too short for the card, so its button is never out of reach. */
+.setup-stage { position: fixed; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 24px 0; }
 .setup-card { width: 600px; border-radius: 44px; padding: 64px 54px 56px; display: flex; flex-direction: column; align-items: stretch; text-align: center;
   background: linear-gradient(160deg, rgba(224, 236, 252, 0.9) 0%, rgba(201, 223, 250, 0.82) 52%, rgba(238, 244, 253, 0.92) 100%);
   -webkit-backdrop-filter: blur(30px) saturate(160%); backdrop-filter: blur(30px) saturate(160%);
@@ -281,7 +320,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 
 /* ---------- settings ---------- */
 .settings-scrim { position: fixed; inset: 0; display: grid; place-items: center; }
-.settings { width: 1000px; max-width: calc(100vw - 48px); height: 700px; max-height: calc(100vh - 48px); border-radius: 32px; display: grid; grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; background: rgba(255, 255, 255, 0.8); }
+.settings { animation: card-in 280ms var(--spring) both; width: 1000px; max-width: calc(100vw - 48px); height: 700px; max-height: calc(100vh - 48px); border-radius: 32px; display: grid; grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; background: rgba(255, 255, 255, 0.8); }
 .settings-nav { padding: 22px 16px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line); background: rgba(255, 255, 255, 0.3); }
 .settings-brand { display: flex; align-items: center; gap: 12px; padding: 4px 10px 18px; font-size: 20px; font-weight: 600; }
 .settings-nav button { height: 46px; padding: 0 14px; border: 0; border-radius: 12px; background: transparent; font-size: 15.5px; text-align: left; }
@@ -314,6 +353,18 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .segmented button.on { background: #fff; }
 input[type='range'] { width: 200px; accent-color: var(--accent); }
 
+/* ---------- small movements ---------- */
+@keyframes card-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } to { opacity: 1; transform: none; } }
+.dock-menu, .vision-menu, .commands { animation: pop-in 180ms var(--spring) both; transform-origin: bottom center; }
+.panel-menu { animation: pop-in 180ms var(--spring) both; transform-origin: top right; }
+.icon-btn, .btn-secondary, .btn-dark, .btn-accent, .btn-danger, .ghost-btn, .pill, .primary-btn, .voice-btn, .tab.off, .agent-row, .menu-item, .panel-menu button, .commands button, .settings-nav button {
+  transition: background-color 150ms, box-shadow 150ms, transform 140ms var(--spring);
+}
+.icon-btn:active, .btn-secondary:active, .btn-dark:active, .btn-accent:active, .btn-danger:active, .ghost-btn:active, .pill:active, .primary-btn:active, .voice-btn:active { transform: scale(0.96); }
+button:disabled:active { transform: none; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  button:active { transform: none !important; }
 }

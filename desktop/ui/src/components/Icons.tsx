@@ -48,3 +48,5 @@ export const Screen = (p: P) => <Icon {...p}><rect x="3" y="4" width="18" height
 export const Camera = (p: P) => <Icon {...p}><rect x="3" y="6" width="13" height="12" rx="3" /><path d="M16 10.5l5-3v9l-5-3" /></Icon>;
 export const Eye = (p: P) => <Icon {...p}><path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" /><circle cx="12" cy="12" r="3" /></Icon>;
 export const EyeOff = (p: P) => <Icon {...p}><path d="M3 3l18 18M10.6 5.9A10.5 10.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.6 2.5 12 2.5 12s3.5 6.5 9.5 6.5c1.6 0 3-.4 4.2-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /></Icon>;
+export const Expand = (p: P) => <Icon {...p}><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5" /></Icon>;
+export const Collapse = (p: P) => <Icon {...p}><path d="M4 14h6v6M20 10h-6V4M14 10l6.5-6.5M10 14l-6.5 6.5" /></Icon>;

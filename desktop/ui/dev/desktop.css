@@ -1,0 +1,21 @@
+/*
+ * Preview only: a stand-in for the real desktop behind the floating window,
+ * so the see-through cards can be reviewed in a browser. The Mac app draws
+ * none of this; there, your own desktop and apps are behind the cards.
+ */
+html.preview-desktop body {
+  background:
+    radial-gradient(1200px 700px at 12% 8%, #f6d7c3 0%, rgba(246, 215, 195, 0) 60%),
+    radial-gradient(1100px 800px at 92% 96%, #9fb6e8 0%, rgba(159, 182, 232, 0) 62%),
+    linear-gradient(160deg, #e8a98f 0%, #b98fb9 45%, #6f86c9 100%);
+}
+.preview-apps { position: fixed; inset: 0; pointer-events: none; font-family: -apple-system, system-ui, sans-serif; }
+.preview-app { position: absolute; border-radius: 12px; background: #fbfbfc; box-shadow: 0 22px 60px rgba(30, 20, 60, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.06); overflow: hidden; }
+.preview-app-bar { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 12px; background: #eceef2; font-size: 12px; color: #6a7080; }
+.preview-app-bar i { width: 11px; height: 11px; border-radius: 50%; background: #ff5f57; }
+.preview-app-bar i:nth-child(2) { background: #febc2e; }
+.preview-app-bar i:nth-child(3) { background: #28c840; margin-right: 10px; }
+.preview-app-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+.preview-app-body b { display: block; height: 10px; border-radius: 5px; background: #dfe2e8; }
+.preview-app-body h3 { margin: 0 0 4px; font-size: 18px; color: #2b2f38; }
+.preview-label { position: fixed; left: 16px; top: 12px; padding: 4px 10px; border-radius: 8px; background: rgba(20, 24, 33, 0.55); color: #fff; font: 500 12px -apple-system, system-ui, sans-serif; pointer-events: none; }

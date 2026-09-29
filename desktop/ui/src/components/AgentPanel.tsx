@@ -4,6 +4,7 @@ import { actions, isWorking, presence, setState, useStore, type State } from "..
 import { AgentFace, Face, ThinkingDots } from "../lib/face";
 import { copyText } from "../lib/platform";
 import { rankedAgents } from "./Shell";
+import { ScreenCard } from "./ScreenView";
 import * as I from "./Icons";
 
 export function AgentPanel({ left, width, height }: { left: number; width: number; height: number }) {
@@ -31,6 +32,7 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
         <button type="button" className="icon-btn" aria-label="Hide panel" onClick={() => setState({ panelHidden: true, menuOpen: false })}><I.Close /></button>
       </header>
       <div className="panel-body">
+        {home && (s.caps.screen || s.caps.camera) && <ScreenCard />}
         {c.panel === "browser" && <BrowserCard c={c} />}
         {c.panel === "list" && c.list && <ListCard c={c} />}
         {c.panel === "email" && <EmailCard c={c} />}
@@ -58,7 +60,7 @@ function BrowserCard({ c }: { c: Conv }) {
       <div className="browser">
         <div className="browser-chrome">
           <span className="dot" /><span className="dot" /><span className="dot" />
-          <div className="browser-url"><I.Lock size={12} /> recipes.example/cacio-e-pepe</div>
+          <div className="browser-url"><I.Lock size={12} /><span>recipes.example/cacio-e-pepe</span></div>
           <span style={{ width: 47 }} />
         </div>
         <div className="browser-page">

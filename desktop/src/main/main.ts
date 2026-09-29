@@ -43,6 +43,7 @@ import { OpenTool } from "../tools/mac/open.js";
 import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
+import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -254,30 +255,82 @@ function lowerFirst(text: string): string {
   return text ? text[0].toLowerCase() + text.slice(1) : text;
 }
 
+/**
+ * How GNSIS appears. On macOS it floats: one see-through window over the
+ * whole screen, kept above other windows, where only GNSIS's own cards take
+ * clicks and everything else falls through to the apps underneath. There is
+ * no backdrop of its own. GNSIS_WINDOW=standard puts it back in an ordinary
+ * window with a drawn backdrop, which is also the choice on other systems.
+ */
+const OVERLAY = (process.env.GNSIS_WINDOW ?? (process.platform === "darwin" ? "overlay" : "standard")) === "overlay";
+let clickThrough: ClickThrough | null = null;
+/**
+ * How large GNSIS draws itself; 1 is the size it was designed at. 0.9 keeps
+ * the cards from crowding a laptop screen. GNSIS_SCALE (0.6 to 1.25) tries
+ * another size without a rebuild.
+ */
+const UI_SCALE = (() => {
+  const asked = Number(process.env.GNSIS_SCALE);
+  return Number.isFinite(asked) && asked >= 0.6 && asked <= 1.25 ? asked : 0.9;
+})();
+
 function createWindow(): void {
-  // The product UI keeps room for the Activity drawer beside the chat; at
-  // 1100 px the chat narrows a little to keep that room, so that is the floor.
-  win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1100,
-    minHeight: 700,
-    title: "GNSIS",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
-      contextIsolation: true,
-      sandbox: false,
-      nodeIntegration: false,
-    },
-  });
+  const webPreferences = {
+    preload: path.join(__dirname, "preload.mjs"),
+    contextIsolation: true,
+    sandbox: false,
+    nodeIntegration: false,
+    zoomFactor: UI_SCALE,
+    // The page learns from its preload whether it floats, before it first draws.
+    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`],
+  };
+  if (OVERLAY) {
+    win = new BrowserWindow({
+      ...displays.getPrimaryDisplay().workArea,
+      title: "GNSIS",
+      transparent: true,
+      backgroundColor: "#00000000",
+      frame: false,
+      hasShadow: false,
+      resizable: false,
+      movable: false,
+      maximizable: false,
+      fullscreenable: false,
+      webPreferences,
+    });
+    // Above ordinary windows, so clicking an app underneath does not bury GNSIS.
+    win.setAlwaysOnTop(true, "floating");
+    clickThrough = new ClickThrough(win, () => displays.getCursorScreenPoint());
+    clickThrough.start();
+  } else {
+    // The product UI keeps room for the Activity drawer beside the chat; at
+    // 1100 px the chat narrows a little to keep that room, so that is the floor.
+    win = new BrowserWindow({
+      width: 1440,
+      height: 900,
+      minWidth: 1100,
+      minHeight: 700,
+      title: "GNSIS",
+      webPreferences,
+    });
+  }
+  hostLog("host", `window: ${OVERLAY ? "floating over the desktop" : "ordinary window"} at ${Math.round(UI_SCALE * 100)}%`);
   // GNSIS_DEMO=1 fills the dock with the sample agents so every state of the
   // interface can be reviewed in the packaged app, where there is no URL to
   // add ?demo to.
   const query = process.env.GNSIS_DEMO ? { demo: "1" } : undefined;
   win.loadFile(path.join(__dirname, "../renderer/index.html"), query ? { query } : undefined);
   win.on("closed", () => {
+    clickThrough?.stop();
+    clickThrough = null;
     win = null;
   });
+}
+
+/** The floating window follows the screen it covers when displays change. */
+function fitOverlay(): void {
+  if (!OVERLAY || !win || win.isDestroyed()) return;
+  win.setBounds(displays.getPrimaryDisplay().workArea);
 }
 
 // One HostSession per machine: a second GNSIS.app instance would open a
@@ -405,6 +458,21 @@ app.whenReady().then(async () => {
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
     }
   });
+  // Where the floating window's cards are, so clicks elsewhere fall through.
+  let reported = false;
+  ipcMain.on("hit:rects", (_e, rects: unknown) => {
+    if (!clickThrough) return;
+    clickThrough.setRects(rects);
+    // Once: proof the page is telling main where its cards are. Without it,
+    // every click would fall through and GNSIS could not be used.
+    const cards = hitRectsFrom(rects).length;
+    if (reported || cards === 0) return;
+    reported = true;
+    hostLog("host", `floating window: the page reported ${cards} card(s) that take clicks`);
+  });
+  displays.on("display-metrics-changed", fitOverlay);
+  displays.on("display-added", fitOverlay);
+  displays.on("display-removed", fitOverlay);
   ipcMain.on("host:log", (_e, line) => {
     if (typeof line === "string") hostLog("renderer", line);
   });

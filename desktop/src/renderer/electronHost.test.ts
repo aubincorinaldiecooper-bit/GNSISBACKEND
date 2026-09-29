@@ -488,3 +488,13 @@ test("unmute, End and Talk again in quick succession: the new call keeps its mic
   const lastMic = events.filter((e) => e.type === "mic").at(-1) as { state: string } | undefined;
   assert.equal(lastMic?.state, "on");
 });
+
+test("the screen view gets exactly the picture being shared, and nothing once sharing stops", async () => {
+  const { devices, host } = harness();
+  assert.equal(host.visionStream(), null, "nothing shared, nothing to show");
+  const picture = { id: "shared" } as unknown as MediaStream;
+  (devices.vision as { stream?: MediaStream | null }).stream = picture;
+  assert.equal(host.visionStream(), picture);
+  (devices.vision as { stream?: MediaStream | null }).stream = null;
+  assert.equal(host.visionStream(), null);
+});

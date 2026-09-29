@@ -101,6 +101,12 @@ export interface LiveHost {
   startVision(source: VisionSource): Promise<void>;
   stopVision(): Promise<void>;
   /**
+   * The picture the host is sharing with GNSIS right now, so the person can
+   * see it too; null when nothing is shared. Hosts that cannot show it leave
+   * it out, and the UI then shows no picture rather than a made-up one.
+   */
+  visionStream?(): MediaStream | null;
+  /**
    * For an overlay host: where the interactive surfaces are, in window
    * pixels, so clicks anywhere else can fall through to the desktop.
    */

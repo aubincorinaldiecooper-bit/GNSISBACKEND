@@ -19,6 +19,10 @@ export interface LinkState {
 }
 
 export interface GnsisBridge {
+  /** GNSIS floats over the desktop in a see-through window. Missing means an ordinary window. */
+  readonly overlay?: boolean;
+  /** Where the page's cards are, in page pixels, so clicks elsewhere fall through. */
+  reportHitRects?(rects: Array<[number, number, number, number]>): void;
   mediaPermissions(): Promise<Record<string, unknown>>;
   requestPermission(kind: string): Promise<string>;
   sendControl(control: unknown): void;

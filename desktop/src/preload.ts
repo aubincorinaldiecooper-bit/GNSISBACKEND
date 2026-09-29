@@ -6,6 +6,10 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { ScreenFrameMetadata } from "./shared/protocol.js";
 
 contextBridge.exposeInMainWorld("gnsis", {
+  /** GNSIS floats over the desktop in a see-through window (set by main at launch). */
+  overlay: process.argv.includes("--gnsis-overlay=1"),
+  /** Where the page's cards are, so the floating window lets clicks elsewhere through. */
+  reportHitRects: (rects: unknown) => ipcRenderer.send("hit:rects", rects),
   mediaPermissions: () => ipcRenderer.invoke("media:permissions"),
   requestPermission: (kind: string) => ipcRenderer.invoke("media:request", kind),
   sendControl: (control: unknown) => ipcRenderer.send("duplex:control", control),

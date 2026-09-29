@@ -190,6 +190,8 @@ export class Vision {
   private channel: ScreenChannelConfig | null = null;
   private readonly capture = new CaptureManager();
   private source: "screen" | "camera" | null = null;
+  /** The capture being shared right now, for the person's own view of it. */
+  private live: MediaStream | null = null;
   /** The daemon accepted a frame from the current source. */
   onAccepted?: (source: "screen" | "camera") => void;
   /** The OS ended the capture (the user stopped sharing, unplugged the camera). */
@@ -206,6 +208,11 @@ export class Vision {
 
   get current(): "screen" | "camera" | null {
     return this.capture.active ? this.source : null;
+  }
+
+  /** The picture being shared, so the person can see what GNSIS is sent; null when nothing is. */
+  get stream(): MediaStream | null {
+    return this.capture.active ? this.live : null;
   }
 
   applyChannel(channel: ScreenChannelConfig): void {
@@ -253,6 +260,7 @@ export class Vision {
       let statsTimer: ReturnType<typeof setInterval> | null = null;
       const stop = () => {
         stopped = true;
+        if (this.live === stream) this.live = null;
         if (captureTimer) clearInterval(captureTimer);
         captureTimer = null;
         if (statsTimer) clearInterval(statsTimer);
@@ -267,6 +275,7 @@ export class Vision {
         }
       };
       const sessionHandle = { stop };
+      this.live = stream;
       // OS-ended capture is a real capture-ending event; a stale onended after
       // a switch must not tear down the newer session.
       track.onended = () => {

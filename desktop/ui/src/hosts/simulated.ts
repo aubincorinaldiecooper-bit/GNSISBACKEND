@@ -20,11 +20,11 @@ export class SimulatedLiveHost implements LiveHost {
   private readonly tenth: number;
 
   /**
-   * `text`, `transcript`, `screen`, `camera`: what it claims it can do. The
+   * `text`, `transcript`, `screen`, `camera`, `overlay`: what it claims it can do. The
    * defaults suit design review; the preview's `?mac` claims what the Mac
    * app can do today, so the screens show what a person there would see.
    */
-  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; tenthMs?: number } = {}) {
+  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; overlay?: boolean; tenthMs?: number } = {}) {
     this.script = opts.script ?? (() => liveScript(null));
     this.tenth = opts.tenthMs ?? 100;
     this.caps = {
@@ -33,7 +33,7 @@ export class SimulatedLiveHost implements LiveHost {
       screen: opts.screen ?? false,
       camera: opts.camera ?? false,
       transcript: opts.transcript ?? true,
-      overlay: false,
+      overlay: opts.overlay ?? false,
     };
   }
 
@@ -80,11 +80,48 @@ export class SimulatedLiveHost implements LiveHost {
     );
   }
 
-  async startVision(_source: VisionSource): Promise<void> {
-    throw new Error("The simulated host has no visual sense.");
+  /**
+   * There is no screen to share here, so it shares a drawn picture that says,
+   * in large type, that it is simulated: enough to review the screen view in
+   * a browser, never mistakable for a person's real screen.
+   */
+  async startVision(source: VisionSource): Promise<void> {
+    if (typeof document === "undefined") throw new Error("The simulated host has no visual sense here.");
+    this.stopPicture();
+    this.emit({ type: "vision", source, state: "starting" });
+    const canvas = document.createElement("canvas");
+    canvas.width = 1280;
+    canvas.height = 800;
+    const g = canvas.getContext("2d")!;
+    let frame = 0;
+    const draw = () => drawSimulatedScreen(g, canvas.width, canvas.height, source, frame++);
+    draw();
+    this.pictureTimer = setInterval(draw, 100);
+    this.picture = canvas.captureStream(10);
+    this.pictureOn = setTimeout(() => this.emit({ type: "vision", source, state: "on" }), this.tenth * 12);
   }
 
-  async stopVision(): Promise<void> {}
+  visionStream(): MediaStream | null {
+    return this.picture;
+  }
+
+  async stopVision(): Promise<void> {
+    const was = this.picture !== null;
+    this.stopPicture();
+    if (was) this.emit({ type: "vision", source: null, state: "off" });
+  }
+
+  private picture: MediaStream | null = null;
+  private pictureTimer: ReturnType<typeof setInterval> | null = null;
+  private pictureOn: ReturnType<typeof setTimeout> | null = null;
+
+  private stopPicture() {
+    if (this.pictureTimer) clearInterval(this.pictureTimer);
+    if (this.pictureOn) clearTimeout(this.pictureOn);
+    this.pictureTimer = this.pictureOn = null;
+    for (const t of this.picture?.getTracks() ?? []) t.stop();
+    this.picture = null;
+  }
 
   private play(seg: LiveSegment, offset = 0) {
     if (seg.who === "action") {
@@ -149,4 +186,53 @@ export class SimulatedLiveHost implements LiveHost {
   private emit(e: LiveEvent) {
     for (const l of this.listeners) l(e);
   }
+}
+
+/** A plain stand-in desktop with a label no one could take for the real thing. */
+function drawSimulatedScreen(g: CanvasRenderingContext2D, w: number, h: number, source: VisionSource, frame: number) {
+  const sky = g.createLinearGradient(0, 0, w, h);
+  sky.addColorStop(0, "#3b4a6b");
+  sky.addColorStop(1, "#8a6f8f");
+  g.fillStyle = sky;
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = "rgba(20,24,33,0.55)";
+  g.fillRect(0, 0, w, 28);
+  const win = (x: number, y: number, ww: number, hh: number) => {
+    g.fillStyle = "rgba(255,255,255,0.92)";
+    g.beginPath();
+    g.roundRect(x, y, ww, hh, 14);
+    g.fill();
+    g.fillStyle = "rgba(20,24,33,0.08)";
+    g.fillRect(x, y + 36, ww, 1);
+    ["#ff5f57", "#febc2e", "#28c840"].forEach((c, i) => {
+      g.fillStyle = c;
+      g.beginPath();
+      g.arc(x + 20 + i * 20, y + 18, 6, 0, Math.PI * 2);
+      g.fill();
+    });
+  };
+  win(90, 90, 640, 420);
+  win(560, 260, 620, 440);
+  g.fillStyle = "#141821";
+  g.textAlign = "center";
+  g.font = "700 64px system-ui, sans-serif";
+  g.fillText(`Simulated ${source}`, w / 2, h / 2 + 10);
+  g.font = "400 30px system-ui, sans-serif";
+  g.fillStyle = "rgba(20,24,33,0.7)";
+  g.fillText(`In the Mac app, your real ${source} appears here.`, w / 2, h / 2 + 60);
+  // A cursor that drifts, so the picture visibly moves like a live one.
+  const t = frame / 20;
+  const cx = w / 2 + Math.cos(t) * 260;
+  const cy = h / 2 + 150 + Math.sin(t * 1.3) * 60;
+  g.fillStyle = "#141821";
+  g.strokeStyle = "#ffffff";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(cx, cy);
+  g.lineTo(cx + 22, cy + 11);
+  g.lineTo(cx + 12, cy + 14);
+  g.lineTo(cx + 7, cy + 24);
+  g.closePath();
+  g.fill();
+  g.stroke();
 }

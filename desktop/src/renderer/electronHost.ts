@@ -39,6 +39,8 @@ export interface PlaybackLike {
 export interface VisionLike {
   readonly active: boolean;
   readonly current: VisionSource | null;
+  /** The picture being shared, for the person's own view of it. */
+  readonly stream?: MediaStream | null;
   onAccepted?: (source: VisionSource) => void;
   onEnded?: () => void;
   applyChannel(channel: ScreenChannelConfig): void;
@@ -199,8 +201,12 @@ export class ElectronLiveHost implements LiveHost {
     // text: only when the connected runtime says it answers typed turns —
     // a typed turn it merely records would look like Enter doing nothing.
     // transcript: the runtime sends no speech-to-text of the person back.
-    // overlay: an ordinary window for now.
-    return { voice: true, text: this.typedTurns, screen: true, camera: true, transcript: false, overlay: false };
+    // overlay: whether main opened the see-through window over the desktop.
+    return { voice: true, text: this.typedTurns, screen: true, camera: true, transcript: false, overlay: this.bridge.overlay === true };
+  }
+
+  reportHitRects(rects: Array<[number, number, number, number]>): void {
+    this.bridge.reportHitRects?.(rects);
   }
 
   async sendText(text: string): Promise<void> {
@@ -355,6 +361,10 @@ export class ElectronLiveHost implements LiveHost {
       this.emit({ type: "vision", source, state: denied ? "denied" : "error", detail });
       throw new Error(detail);
     }
+  }
+
+  visionStream(): MediaStream | null {
+    return this.devices.vision.stream ?? null;
   }
 
   async stopVision(): Promise<void> {
