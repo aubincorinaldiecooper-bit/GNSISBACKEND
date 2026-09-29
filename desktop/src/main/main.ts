@@ -21,6 +21,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
+import { reasonForLog } from "../host/actionPolicy.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
@@ -216,7 +217,7 @@ async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<
   const previous = request.typesIntoFrontApp ? await frontAppName() : null;
   // The summary can quote what is typed, or name a file or site: it is shown
   // to the person, not written to the log; the broker has logged the call.
-  hostLog("execution", `call ${request.callId}: asking the person (${request.reason})`);
+  hostLog("execution", `call ${request.callId}: asking the person (${reasonForLog(request.reason)})`);
   app.focus({ steal: true });
   const options = {
     type: "question" as const,

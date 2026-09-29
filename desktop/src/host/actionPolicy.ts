@@ -46,6 +46,15 @@ export interface PolicyVerdict {
   turnId: string | null;
 }
 
+/**
+ * A reason as the host log keeps it: anything quoted (a button's label, a
+ * file's name) becomes “…”. The person sees the full reason; the log, which
+ * is shared after a test run, keeps only its shape.
+ */
+export function reasonForLog(reason: string): string {
+  return reason.replace(/“[^”]*”/g, "“…”");
+}
+
 /** How long after the person stops speaking their words still cover an action. */
 export const TURN_FRESH_MS = 90_000;
 

@@ -464,3 +464,27 @@ test("what GNSIS does on the computer reaches the UI as it happens, without its 
   assert.ok(bridge.logs.includes("action c1 working") && bridge.logs.includes("action c1 done"));
   assert.ok(!bridge.logs.some((l) => l.includes("youtube")));
 });
+
+test("unmute, End and Talk again in quick succession: the new call keeps its microphone", async () => {
+  const opts: { micGate?: Promise<void> } = {};
+  const { devices, events, host } = harness(opts);
+  await tick();
+  await host.startLive();
+  await host.setMuted(true);
+  let open!: () => void;
+  opts.micGate = new Promise<void>((resolve) => (open = resolve));
+  const unmute = host.setMuted(false);
+  await tick();
+  await host.endLive();
+  // The voice button again, while the unmute is still opening the microphone.
+  const again = host.startLive();
+  await tick();
+  assert.equal(devices.calls.filter((c) => c === "mic.start").length, 2, "the new call waits: it has not opened the microphone yet");
+  open();
+  await unmute;
+  await again;
+  assert.equal(devices.micActive, true, "the new call is capturing");
+  assert.equal(devices.calls.at(-1), "mic.start", "nothing released it after it opened");
+  const lastMic = events.filter((e) => e.type === "mic").at(-1) as { state: string } | undefined;
+  assert.equal(lastMic?.state, "on");
+});

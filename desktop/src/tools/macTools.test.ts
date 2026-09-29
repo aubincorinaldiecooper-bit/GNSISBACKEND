@@ -17,12 +17,15 @@ import { classifyScriptError, type Shell, type ShellResult } from "./mac/shell.j
 
 type Handler = (file: string, args: string[]) => Partial<ShellResult> | undefined;
 
-function fakeShell(handler: Handler): Shell & { calls: Array<[string, string[]]> } {
+function fakeShell(handler: Handler): Shell & { calls: Array<[string, string[]]>; timeouts: Array<number | undefined> } {
   const calls: Array<[string, string[]]> = [];
+  const timeouts: Array<number | undefined> = [];
   return {
     calls,
-    async run(file, args) {
+    timeouts,
+    async run(file, args, opts) {
       calls.push([file, args]);
+      timeouts.push(opts?.timeoutMs);
       const result = handler(file, args) ?? {};
       return { code: 0, stdout: "", stderr: "", ...result };
     },
@@ -251,6 +254,11 @@ test("browser: a new tab that could not be checked is said so, never reported as
   assert.equal(b.tabs.length, 2, "the tab was opened");
   assert.equal(done.verified, "screen");
   assert.match(done.message, /could not be checked/);
+  // A browser that stops answering cannot hold the action open: the check
+  // gives up after two failed reads, and each read is given 2 seconds.
+  const reads = b.shell.calls.map(([, args], i) => ({ src: args[args.length - 1] ?? "", t: b.shell.timeouts[i] })).filter((c) => c.src.includes("JSON.stringify(w.tabs()"));
+  assert.equal(reads.length, 3, "one read before, two failed reads after");
+  assert.deepEqual(reads.slice(1).map((r) => r.t), [2000, 2000]);
 });
 
 test("browser: every action the shared catalog offers is one the tool can do", async () => {

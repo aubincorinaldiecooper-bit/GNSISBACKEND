@@ -86,3 +86,19 @@ test("transport reconnect does not stop or reacquire the capture source", async 
   assert.equal(screen.stops(), 0);
   assert.equal(acquisitions, 1);
 });
+
+test("a stop while the next capture is still being acquired calls it off", async () => {
+  const mgr = new CaptureManager();
+  let release!: () => void;
+  const stopped: string[] = [];
+  const pending = mgr.switchTo(async () => {
+    await new Promise<void>((r) => (release = r));
+    return { stop: () => stopped.push("screen") };
+  });
+  // The person is still in the picker when sharing is turned off.
+  mgr.stop();
+  release();
+  await pending;
+  assert.equal(mgr.active, false, "nothing is left capturing");
+  assert.deepEqual(stopped, ["screen"], "what the picker handed over is released at once");
+});

@@ -16,6 +16,10 @@ import { scriptProblem } from "./finder.js";
 import { jxa, literal, type Shell } from "./shell.js";
 
 type Family = "chromium" | "safari";
+/** How long new_tab checks for its tab, and how long one read of the tabs may take while it does. */
+const CHECK_FOR_MS = 8_000;
+const READ_MS = 2_000;
+
 /** The browser an action works in, and whether the person has it in front. */
 type Browser = { app: string; family: Family; inFront: boolean };
 const BROWSERS: Array<{ app: string; family: Family }> = [
@@ -113,10 +117,15 @@ export class BrowserTool implements ActionTool {
             await this.script(browser, newTabScript(browser, url ? url.toString() : null));
             // From here the tab may well exist: a read that fails is "not
             // checked", never "not done" — a retry would open a second one.
+            // The check is short, and so is each read, so a browser that stops
+            // answering cannot hold the action open past the runtime's wait.
             let checked = false;
+            let failed = 0;
             let count = before;
-            for (let i = 0; i < 20; i += 1) {
-              const tabs = await this.tabs(browser).catch(() => null);
+            const until = Date.now() + CHECK_FOR_MS;
+            for (let i = 0; i < 20 && Date.now() < until && failed < 2; i += 1) {
+              const tabs = await this.tabs(browser, READ_MS).catch(() => null);
+              if (!tabs) failed += 1;
               if (tabs) {
                 checked = true;
                 count = tabs.length;
@@ -218,12 +227,12 @@ export class BrowserTool implements ActionTool {
     return match ? match[1] : null;
   }
 
-  async tabs(browser: { app: string; family: Family }): Promise<Tab[]> {
+  async tabs(browser: { app: string; family: Family }, timeoutMs?: number): Promise<Tab[]> {
     const source =
       browser.family === "chromium"
         ? `const w = Application(${literal(browser.app)}).windows[0]; const a = w.activeTabIndex(); JSON.stringify(w.tabs().map((t, i) => ({ n: i + 1, title: t.title(), url: t.url(), active: i + 1 === a })))`
         : `const w = Application("Safari").windows[0]; const c = w.currentTab().index(); JSON.stringify(w.tabs().map((t, i) => ({ n: i + 1, title: t.name(), url: t.url() || "", active: i + 1 === c })))`;
-    const out = await this.script(browser, source);
+    const out = await this.script(browser, source, timeoutMs);
     try {
       const tabs = JSON.parse(out) as Tab[];
       return Array.isArray(tabs) ? tabs : [];
@@ -232,9 +241,9 @@ export class BrowserTool implements ActionTool {
     }
   }
 
-  private async script(browser: { app: string }, source: string): Promise<string> {
+  private async script(browser: { app: string }, source: string, timeoutMs?: number): Promise<string> {
     try {
-      return await jxa(this.shell, source, browser.app);
+      return await jxa(this.shell, source, browser.app, timeoutMs);
     } catch (err) {
       throw scriptProblem(err, browser.app);
     }

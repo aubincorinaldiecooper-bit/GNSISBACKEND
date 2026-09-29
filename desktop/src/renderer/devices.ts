@@ -327,10 +327,11 @@ export class Vision {
     });
   }
 
+  /** Stop sharing — including a share still waiting on the picker or a permission prompt. */
   stop(): void {
-    if (!this.capture.active) return;
+    const was = this.capture.active;
     this.capture.stop();
-    this.log(`${this.source ?? "capture"} off`);
+    if (was) this.log(`${this.source ?? "capture"} off`);
     this.source = null;
   }
 }

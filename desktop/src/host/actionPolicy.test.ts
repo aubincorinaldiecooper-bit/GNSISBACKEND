@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { judge, saidIn, TURN_FRESH_MS, type TrustedTurn } from "./actionPolicy.js";
+import { judge, reasonForLog, saidIn, TURN_FRESH_MS, type TrustedTurn } from "./actionPolicy.js";
 import type { PreparedAction } from "../tools/actions.js";
 
 const NOW = 1_800_000_000_000;
@@ -89,4 +89,10 @@ test("a name has to be the person's words, not a piece of them", () => {
   // An injected address to one of those hosts is asked about, not run.
   const injected = action({ effect: "open_remote", scope: [{ value: "ubeand.com", source: "named" }] });
   assert.equal(judge(injected, said(words), NOW).decision, "confirm");
+});
+
+test("a reason goes into the log without the words it quotes", () => {
+  const reason = "always asked: clicking “Send $2,000 to Andrew Smith” may send, buy, delete or commit something";
+  assert.equal(reasonForLog(reason), "always asked: clicking “…” may send, buy, delete or commit something");
+  assert.equal(reasonForLog("asked for in the person's own words"), "asked for in the person's own words");
 });

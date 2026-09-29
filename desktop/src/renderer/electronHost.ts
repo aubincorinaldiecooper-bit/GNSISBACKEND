@@ -322,16 +322,20 @@ export class ElectronLiveHost implements LiveHost {
       return;
     }
     if (!this.live) return;
+    // Muted again, or ended, while the microphone was opening: the stop that
+    // came then had nothing to release yet, so it is released as soon as it
+    // opens. The whole of that joins `settling`, so a new live start waits
+    // for it before opening the microphone itself — and is never the one
+    // released by it.
+    const opened = this.devices.mic.start().then(() => {
+      if (!this.muted && this.live) return true;
+      this.devices.mic.stop();
+      this.log("unmute abandoned: muted or ended while the microphone opened");
+      return false;
+    });
+    this.settling = this.settling.then(() => opened.then(() => {}, () => {}));
     try {
-      await this.devices.mic.start();
-      // Muted again, or ended, while the microphone was opening: the stop
-      // that came then had nothing to release yet, so release it now.
-      if (this.muted || !this.live) {
-        this.devices.mic.stop();
-        this.log("unmute abandoned: muted or ended while the microphone opened");
-        return;
-      }
-      this.log("unmuted");
+      if (await opened) this.log("unmuted");
     } catch (e) {
       const detail = micProblem(e);
       this.emit({ type: "mic", state: isDenied(e) ? "denied" : "error", detail });

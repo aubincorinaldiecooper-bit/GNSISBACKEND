@@ -4,7 +4,7 @@ import { SimulatedLiveHost } from "../hosts/simulated";
 import type { Identity, IdentityStore, LiveEvent, LiveHost } from "../host";
 import { dockGeometry, rankedAgents } from "../components/Shell";
 import {
-  CLOSED_BEFORE_ANSWER, NO_ANSWER_YET, REPLY_TIMEOUT_MS, TYPING_LINK_DOWN, TYPING_WHILE_CONNECTING, TYPING_WHILE_LIVE,
+  CLOSED_BEFORE_ANSWER, NO_ANSWER_YET, REPLY_TIMEOUT_MS, TYPING_LINK_DOWN, TYPING_WHILE_CONNECTING, TYPING_WHILE_LIVE, TYPING_WHILE_MUTED,
   actions, activity, configure, enterDesktop, eraseIdentity, filteredCommands, getState, presence, resetStore, setState, tick,
 } from "./store";
 import { TYPING_NOT_CONNECTED } from "../demo/data";
@@ -561,12 +561,75 @@ test("screen sharing that never gets a picture is stopped, and the reason shows 
   configure(host, identityStore);
   enterDesktop(identity, false);
   actions.openAgent("gnsis");
+  // The person takes 25 seconds in the system picker: that time does not count.
+  let picked!: () => void;
+  host.startVision = async (source) => { host.calls.push(`startVision:${source}`); await new Promise<void>((r) => (picked = r)); };
   actions.setVision("screen");
+  t.mock.timers.tick(25_000);
+  await Promise.resolve();
+  assert.ok(!host.calls.includes("stopVision"), "nothing is stopped while the picker is still open");
+  assert.equal(getState().vision.state, "starting");
+  picked();
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
+  // Sharing has begun; now no picture arrives for 20 seconds.
   t.mock.timers.tick(20_000);
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
   const s = getState();
   assert.ok(host.calls.includes("stopVision"), "the capture is stopped, not left running behind an error");
   assert.equal(s.vision.state, "error");
   assert.match(s.convs.gnsis.turns.at(-1)?.text ?? "", /sharing your screen was stopped/);
+});
+
+test("typing while muted says to unmute, not to just say it", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.startLive("gnsis");
+  host.push({ type: "mic", state: "on" });
+  actions.toggleMute();
+  setState({ text: "open youtube" });
+  actions.send();
+  assert.equal(getState().convs.gnsis.turns.at(-1)?.text, TYPING_WHILE_MUTED);
+});
+
+test("a result seen by typing into the chat is no longer marked new", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  actions.closeTab("gnsis");
+  host.push({ type: "action", state: "done", text: "Opened youtube.com." });
+  assert.equal(getState().convs.gnsis.unread, true);
+  setState({ text: "hello" });
+  actions.send();
+  assert.equal(getState().convs.gnsis.unread, false, "the chat came into view with the message");
+});
+
+test("during a call with the chat closed, what GNSIS did is marked and announced", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.startLive("gnsis");
+  host.push({ type: "mic", state: "on" });
+  actions.closeTab("gnsis");
+  assert.ok(getState().live, "closing the chat does not end the call");
+  host.push({ type: "action", state: "done", text: "Opened youtube.com." });
+  const s = getState();
+  assert.equal(s.convs.gnsis.unread, true);
+  assert.equal(s.toast?.text, "Done: Opened youtube.com.");
+});
+
+test("demo: GNSIS's chat never opens with an agent's drawer beside it, however it is reached", () => {
+  resetStore();
+  configure(new RecordingHost(), identityStore);
+  enterDesktop(identity, true);
+  actions.openAgent("roof");
+  assert.equal(getState().panelHidden, false, "the agent's work shows beside its chat");
+  actions.toDock();
+  actions.startLive("gnsis");
+  assert.equal(getState().active, "gnsis");
+  assert.equal(getState().panelHidden, true, "the voice button from the dock opens GNSIS's chat alone");
 });

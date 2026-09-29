@@ -19,7 +19,7 @@
 import { checkArguments } from "../tools/catalog.js";
 import { ActionProblem, type PreparedAction } from "../tools/actions.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { explainToPerson, judge, type PolicyVerdict, type TrustedTurn } from "./actionPolicy.js";
+import { explainToPerson, judge, reasonForLog, type PolicyVerdict, type TrustedTurn } from "./actionPolicy.js";
 import type { ActionEvent } from "./protocol.js";
 import type { Look } from "./screenWatch.js";
 
@@ -195,7 +195,7 @@ export class ActionBroker {
     });
     this.deps.log(
       "execution",
-      `call ${callId} policy: ${prepared.action} effect=${prepared.effect} provenance=${verdict.provenance} → ${verdict.decision} (${verdict.reason})`,
+      `call ${callId} policy: ${prepared.action} effect=${prepared.effect} provenance=${verdict.provenance} → ${verdict.decision} (${reasonForLog(verdict.reason)})`,
     );
 
     this.checkPermissions(prepared);

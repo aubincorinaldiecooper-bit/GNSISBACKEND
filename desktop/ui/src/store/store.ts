@@ -84,6 +84,7 @@ export const CLOSED_BEFORE_ANSWER = "The connection to GNSIS closed before it an
 export const TYPING_LINK_DOWN = "Not sent. GNSIS isn’t connected right now. Try again in a moment.";
 /** Typing that cannot be delivered during live voice: the voice button would end the call, so do not point at it. */
 export const TYPING_WHILE_LIVE = "Typing isn’t connected to GNSIS yet. You’re live, so just say it.";
+export const TYPING_WHILE_MUTED = "Typing isn’t connected to GNSIS yet. You’re muted: unmute and say it.";
 export const TYPING_WHILE_CONNECTING = "Typing isn’t connected to GNSIS yet. It’s still connecting; say it once the bar shows Listening.";
 
 const initial: State = {
@@ -139,6 +140,8 @@ export const getHost = () => host;
 export const getIdentityStore = () => identityStore;
 
 let visionTimer: ReturnType<typeof setTimeout> | null = null;
+/** Bumped by every choice of what GNSIS sees, so a late answer to an older choice changes nothing. */
+let visionAttempt = 0;
 
 function onLiveEvent(ev: LiveEvent) {
   if (ev.type === "vision") {
@@ -164,12 +167,18 @@ function onLiveEvent(ev: LiveEvent) {
       if (!s.live) return {};
       const step = applyLiveEvent(s.live, ev, Date.now());
       const c = s.convs[s.live.to];
-      const convs = step.commit.length && c ? { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...step.commit] } } : s.convs;
       if (step.ended) ended = step.ended.reason;
       // Only GNSIS's own reply answers a typed message; the person speaking,
       // or a line about an action, leaves it open.
       const answered = step.commit.some((t) => t.role === "agent") && s.awaiting?.to === s.live.to ? { awaiting: null } : {};
-      return { live: step.live, convs, ...answered };
+      // News for a chat closed during the call is marked, as it is outside live.
+      const news = step.commit.filter((t) => t.role !== "user");
+      const landed = step.commit.length && c
+        ? news.length && !viewing(s, c.id)
+          ? land(s, c.id, step.commit, news.at(-1)!.role === "agent" ? "Replied to you" : news.at(-1)!.text)
+          : { convs: { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...step.commit] } } }
+        : {};
+      return { live: step.live, ...landed, ...answered };
     });
     if (ended !== undefined) finishLive(ended);
   }
@@ -279,6 +288,16 @@ function onIdleEvent(ev: LiveEvent) {
 }
 
 // ---- helpers ----------------------------------------------------------------
+/**
+ * The drawer when `id` becomes the chat in front: an agent's chat opens with
+ * its work beside it; GNSIS's own chat never opens the drawer, and coming
+ * back to it from an agent's chat closes it again. Used wherever the chat in
+ * front changes.
+ */
+function panelFor(s: State, id: string): boolean {
+  if (id !== "gnsis" && s.convs[id]?.panel) return false;
+  return s.active !== id && s.active !== "gnsis" ? true : s.panelHidden;
+}
 const withConv = (s: State, id: string, patch: Partial<Conv>) => ({ ...s.convs, [id]: { ...s.convs[id], ...patch } });
 const withTab = (tabs: string[], id: string) => (tabs.includes(id) ? tabs : [...tabs, id]);
 
@@ -453,9 +472,7 @@ export const actions = {
       // The chat being left was read up to now; its clock stops with the idle
       // ticks, so stamp it here rather than let it archive at once.
       const left = leaving(base);
-      // An agent's chat opens with its work beside it; GNSIS's own chat never
-      // opens the drawer, and coming back to it from an agent closes it again.
-      const panelHidden = id !== "gnsis" && s.convs[id]?.panel ? false : s.active !== "gnsis" ? true : s.panelHidden;
+      const panelHidden = panelFor(s, id);
       return {
         ...(switching ? endLivePatch(s) : {}),
         panelHidden,
@@ -502,7 +519,7 @@ export const actions = {
       const base = { ...s, convs: carry ? s.convs : flushReply(s, false) };
       const live = startLiveState(id, Date.now(), s.link);
       return {
-        mode: "bar", winOpen: true, active: id, tabs: withTab(s.tabs, id),
+        mode: "bar", winOpen: true, active: id, tabs: withTab(s.tabs, id), panelHidden: panelFor(s, id),
         convs: withConv(base, id, { unread: false, archived: false, readAt: s.t }),
         live: carry ? { ...live, agent: { text: carry } } : live, reply: null, dropTail: false,
         listening: false, heard: 0, hold: 0, now: Date.now(),
@@ -547,28 +564,35 @@ export const actions = {
     if (source && !caps[source]) return;
     if (visionTimer) clearTimeout(visionTimer);
     visionTimer = null;
+    const attempt = ++visionAttempt;
     setState({ visionMenu: false, vision: { source, state: source ? "starting" : "off" } });
-    if (source) {
-      // "Starting" is a promise the runtime has to keep by accepting a frame.
-      // If it never does, say so instead of showing a spinner for good.
-      // The capture is stopped too, so "not seeing" on screen really means off.
-      visionTimer = setTimeout(() => {
-        visionTimer = null;
-        const now = getState().vision;
-        if (now.state !== "starting" || now.source !== source) return;
-        const detail = `GNSIS hadn’t received a picture after ${VISION_START_TIMEOUT_MS / 1000} seconds, so sharing your ${source} was stopped. The runtime may not be taking video.`;
-        void h.stopVision().catch(() => {}).finally(() => {
-          setState({ vision: { source, state: "error", detail } });
-          visionTrouble(detail);
-        });
-      }, VISION_START_TIMEOUT_MS);
-    }
     const p = source ? h.startVision(source) : h.stopVision();
-    p.catch((e) => {
-      const detail = plain(e) || "The visual sense could not start.";
-      setState({ vision: { source, state: "error", detail } });
-      visionTrouble(detail);
-    });
+    p.then(
+      () => {
+        // "Starting" is a promise the runtime has to keep by accepting a
+        // frame. The clock starts once sharing has really begun — time spent
+        // in the system picker or a permission prompt does not count — and if
+        // no picture is accepted in time, the capture is stopped too, so
+        // "not seeing" on screen really means off.
+        if (!source || attempt !== visionAttempt) return;
+        visionTimer = setTimeout(() => {
+          visionTimer = null;
+          const now = getState().vision;
+          if (attempt !== visionAttempt || now.state !== "starting" || now.source !== source) return;
+          const detail = `GNSIS hadn’t received a picture after ${VISION_START_TIMEOUT_MS / 1000} seconds, so sharing your ${source} was stopped. The runtime may not be taking video.`;
+          void h.stopVision().catch(() => {}).finally(() => {
+            setState({ vision: { source, state: "error", detail } });
+            visionTrouble(detail);
+          });
+        }, VISION_START_TIMEOUT_MS);
+      },
+      (e) => {
+        if (attempt !== visionAttempt) return;
+        const detail = plain(e) || "The visual sense could not start.";
+        setState({ vision: { source, state: "error", detail } });
+        visionTrouble(detail);
+      },
+    );
   },
   mic() {
     const s = getState();
@@ -620,7 +644,7 @@ export const actions = {
           gnsis: { ...g, turns: [...g.turns, { role: "user", text, spoken }, { role: "agent", text: "I started " + conv.title + " for this. It’s in the tab next to mine, and I’ll tell you when it’s done.", stream: 0 }] },
         },
         agentIds: s.agentIds.includes(id) ? s.agentIds : [...s.agentIds, id],
-        tabs: withTab(s.tabs, id), mode: "bar", winOpen: true, active: "gnsis",
+        tabs: withTab(s.tabs, id), mode: "bar", winOpen: true, active: "gnsis", panelHidden: panelFor(s, "gnsis"),
       };
     });
   },
@@ -657,7 +681,9 @@ export const actions = {
           mode: "bar",
           winOpen: true,
           active: id,
-          convs: withConv(st, id, { turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: why }] }),
+          panelHidden: panelFor(st, id),
+          // The chat is in view now: whatever was new in it has been seen.
+          convs: withConv(st, id, { unread: false, archived: false, turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: why }] }),
         }));
         return;
       }
@@ -721,7 +747,7 @@ export function filteredCommands(text: string, s: Pick<State, "demo" | "caps"> =
 /** Why a typed message cannot go, said for the moment the person is in. */
 function notConnected(s: State): string {
   if (s.typingOffered && s.link !== "ready") return TYPING_LINK_DOWN;
-  if (s.live) return s.live.phase === "connecting" ? TYPING_WHILE_CONNECTING : TYPING_WHILE_LIVE;
+  if (s.live) return s.live.phase === "connecting" ? TYPING_WHILE_CONNECTING : s.live.muted ? TYPING_WHILE_MUTED : TYPING_WHILE_LIVE;
   return TYPING_NOT_CONNECTED;
 }
 
@@ -750,6 +776,7 @@ function sendTyped(id: string, text: string) {
       reply: null,
       dropTail: false,
       awaiting: { to: id, seq, since: Date.now(), state: "sent" },
+      panelHidden: panelFor(st, id),
       convs: withConv({ ...st, convs }, id, { unread: false, archived: false, turns: [...convs[id].turns, { role: "user", text }] }),
     };
   });

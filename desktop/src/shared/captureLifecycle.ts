@@ -15,15 +15,27 @@ export interface CaptureHandle {
 
 export class CaptureManager {
   private current: CaptureHandle | null = null;
+  /** Bumped by every stop and every switch: an acquisition that no longer matches was called off. */
+  private generation = 0;
 
   get active(): boolean {
     return this.current !== null;
   }
 
-  /** Stop the current session, then start the next one. */
+  /**
+   * Stop the current session, then start the next one. A stop (or another
+   * switch) that comes while the next one is still being acquired — the
+   * person still in the system picker, or a permission prompt still open —
+   * calls it off: what it acquires is released at once, never made current.
+   */
   async switchTo(create: () => Promise<CaptureHandle>): Promise<CaptureHandle> {
     this.stop();
+    const mine = this.generation;
     const session = await create();
+    if (mine !== this.generation) {
+      session.stop();
+      return session;
+    }
     this.current = session;
     return session;
   }
@@ -38,6 +50,7 @@ export class CaptureManager {
   }
 
   stop(): void {
+    this.generation += 1;
     const session = this.current;
     this.current = null;
     session?.stop();
