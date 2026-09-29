@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("gnsis", {
   overlay: process.argv.includes("--gnsis-overlay=1"),
   /** Where the page's cards are, so the floating window lets clicks elsewhere through. */
   reportHitRects: (rects: unknown) => ipcRenderer.send("hit:rects", rects),
+  confirm: (message: string, confirmLabel: string) => ipcRenderer.invoke("dialog:confirm", message, confirmLabel),
   mediaPermissions: () => ipcRenderer.invoke("media:permissions"),
   requestPermission: (kind: string) => ipcRenderer.invoke("media:request", kind),
   sendControl: (control: unknown) => ipcRenderer.send("duplex:control", control),

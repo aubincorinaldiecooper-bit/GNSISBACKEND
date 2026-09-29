@@ -212,7 +212,9 @@ const broker = new ActionBroker({
  * Ask the person before an action runs. A native alert, because the GNSIS
  * window may be behind the app GNSIS is about to act on; GNSIS comes forward
  * for it, and when the action types or clicks into another app, that app is
- * put back in front before it runs.
+ * put back in front before it runs. Floating, it is a free-standing alert in
+ * the middle of the screen: a sheet would hang from the top edge of the
+ * see-through window, where nothing else of GNSIS is.
  */
 async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<boolean> {
   const previous = request.typesIntoFrontApp ? await frontAppName() : null;
@@ -231,7 +233,7 @@ async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<
     detail: request.why,
     signal,
   };
-  const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  const result = win && !OVERLAY ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const allowed = result.response === 0 && !signal.aborted;
   hostLog("execution", `call ${request.callId}: the person ${allowed ? "allowed" : "did not allow"} it`);
   if (allowed && previous && previous !== app.getName()) {
@@ -457,6 +459,15 @@ app.whenReady().then(async () => {
     if (host.sendScreenFrame(metadata, Buffer.from(payload))) {
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
     }
+  });
+  // A yes/no question from the page, such as "Erase your GNSIS?", asked the
+  // same way as the Allow box: free-standing when GNSIS floats.
+  ipcMain.handle("dialog:confirm", async (_e, message: unknown, confirmLabel: unknown) => {
+    if (typeof message !== "string" || !message.trim() || message.length > 300) return false;
+    const yes = typeof confirmLabel === "string" && confirmLabel.trim() && confirmLabel.length <= 40 ? confirmLabel : "OK";
+    const options = { type: "warning" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, noLink: true, title: "GNSIS", message };
+    const result = win && !OVERLAY ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+    return result.response === 0;
   });
   // Where the floating window's cards are, so clicks elsewhere fall through.
   let reported = false;

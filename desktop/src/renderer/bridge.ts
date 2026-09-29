@@ -23,6 +23,8 @@ export interface GnsisBridge {
   readonly overlay?: boolean;
   /** Where the page's cards are, in page pixels, so clicks elsewhere fall through. */
   reportHitRects?(rects: Array<[number, number, number, number]>): void;
+  /** A native yes/no question; resolves true only for the confirming button. */
+  confirm?(message: string, confirmLabel: string): Promise<boolean>;
   mediaPermissions(): Promise<Record<string, unknown>>;
   requestPermission(kind: string): Promise<string>;
   sendControl(control: unknown): void;

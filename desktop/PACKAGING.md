@@ -54,6 +54,24 @@ runtime's address is refused.
 state can be reviewed in the packaged app (Settings → Developer → Load demo
 agents does the same at run time).
 
+## The window
+
+On macOS GNSIS has no ordinary window. It opens one transparent, frameless
+window over the main display's usable area, kept above other windows, and
+only its cards take clicks: everywhere else, clicks fall through to the apps
+underneath. The page reports where its cards are and the main process
+switches mouse input on and off as the pointer crosses them. The host log
+records the mode (`window: floating over the desktop at 90%`) and the first
+report of the cards' positions.
+
+- `GNSIS_WINDOW=standard` opens an ordinary window with a drawn backdrop
+  instead (the default on other systems); `GNSIS_WINDOW=overlay` forces the
+  floating window.
+- `GNSIS_SCALE` (0.6–1.25, default 0.9) draws the interface larger or smaller.
+
+To pass one to the installed app, run its executable from Terminal, e.g.
+`GNSIS_SCALE=0.8 /Applications/GNSIS.app/Contents/MacOS/GNSIS`.
+
 ## Signing / notarization
 
 - Development DMG (default): run with `CSC_IDENTITY_AUTO_DISCOVERY=false` —

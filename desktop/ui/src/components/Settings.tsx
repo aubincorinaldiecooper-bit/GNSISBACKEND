@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Face } from "../lib/face";
 import { shareLink } from "../lib/identity";
 import { copyText } from "../lib/platform";
-import { actions, eraseIdentity, getIdentityStore, setState, useStore } from "../store/store";
+import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore } from "../store/store";
 import * as I from "./Icons";
 
 type Section = "profile" | "voice" | "agents" | "notif" | "appear" | "privacy";
@@ -141,7 +141,9 @@ export function Settings() {
                 <Group>
                   <Row title="Erase GNSIS from this computer" desc={eraseNote || "Deletes your key from this computer. This can’t be undone."}>
                     <button type="button" className="btn-danger" onClick={async () => {
-                      if (!window.confirm("Erase your GNSIS from this computer? This can’t be undone.")) return;
+                      const question = "Erase your GNSIS from this computer? This can’t be undone.";
+                      const host = getHost();
+                      if (!(host?.confirm ? await host.confirm(question, "Erase") : window.confirm(question))) return;
                       setEraseNote((await eraseIdentity()) ?? "");
                     }}>Erase…</button>
                   </Row>

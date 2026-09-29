@@ -498,3 +498,15 @@ test("the screen view gets exactly the picture being shared, and nothing once sh
   (devices.vision as { stream?: MediaStream | null }).stream = null;
   assert.equal(host.visionStream(), null);
 });
+
+test("a yes/no question goes to the Mac app's own alert, and only its confirming button counts as yes", async () => {
+  const { bridge, host } = harness();
+  const asked: string[] = [];
+  (bridge as unknown as { confirm: (m: string, l: string) => Promise<unknown> }).confirm = async (m, l) => {
+    asked.push(`${l}: ${m}`);
+    return asked.length === 1 ? true : "yes";
+  };
+  assert.equal(await host.confirm("Erase your GNSIS?", "Erase"), true);
+  assert.equal(await host.confirm("Erase your GNSIS?", "Erase"), false, "anything but true is a no");
+  assert.deepEqual(asked, ["Erase: Erase your GNSIS?", "Erase: Erase your GNSIS?"]);
+});

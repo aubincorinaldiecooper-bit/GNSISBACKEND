@@ -209,6 +209,11 @@ export class ElectronLiveHost implements LiveHost {
     this.bridge.reportHitRects?.(rects);
   }
 
+  async confirm(message: string, confirmLabel: string): Promise<boolean> {
+    if (!this.bridge.confirm) return window.confirm(message);
+    return (await this.bridge.confirm(message, confirmLabel)) === true;
+  }
+
   async sendText(text: string): Promise<void> {
     const words = text.trim();
     if (!words) throw new Error("There is nothing to send.");

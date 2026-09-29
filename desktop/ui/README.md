@@ -45,6 +45,8 @@ A host implements `LiveHost`:
 | `setMuted(bool)` | releases or reacquires the microphone only — the session stays alive |
 | `startVision(source)` / `stopVision()` | points the one persistent visual sense at the screen or the camera, or off |
 | `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay` — the UI hides what a host cannot do |
+| `visionStream()` (optional) | the picture being shared right now, for the "What GNSIS sees" card; `null` when nothing is |
+| `reportHitRects(rects)` (optional) | on an overlay host: where the cards are, so clicks elsewhere fall through |
 | `subscribe(fn)` | events below |
 
 And it reports only what it actually observed:

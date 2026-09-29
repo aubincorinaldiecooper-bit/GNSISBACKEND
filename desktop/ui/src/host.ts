@@ -111,6 +111,12 @@ export interface LiveHost {
    * pixels, so clicks anywhere else can fall through to the desktop.
    */
   reportHitRects?(rects: Array<[number, number, number, number]>): void;
+  /**
+   * Ask a yes/no question the way this host asks them (a native alert in the
+   * Mac app). Resolves true only for `confirmLabel`. Hosts without it leave
+   * the UI to use the browser's own confirm box.
+   */
+  confirm?(message: string, confirmLabel: string): Promise<boolean>;
 }
 
 export interface Identity {
