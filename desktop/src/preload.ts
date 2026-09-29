@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("gnsis", {
   requestPermission: (kind: string) => ipcRenderer.invoke("media:request", kind),
   sendControl: (control: unknown) => ipcRenderer.send("duplex:control", control),
   sendHostEvent: (event: unknown) => ipcRenderer.send("host:event", event),
+  sendTurn: (text: string) => ipcRenderer.invoke("turn:text", text),
   hostLog: (line: string) => ipcRenderer.send("host:log", line),
   linkState: () => ipcRenderer.invoke("link:state"),
   reconnect: () => ipcRenderer.send("session:reconnect"),

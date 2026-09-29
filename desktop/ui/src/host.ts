@@ -92,6 +92,12 @@ export interface LiveHost {
   endLive(): Promise<void>;
   /** Mute releases the microphone only; the session stays alive for unmute. */
   setMuted(muted: boolean): Promise<void>;
+  /**
+   * Send what the person typed as their own turn. Resolves once the runtime
+   * has accepted it; rejects with a plain sentence when it could not. Hosts
+   * whose capabilities say `text: false` need not implement it.
+   */
+  sendText?(text: string): Promise<void>;
   startVision(source: VisionSource): Promise<void>;
   stopVision(): Promise<void>;
   /**

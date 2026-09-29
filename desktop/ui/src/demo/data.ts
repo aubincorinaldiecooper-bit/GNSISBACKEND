@@ -118,10 +118,10 @@ export const planList = (title: string): ListSpec => ({
 const MORNING_SHORT = "Short version: water and daylight first, then one focused block before email.";
 
 export const GREETING =
-  "Hi, I’m your GNSIS. Press the voice button to talk with me live, or type below. When a job needs its own helper, I’ll start an agent for it.";
+  "Hi, I’m your GNSIS. Press the voice button to talk with me live, or type below.";
 /** The same welcome when typed messages cannot reach GNSIS yet. */
 export const GREETING_VOICE_ONLY =
-  "Hi, I’m your GNSIS. Press the voice button to talk with me live. When a job needs its own helper, I’ll start an agent for it.";
+  "Hi, I’m your GNSIS. Press the voice button to talk with me live.";
 /** What typing gets when the host cannot deliver it. Honest, not a made-up reply. */
 export const TYPING_NOT_CONNECTED =
   "Typing isn’t connected to GNSIS yet. Press the voice button to talk.";

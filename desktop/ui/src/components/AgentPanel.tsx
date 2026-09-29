@@ -13,7 +13,7 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
   const home = c.id === "gnsis";
   const p = presence(c, s);
   const liveHere = !!s.live && s.live.to === c.id;
-  const status = liveHere ? "Live" : home ? "Your assistant" : p.status;
+  const status = liveHere ? (s.live?.phase === "connecting" ? "Connecting…" : "Live") : home ? "Your assistant" : p.status;
   return (
     <aside data-hit className="panel glass" style={{ left, width, height }} aria-label={`${c.title} panel`}>
       <header className="panel-head">
@@ -129,7 +129,7 @@ function AgentsCard({ s }: { s: State }) {
   return (
     <div className="card">
       <div className="card-title">Your agents</div>
-      {rows.length === 0 && <p className="muted">No agents yet. When a job needs its own helper, I’ll start one and it shows up here.</p>}
+      {rows.length === 0 && <p className="muted">No agents are running.</p>}
       {rows.map((r) => (
         <button key={r.id} type="button" className="agent-row" aria-label={`Open ${r.c.title}, ${r.p.status.toLowerCase()}`} onClick={() => actions.openAgent(r.id)}>
           <AgentFace name={r.c.title} size={32} p={r.p} />

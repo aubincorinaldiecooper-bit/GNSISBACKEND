@@ -54,6 +54,18 @@ export class SimulatedLiveHost implements LiveHost {
     this.emit({ type: "user.level", level: 0 });
   }
 
+  /** Typed messages reach it, but it has no model: it says so, the way a real reply would arrive. */
+  async sendText(_text: string): Promise<void> {
+    this.at(this.tenth * 3, () =>
+      this.emit({
+        type: "agent.text",
+        text: "This is the simulated host. Your message reached it, but it has no model to answer with.",
+        endOfTurn: true,
+        interrupted: false,
+      }),
+    );
+  }
+
   async startVision(_source: VisionSource): Promise<void> {
     throw new Error("The simulated host has no visual sense.");
   }

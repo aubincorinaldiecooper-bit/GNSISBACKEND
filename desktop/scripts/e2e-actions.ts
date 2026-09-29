@@ -14,11 +14,17 @@
  *
  * E2E_RUNTIME_URL   runtime to connect to (http://127.0.0.1:18765)
  * E2E_MEDIA_DIR     the runtime's --media-dir, where the timeline lands
- * E2E_SCENARIO      files-move (default) | files-move-asked | files-move-spoken | open-app
+ * E2E_SCENARIO      files-move (default) | files-move-asked | files-move-spoken | files-move-typed | open-app
  *                   files-move-spoken: no words are given; the person "speaks" (tone
  *                   audio), the desktop transcribes it through the runtime's own
  *                   /api/asr/transcribe (a stand-in speech-to-text behind it), sends
  *                   turn.final, and the move runs without asking because of it.
+ *                   files-move-typed: the person types the request; the desktop's
+ *                   TypedTurns sends it as turn.final, the runtime accepts it, and the
+ *                   move runs without asking because of it. The scripted model acts on
+ *                   audio, not on the words, so this proves the typed turn's delivery
+ *                   and its standing with the action policy — not that the real model
+ *                   read it.
  * E2E_HOME          a scratch home folder for the files scenarios
  */
 import assert from "node:assert/strict";
@@ -28,6 +34,7 @@ import path from "node:path";
 import { HostSession } from "../src/host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../src/host/actionBroker.js";
 import { TurnLog } from "../src/host/turns.js";
+import { TypedTurns } from "../src/host/typedTurns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../src/host/utterances.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { HOST_TOOL_SCHEMAS, HOST_TOOLS_VERSION } from "../src/tools/catalog.js";
@@ -72,6 +79,7 @@ async function main(): Promise<void> {
 
   let broker: ActionBroker | null = null;
   let utterances: UtteranceTranscriber | null = null;
+  let typed: TypedTurns | null = null;
   const host = new HostSession({
     runtimeUrl: RUNTIME,
     hostId: "e2e-host",
@@ -83,6 +91,7 @@ async function main(): Promise<void> {
       controls.push(control);
       broker?.handleControl(control);
       if (utterances?.handleControl(control)) say(`runtime → desktop  turn ${String(control.turn_id)} accepted`);
+      if (typed?.handleControl(control)) say(`runtime → desktop  typed turn ${String(control.turn_id)} accepted`);
       if (control.type === "tool.call") say(`runtime → desktop  tool.call ${String(control.call_id)} ${JSON.stringify(control.tool_calls)}`);
       if (control.type === "tool.response.queued") say(`runtime → desktop  answer queued for the model (${String(control.call_id)})`);
       if (control.type === "chunk" && control.text) say(`model says: "${String(control.text)}"`);
@@ -117,6 +126,17 @@ async function main(): Promise<void> {
       log: (area, line) => say(`[${area}] ${line}`),
     });
   }
+  if (SCENARIO === "files-move-typed") {
+    typed = new TypedTurns({
+      send: (control) => {
+        say(`desktop → runtime  turn.final (typed) "${String(control.text)}"`);
+        host.sendControl(control as unknown as ClientControl);
+      },
+      turns,
+      ready: () => controls.some((c) => c.type === "ready"),
+      log: (area, line) => say(`[${area}] ${line}`),
+    });
+  }
   const mic = new Mic(host, utterances);
 
   host.connect(`e2e-${process.pid}`);
@@ -125,6 +145,12 @@ async function main(): Promise<void> {
   const agreed = (ready.host_tools as { accepted: string[] }).accepted;
   say(`runtime ready; agreed tools: ${agreed.join(", ")}; model tools: ${(ready.tools as string[]).join(", ")}`);
   assert.deepEqual(agreed, offered, "the runtime agrees to exactly what this desktop offered");
+
+  if (typed) {
+    // The person types before GNSIS acts; the runtime must confirm it.
+    const result = await typed.send("Move that report into the Projects folder.");
+    assert.ok(result.ok, result.ok ? "" : result.reason);
+  }
 
   // Microphone audio: the scripted model takes its turn on the first second.
   if (SCENARIO === "files-move-spoken") {
@@ -150,7 +176,7 @@ async function main(): Promise<void> {
     assert.equal(content.status, "done");
     assert.equal(asked.length, SCENARIO === "files-move-asked" ? 1 : 0, "asked the person exactly when the policy says to");
   }
-  if (SCENARIO === "files-move-spoken") {
+  if (SCENARIO === "files-move-spoken" || SCENARIO === "files-move-typed") {
     assert.equal(turns.latest()?.text, "Move that report into the Projects folder.", "the person's words came back as a trusted turn");
     say(`trusted turn on record: "${turns.latest()?.text}" (${turns.latest()?.turnId})`);
   }

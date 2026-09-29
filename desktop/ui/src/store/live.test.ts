@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { applyLiveEvent, barHeights, cutText, endLiveTurns, liveInfo, openTurns, startLiveState, type LiveState } from "./live";
 
 const T0 = 1_000_000;
-const fresh = (): LiveState => startLiveState("gnsis", T0, "ready");
+/** A session whose microphone came on at T0. */
+const fresh = (): LiveState => applyLiveEvent(startLiveState("gnsis", T0, "ready"), { type: "mic", state: "on" }, T0).live;
 
 test("the reply's words accumulate and become one turn when the runtime ends it", () => {
   let live = fresh();
@@ -101,8 +102,10 @@ test("the status line says what is happening, with the clock", () => {
   const off = liveInfo(null, "", T0);
   assert.equal(off.on, false);
   let live = startLiveState("gnsis", T0, "connecting");
-  assert.equal(liveInfo(live, "GNSIS", T0 + 3000).status, "Connecting…");
+  assert.equal(liveInfo(live, "GNSIS", T0 + 3000).status, "Connecting to GNSIS…");
   live = applyLiveEvent(live, { type: "link", state: "ready" }, T0).live;
+  assert.equal(liveInfo(live, "GNSIS", T0 + 3000).status, "Connecting to GNSIS…", "a ready runtime is not a listening microphone");
+  live = applyLiveEvent(live, { type: "mic", state: "on" }, T0).live;
   assert.equal(liveInfo(live, "GNSIS", T0 + 3000).status, "Listening · 0:03");
   live = applyLiveEvent(live, { type: "agent.speaking", speaking: true }, T0).live;
   live = applyLiveEvent(live, { type: "agent.level", level: 0.5 }, T0).live;
@@ -139,5 +142,37 @@ test("what GNSIS did on the computer lands in the chat as a plain line; the star
   assert.deepEqual(said("failed", "No folder called Taxes."), [{ role: "system", text: "Couldn’t do it: No folder called Taxes." }]);
   assert.deepEqual(said("declined", "Not done: Move “report.pdf” into “Projects”"), [
     { role: "system", text: "Not done: Move “report.pdf” into “Projects”" },
+  ]);
+});
+
+test("pressing the voice button is not listening: only the microphone coming on is", () => {
+  let live = startLiveState("gnsis", T0, "ready");
+  assert.equal(live.phase, "connecting");
+  let info = liveInfo(live, "GNSIS", T0 + 40_000);
+  assert.equal(info.connecting, true);
+  assert.equal(info.status, "Connecting to GNSIS…");
+  // Nothing about the person or the reply counts while nothing is being captured.
+  live = applyLiveEvent(live, { type: "agent.speaking", speaking: true }, T0).live;
+  assert.equal(live.phase, "connecting");
+  assert.equal(liveInfo(live, "GNSIS", T0).agentNow, false);
+  live = applyLiveEvent(live, { type: "agent.speaking", speaking: false }, T0).live;
+  // The microphone comes on 40 seconds later: listening, and the clock starts now.
+  live = applyLiveEvent(live, { type: "mic", state: "on" }, T0 + 40_000).live;
+  assert.equal(live.phase, "listening");
+  info = liveInfo(live, "GNSIS", T0 + 45_000);
+  assert.equal(info.connecting, false);
+  assert.equal(info.status, "Listening · 0:05");
+  // A reply actually playing makes it responding; its end, or a cut, makes it listen again.
+  live = applyLiveEvent(live, { type: "agent.speaking", speaking: true }, T0 + 46_000).live;
+  assert.equal(live.phase, "responding");
+  live = applyLiveEvent(live, { type: "agent.cut", reason: "user_spoke" }, T0 + 47_000).live;
+  assert.equal(live.phase, "listening");
+});
+
+test("a session ended while still connecting leaves no conversation behind, only the reason if there was one", () => {
+  const live = startLiveState("gnsis", T0, "connecting");
+  assert.deepEqual(endLiveTurns(live, T0 + 5000), [], "the person cancelled: nothing to record");
+  assert.deepEqual(endLiveTurns(live, T0 + 5000, "Live voice couldn’t start. GNSIS could not be reached."), [
+    { role: "system", text: "Live voice couldn’t start. GNSIS could not be reached." },
   ]);
 });

@@ -5,7 +5,9 @@ import * as I from "./Icons";
 
 export function Commands() {
   const text = useStore((s) => s.text);
-  const list = filteredCommands(text);
+  const demo = useStore((s) => s.demo);
+  const caps = useStore((s) => s.caps);
+  const list = filteredCommands(text, { demo, caps });
   return (
     <div data-hit className="popover commands glass" role="listbox" aria-label="Commands">
       {list.map((c, i) => (
@@ -26,7 +28,7 @@ export function DockMenu({ left }: { left: number }) {
   return (
     <div data-hit className="popover dock-menu" style={{ left }}>
       <div className="menu-label">All agents</div>
-      {rows.length === 0 && <p className="muted small pad">No agents yet. Talk to GNSIS and it will start one when a job needs it.</p>}
+      {rows.length === 0 && <p className="muted small pad">No agents are running.</p>}
       {rows.map((r) => (
         <button key={r.id} type="button" className="agent-row" aria-label={`Open ${r.c.title}, ${r.p.status.toLowerCase()}`} onClick={() => actions.openAgent(r.id)}>
           <AgentFace name={r.c.title} size={30} p={r.p} />
@@ -80,7 +82,7 @@ export function Greeting({ left }: { left: number }) {
     <div data-hit role="status" className="greeting" style={{ left }}>
       <span className="greeting-tail" aria-hidden="true" />
       <strong>Hi, I’m your GNSIS.</strong>
-      <span className="muted">Tap my face to open our chat, or press the voice button to talk with me live. When a job needs its own helper, I’ll start an agent and it shows up here.</span>
+      <span className="muted">Tap my face to open our chat, or press the voice button to talk with me live.</span>
     </div>
   );
 }

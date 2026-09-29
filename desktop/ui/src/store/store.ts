@@ -5,7 +5,7 @@ import {
   type Conv, type Turn,
 } from "../demo/data";
 import type { HostCapabilities, Identity, IdentityStore, LinkState, LiveEvent, LiveHost, VisionSource } from "../host";
-import { applyLiveEvent, endLiveTurns, liveInfo, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
+import { actionLine, applyLiveEvent, cutText, endLiveTurns, liveInfo, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
 
 export interface Toast { id: string; text: string; ttl: number }
 
@@ -45,6 +45,15 @@ export interface State {
   apPick: number | null;
   apCustom: string;
   live: LiveState | null;
+  /**
+   * A typed message waiting on GNSIS: `sent` until the runtime accepts it,
+   * then `accepted` until GNSIS answers, acts, or the wait runs out.
+   */
+  awaiting: { to: string; since: number; state: "sent" | "accepted" } | null;
+  /** GNSIS's reply to a typed message, while its words are still arriving (outside live voice). */
+  reply: { to: string; text: string } | null;
+  /** What GNSIS is doing on this computer right now, until it reports how it went. */
+  working: { to: string; text: string } | null;
   /** the runtime link as last reported by the host, live or not */
   link: LinkState;
   vision: VisionState;
@@ -57,13 +66,17 @@ const NO_CAPS: HostCapabilities = { voice: false, text: false, screen: false, ca
 
 /** How long the visual sense may sit on "starting" before that is reported as a problem. */
 const VISION_START_TIMEOUT_MS = 20_000;
+/** How long a typed message may go unanswered before the chat says so. */
+export const REPLY_TIMEOUT_MS = 60_000;
+/** Said when GNSIS accepted a typed message but neither answered nor acted on it in time. */
+export const NO_ANSWER_YET = "GNSIS hasn’t answered that yet. It may still be working; you can also try asking with your voice.";
 
 const initial: State = {
   phase: "loading", creating: false, identity: null, caps: NO_CAPS,
   mode: "dock", convs: {}, agentIds: [], tabs: ["gnsis"], active: "gnsis", winOpen: false,
   listening: false, listenTo: null, heard: 0, hold: 0, text: "", t: 0, now: Date.now(), seq: 0,
-  panelHidden: false, menuOpen: false, dockMenu: false, visionMenu: false, settingsOpen: false,
-  toast: null, apPick: null, apCustom: "", live: null, link: "connecting",
+  panelHidden: true, menuOpen: false, dockMenu: false, visionMenu: false, settingsOpen: false,
+  toast: null, apPick: null, apCustom: "", live: null, awaiting: null, reply: null, working: null, link: "connecting",
   vision: { source: null, state: "off" }, greet: false, demo: false,
 };
 
@@ -120,7 +133,14 @@ function onLiveEvent(ev: LiveEvent) {
     setState({ vision: { source: ev.source, state: ev.state, detail: ev.detail } });
     return;
   }
-  if (ev.type === "link") setState({ link: ev.state });
+  // What the host can do may change with the runtime it is connected to
+  // (typing needs a runtime that answers typed turns), so read it again.
+  if (ev.type === "link") setState({ link: ev.state, caps: host ? host.capabilities() : getState().caps });
+  if (!getState().live) {
+    onIdleEvent(ev);
+    if (ev.type === "action") noteWorking(ev);
+    return;
+  }
   let ended: string | undefined;
   setState((s) => {
     if (!s.live) return {};
@@ -128,9 +148,58 @@ function onLiveEvent(ev: LiveEvent) {
     const c = s.convs[s.live.to];
     const convs = step.commit.length && c ? { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...step.commit] } } : s.convs;
     if (step.ended) ended = step.ended.reason;
-    return { live: step.live, convs };
+    const answered = step.commit.length && s.awaiting?.to === s.live.to ? { awaiting: null } : {};
+    return { live: step.live, convs, ...answered };
   });
+  if (ev.type === "action") noteWorking(ev);
   if (ended !== undefined) finishLive(ended);
+}
+
+/**
+ * The moment an action starts is shown while it runs, and cleared by its
+ * outcome — which lands in the chat as a line, live or not.
+ */
+function noteWorking(ev: Extract<LiveEvent, { type: "action" }>) {
+  setState((s) => {
+    const to = s.live?.to ?? s.awaiting?.to ?? "gnsis";
+    if (ev.state === "working") return { working: ev.text.trim() ? { to, text: ev.text.trim() } : s.working };
+    return s.working ? { working: null } : {};
+  });
+}
+
+/**
+ * Outside live voice, what GNSIS does on this computer still belongs in the
+ * chat — an action the person approved after ending the call, or one they
+ * asked for by typing. Its words belong there only as the answer to a typed
+ * message; anything else arriving after live ended is the tail of a reply the
+ * person already cut off.
+ */
+function onIdleEvent(ev: LiveEvent) {
+  if (ev.type !== "action" && ev.type !== "agent.text") return;
+  setState((s) => {
+    const to = s.awaiting?.to ?? s.reply?.to ?? (ev.type === "action" ? s.working?.to ?? "gnsis" : null);
+    const c = to ? s.convs[to] : undefined;
+    if (!to || !c) return {};
+    if (ev.type === "action") {
+      const line = actionLine(ev.state, ev.text);
+      if (!line) return {};
+      return { convs: withConv(s, to, { turns: [...c.turns, { role: "system", text: line }] }), awaiting: null };
+    }
+    let text = (s.reply?.to === to ? s.reply.text : "") + ev.text;
+    const done: Turn[] = [];
+    if (ev.interrupted) {
+      if (text.trim()) done.push({ role: "agent", text: cutText(text), stream: cutText(text).length });
+      text = "";
+    } else if (ev.endOfTurn) {
+      if (text.trim()) done.push({ role: "agent", text, stream: text.length });
+      text = "";
+    }
+    return {
+      reply: text ? { to, text } : null,
+      awaiting: null,
+      convs: done.length ? withConv(s, to, { turns: [...c.turns, ...done] }) : s.convs,
+    };
+  });
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -163,20 +232,41 @@ export function presence(c: Conv, s: State): Presence {
   return { working, needs, unread, status, rank: needs ? 0 : working ? 1 : unread ? 2 : c.archived ? 4 : 3 };
 }
 
+/** What the Activity button shows: how many agents need the person, are working, or have news. */
+export function activity(s: State): { needs: number; working: number; unread: number } {
+  const out = { needs: 0, working: 0, unread: 0 };
+  for (const id of s.agentIds) {
+    const c = s.convs[id];
+    if (!c) continue;
+    const p = presence(c, s);
+    if (p.needs) out.needs += 1;
+    else if (p.working) out.working += 1;
+    else if (p.unread) out.unread += 1;
+  }
+  return out;
+}
+
 function nameFrom(text: string) {
   const words = text.replace(/[^\w\s']/g, "").split(/\s+/).filter(Boolean).slice(0, 3).join(" ");
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : "New agent";
 }
 export const phrase = (s: State) => (s.listenTo && s.listenTo !== "gnsis" ? FOLLOW_PHRASE : QUESTION);
 
-/** The open live turns for a conversation, shown while they are still being spoken. */
-export const liveTurnsFor = (s: State, convId: string): Turn[] => (s.live && s.live.to === convId ? openTurns(s.live) : []);
+/** The open turns for a conversation: live ones while spoken, or a typed message's reply while it arrives. */
+export const liveTurnsFor = (s: State, convId: string): Turn[] => {
+  if (s.live && s.live.to === convId) return openTurns(s.live);
+  if (s.reply && s.reply.to === convId) return [{ role: "agent", text: s.reply.text, stream: s.reply.text.length, speaking: true }];
+  return [];
+};
 
 export const liveInfoFor = (s: State): LiveInfo =>
   liveInfo(s.live, s.live ? s.convs[s.live.to]?.title ?? "GNSIS" : "", s.now);
 
-/** Stand-in agents and canned replies are shown only in demo mode or when the host can take typed messages. */
-const standIns = (s: State) => s.demo || s.caps.text;
+/**
+ * Stand-in agents and canned replies are for demo mode only. Everywhere else
+ * every reply, agent and result comes from the runtime or the host.
+ */
+const standIns = (s: State) => s.demo;
 
 // ---- setup ------------------------------------------------------------------
 export function enterDesktop(identity: Identity, demo: boolean) {
@@ -188,7 +278,10 @@ export function enterDesktop(identity: Identity, demo: boolean) {
     agentIds = ["roof", "recipe", "watch", "triage", "gift"];
     tabs = ["gnsis", "roof", "recipe"];
   }
-  setState({ phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet: !demo, t: 0, live: null, toast: null });
+  setState({
+    phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet: !demo, t: 0,
+    live: null, toast: null, awaiting: null, reply: null, working: null,
+  });
 }
 
 export async function loadIdentity() {
@@ -258,7 +351,7 @@ export const actions = {
       const left = leaving(base);
       return {
         ...(switching ? endLivePatch(s) : {}),
-        mode: "bar", dockMenu: false, visionMenu: false, active: id, winOpen: true, panelHidden: false, menuOpen: false, greet: false,
+        mode: "bar", dockMenu: false, visionMenu: false, active: id, winOpen: true, menuOpen: false, greet: false,
         toast: base.toast && base.toast.id === id ? null : base.toast,
         tabs: withTab(base.tabs, id),
         convs: withConv({ ...base, convs: left }, id, { unread: false, archived: false, readAt: base.t }),
@@ -296,13 +389,21 @@ export const actions = {
     setState((s) => {
       const id = to && s.convs[to] ? to : "gnsis";
       return {
-        mode: "bar", winOpen: true, active: id, panelHidden: false, tabs: withTab(s.tabs, id),
+        mode: "bar", winOpen: true, active: id, tabs: withTab(s.tabs, id),
         convs: withConv(s, id, { unread: false, archived: false, readAt: s.t }),
         live: startLiveState(id, Date.now(), s.link), listening: false, heard: 0, hold: 0, now: Date.now(),
         dockMenu: false, visionMenu: false, greet: false, toast: null, menuOpen: false,
       };
     });
     h.startLive().catch((e) => finishLive("Live voice couldn’t start. " + (plain(e) || "The microphone did not open.")));
+  },
+  /**
+   * The Activity drawer: what GNSIS's agents are doing, opened only when the
+   * person wants to look. Nothing opens it on its own — an agent that needs
+   * the person marks the Activity button instead.
+   */
+  toggleActivity() {
+    setState((s) => ({ panelHidden: !s.panelHidden, menuOpen: false }));
   },
   /** hardware gesture / voice button: live with whoever is in front, GNSIS from the dock */
   toggleLive() {
@@ -413,27 +514,32 @@ export const actions = {
     const s = getState();
     const v = s.text.trim();
     if (!v) return;
-    if (v.startsWith("/browse")) return actions.startAgent(v.slice(7).trim());
+    if (v.startsWith("/browse") && s.demo) return actions.startAgent(v.slice(7).trim());
     if (v === "/screen" && s.caps.screen) {
       setState({ text: "" });
       return actions.setVision(s.vision.source === "screen" && s.vision.state !== "off" ? null : "screen");
     }
     if (v.startsWith("/") && !v.includes(" ")) {
-      const first = filteredCommands(v)[0];
+      const first = filteredCommands(v, s)[0];
       if (first) setState({ text: first.name + " " });
       return;
     }
     const cur = s.winOpen ? s.convs[s.active] : null;
     if (!standIns(s)) {
-      // The host cannot deliver typed words. Show what was typed, and say so —
-      // never a made-up reply.
       const id = cur ? s.active : "gnsis";
-      setState((st) => ({
-        text: "",
-        winOpen: true,
-        convs: withConv(st, id, { turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: TYPING_NOT_CONNECTED }] }),
-      }));
-      return;
+      if (!s.caps.text || !host?.sendText) {
+        // The host cannot deliver typed words. Show what was typed, and say so —
+        // never a made-up reply.
+        setState((st) => ({
+          text: "",
+          mode: "bar",
+          winOpen: true,
+          active: id,
+          convs: withConv(st, id, { turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: TYPING_NOT_CONNECTED }] }),
+        }));
+        return;
+      }
+      return sendTyped(id, v);
     }
     if (!cur || s.active === "gnsis") return actions.handoff(v, false, null);
     if (s.active === "roof" && cur.approval === "pending") {
@@ -469,15 +575,55 @@ export const actions = {
       return c ? { convs: withConv(s, s.active, { stepsOpen: c.stepsOpen === false }) } : {};
     });
   },
+  /** Refill the demo's sample agents. Only in demo mode: the real app has no stand-ins to load. */
   loadDemo() {
     const s = getState();
-    if (s.identity) enterDesktop(s.identity, true);
+    if (s.identity && s.demo) enterDesktop(s.identity, true);
   },
 };
 
-export function filteredCommands(text: string) {
+/**
+ * The commands that do something here: every one in demo mode, and only the
+ * real ones otherwise — a command that would only start a stand-in agent is
+ * not offered in a real build.
+ */
+export function available(s: Pick<State, "demo" | "caps">) {
+  return COMMANDS.filter((c) => s.demo || (c.name === "/screen" && s.caps.screen));
+}
+
+export function filteredCommands(text: string, s: Pick<State, "demo" | "caps"> = getState()) {
   const q = text.slice(1).toLowerCase();
-  return COMMANDS.filter((c) => c.name.slice(1).startsWith(q) || c.desc.toLowerCase().includes(q));
+  return available(s).filter((c) => c.name.slice(1).startsWith(q) || c.desc.toLowerCase().includes(q));
+}
+
+/**
+ * A typed message, sent to GNSIS as the person's own turn. It shows at once;
+ * then "Sending…" until the runtime accepts it, and "working" until GNSIS
+ * answers or acts. If it could not be sent, the chat says why.
+ */
+function sendTyped(id: string, text: string) {
+  const h = host;
+  if (!h?.sendText) return;
+  setState((st) => ({
+    text: "",
+    mode: "bar",
+    winOpen: true,
+    active: id,
+    greet: false,
+    reply: null,
+    awaiting: { to: id, since: Date.now(), state: "sent" },
+    convs: withConv(st, id, { unread: false, archived: false, turns: [...st.convs[id].turns, { role: "user", text }] }),
+  }));
+  h.sendText(text).then(
+    () => setState((st) => (st.awaiting?.to === id && st.awaiting.state === "sent" ? { awaiting: { ...st.awaiting, state: "accepted" } } : {})),
+    (e: unknown) =>
+      setState((st) => ({
+        awaiting: st.awaiting?.to === id ? null : st.awaiting,
+        convs: st.convs[id]
+          ? withConv(st, id, { turns: [...st.convs[id].turns, { role: "system", text: "Not sent. " + (plain(e) || "The message could not reach GNSIS.") }] })
+          : st.convs,
+      })),
+  );
 }
 
 /** The chat being viewed, stamped as read now: called when the view moves away from it. */
@@ -491,7 +637,7 @@ function leaving(s: State): Record<string, Conv> {
  * stands still and nothing re-renders.
  */
 export function isBusy(s: State): boolean {
-  if (s.live || s.listening || s.toast) return true;
+  if (s.live || s.listening || s.toast || s.awaiting || s.reply || s.working) return true;
   for (const id of ["gnsis", ...s.agentIds]) {
     const c = s.convs[id];
     if (!c) continue;
@@ -528,6 +674,13 @@ export function tick() {
     return setState(next);
   }
   const convs = { ...s.convs };
+  let awaiting = s.awaiting;
+  if (awaiting && awaiting.state === "accepted" && Date.now() - awaiting.since > REPLY_TIMEOUT_MS && convs[awaiting.to]) {
+    // Accepted, but nothing came back: say so rather than wait in silence.
+    const c = convs[awaiting.to];
+    convs[awaiting.to] = { ...c, turns: [...c.turns, { role: "system", text: NO_ANSWER_YET }] };
+    awaiting = null;
+  }
   let toast = s.toast ? { ...s.toast, ttl: s.toast.ttl - 1 } : null;
   if (toast && toast.ttl <= 0) toast = null;
   for (const id of ["gnsis", ...s.agentIds]) {
@@ -563,5 +716,5 @@ export function tick() {
     else if (id !== "gnsis" && !isWorking(c) && !c.needs && !c.unread && !c.archived && c.readAt !== undefined && t - c.readAt > 140) c = { ...c, archived: true };
     convs[id] = c;
   }
-  setState({ t, now, convs, toast });
+  setState({ t, now, convs, toast, awaiting });
 }

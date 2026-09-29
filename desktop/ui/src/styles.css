@@ -91,6 +91,20 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .primary-btn.armed { background: var(--accent); animation: ring 1.6s infinite ease-in-out; }
 .primary-btn.armed span { width: 3px; border-radius: 2px; background: #fff; transition: height 90ms linear; }
 .primary-btn.listening { background: var(--accent); }
+/* Pressed, but the microphone is not capturing yet: a spinner, never the level bars. */
+.primary-btn.connecting { background: var(--accent); }
+.primary-btn .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* The Activity drawer's button: marks borrow the agent faces' own dots. */
+.activity-btn { position: relative; }
+.activity-btn.is-open { background: rgba(20, 24, 33, 0.07); color: var(--ink); }
+.activity-btn.needs { color: var(--orange); }
+.activity-btn .mark-needs { right: 4px; top: 4px; }
+.activity-btn .mark-dot { right: 7px; top: 7px; }
+.activity-btn .mark-badge { right: 2px; bottom: 4px; }
+.activity-working { animation: blink 1.2s infinite ease-in-out; }
+/* What fills the wait after a typed message: sending, then working. */
+.pending-line { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font-size: 14px; min-height: 22px; }
 @keyframes ring { 0%, 100% { box-shadow: 0 0 0 3px rgba(46, 84, 230, 0.2); } 50% { box-shadow: 0 0 0 6px rgba(46, 84, 230, 0.2); } }
 .stop-square { width: 13px; height: 13px; border-radius: 3px; background: #fff; }
 .voice-btn { width: 52px; height: 52px; border: 0; border-radius: 26px; background: var(--ink); color: #fff; display: grid; place-items: center; flex-shrink: 0; }

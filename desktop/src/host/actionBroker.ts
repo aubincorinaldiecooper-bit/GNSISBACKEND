@@ -140,6 +140,7 @@ export class ActionBroker {
     const args = (call?.arguments && typeof call.arguments === "object" ? call.arguments : {}) as Record<string, unknown>;
     const started = this.now();
     const base = { call_id: callId, tool };
+    this.deps.log("execution", `call ${callId} ${tool || "?"} received${control.redelivered === true ? " (redelivered)" : ""}`);
     this.deps.event({ type: "action.requested", ...base, ts_ms: started, redelivered: control.redelivered === true, turn_id: typeof control.turn_id === "string" ? control.turn_id : null });
 
     let response: Record<string, unknown>;
@@ -186,6 +187,10 @@ export class ActionBroker {
       reason: verdict.reason,
       turn_id: verdict.turnId,
     });
+    this.deps.log(
+      "execution",
+      `call ${callId} policy: ${prepared.action} effect=${prepared.effect} provenance=${verdict.provenance} → ${verdict.decision} (${verdict.reason})`,
+    );
 
     this.checkPermissions(prepared);
 
@@ -209,6 +214,7 @@ export class ActionBroker {
     // Anything that may have changed what is on screen is checked by looking:
     // hold the answer until a frame taken after the action has gone out.
     const look = prepared.effect === "read" ? undefined : await this.deps.lookAfter?.(this.now());
+    if (look !== undefined) this.deps.log("execution", `call ${callId} checked by looking: ${String(look)}`);
     this.deps.event({
       type: "action.completed",
       ...base,

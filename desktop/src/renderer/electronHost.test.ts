@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LiveEvent } from "@gnsis/ui";
-import type { GnsisBridge, LinkState, ScreenUpdate } from "./bridge.js";
+import type { GnsisBridge, LinkState, ScreenUpdate, TurnResult } from "./bridge.js";
 import { ElectronLiveHost, type Devices } from "./electronHost.js";
 
 /**
@@ -24,6 +24,10 @@ class FakeBridge implements GnsisBridge {
   requestPermission = async () => "granted";
   sendControl = (c: unknown) => { this.controls.push(c); };
   sendHostEvent = (e: unknown) => { this.hostEvents.push(e); };
+  turns: string[] = [];
+  /** What the main process answers when a typed turn is sent. */
+  turnResult: TurnResult = { ok: true, turnId: "typed-1" };
+  sendTurn = async (text: string) => { this.turns.push(text); return this.turnResult; };
   hostLog = (l: string) => { this.logs.push(l); };
   linkState = async () => this.state;
   reconnect = () => { this.reconnects++; };
@@ -46,7 +50,7 @@ class FakeBridge implements GnsisBridge {
   interrupted() { this.handlers.interrupted?.(); }
 }
 
-function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
+function fakeDevices(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void> } = {}) {
   const calls: string[] = [];
   const devices: Devices & { calls: string[]; micActive: boolean; playing: boolean } = {
     calls,
@@ -55,7 +59,12 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
     mic: {
       get active() { return devices.micActive; },
       onLevel: undefined,
-      async start() { calls.push("mic.start"); if (opts.micError) throw opts.micError; devices.micActive = true; },
+      async start() {
+        calls.push("mic.start");
+        if (opts.micGate) await opts.micGate;
+        if (opts.micError) throw opts.micError;
+        devices.micActive = true;
+      },
       stop() { calls.push("mic.stop"); devices.micActive = false; },
     },
     playback: {
@@ -79,7 +88,7 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
   return devices;
 }
 
-function harness(opts: { micError?: Error; visionError?: Error; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number } = {}) {
+function harness(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void>; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number } = {}) {
   const bridge = new FakeBridge();
   if (opts.ready === false) bridge.state = { ready: null, connected: false, closed: false };
   if (opts.state) bridge.state = opts.state;
@@ -314,4 +323,80 @@ test("a refused screen share is a denied state with instructions, not a crash", 
   await assert.rejects(host.startVision("screen"), /Screen recording was not allowed/);
   const last = events.at(-1);
   assert.ok(last && last.type === "vision" && last.state === "denied" && last.source === "screen");
+});
+
+test("End pressed while the microphone is still opening: it closes again and live never starts", async () => {
+  let open!: () => void;
+  const micGate = new Promise<void>((resolve) => (open = resolve));
+  const { bridge, devices, events, host } = harness({ micGate });
+  await tick();
+  const attempt = host.startLive();
+  await tick();
+  assert.deepEqual(devices.calls, ["mic.start"], "the microphone is being opened");
+  await host.endLive();
+  open();
+  await attempt;
+  assert.deepEqual(devices.calls, ["mic.start", "mic.stop"], "it is closed again as soon as it opens");
+  assert.equal(devices.micActive, false);
+  assert.deepEqual(bridge.endCalls, ["cancelled_while_starting"], "the call it opened is closed");
+  assert.ok(!events.some((e) => e.type === "mic" && e.state === "on"), "the UI is never told the microphone is on");
+  assert.ok(bridge.logs.some((l) => l.includes("cancelled while the microphone was opening")));
+});
+
+test("End while connecting, then start again: the second attempt waits for the first to unwind", async () => {
+  let open!: () => void;
+  const micGate = new Promise<void>((resolve) => (open = resolve));
+  const { bridge, devices, events, host } = harness({ micGate });
+  await tick();
+  const first = host.startLive();
+  await tick();
+  await host.endLive();
+  const second = host.startLive();
+  await tick();
+  assert.deepEqual(devices.calls, ["mic.start"], "the second attempt does not touch the microphone while the first still holds it");
+  open();
+  await first;
+  await second;
+  assert.deepEqual(devices.calls, ["mic.start", "mic.stop", "mic.start"]);
+  assert.equal(devices.micActive, true, "the second attempt ends up live");
+  assert.equal(bridge.startCalls, 2);
+  assert.deepEqual(events.filter((e) => e.type === "mic").map((e) => (e as { state: string }).state), ["on"]);
+});
+
+test("the log tells a live start apart at every stage: requested, waiting, cancelled", async () => {
+  const { bridge, host } = harness({ ready: false });
+  await tick();
+  const attempt = host.startLive();
+  await tick();
+  await host.endLive();
+  await attempt;
+  assert.ok(bridge.logs.includes("live requested"));
+  assert.ok(bridge.logs.includes("live: waiting for the runtime to be ready"));
+  assert.ok(bridge.logs.includes("live: cancelled while connecting"));
+  assert.equal(bridge.startCalls, 0);
+});
+
+test("typing is offered only when the runtime says it answers typed turns", async () => {
+  const quiet = harness();
+  await tick();
+  assert.equal(quiet.host.capabilities().text, false, "a runtime that only records typed turns does not get typing");
+  await assert.rejects(quiet.host.sendText("Open YouTube"), /Typing isn’t connected/);
+  assert.deepEqual(quiet.bridge.turns, [], "nothing is sent");
+
+  const { bridge, host, events } = harness({ ready: false });
+  await tick();
+  bridge.control({ type: "ready", session_id: "s1", typed_turns: true });
+  assert.equal(host.capabilities().text, true);
+  assert.deepEqual(events.at(-1), { type: "link", state: "ready", detail: undefined }, "the UI hears the link change, and re-reads what it can do");
+  await host.sendText("  Open YouTube and search Andrew Tate  ");
+  assert.deepEqual(bridge.turns, ["Open YouTube and search Andrew Tate"], "the words go to the main process, trimmed");
+  assert.ok(bridge.logs.some((l) => l === "typed turn typed-1 accepted"));
+
+  bridge.turnResult = { ok: false, reason: "GNSIS didn’t confirm it got your message. Try again in a moment." };
+  await assert.rejects(host.sendText("Again"), /didn’t confirm it got your message/);
+  await assert.rejects(host.sendText("   "), /nothing to send/);
+
+  const late = harness({ state: { ready: { type: "ready", typed_turns: true }, connected: true, closed: false } });
+  await tick();
+  assert.equal(late.host.capabilities().text, true, "a ready that went by before the page loaded counts too");
 });

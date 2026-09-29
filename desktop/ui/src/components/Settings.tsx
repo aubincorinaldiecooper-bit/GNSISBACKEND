@@ -18,6 +18,8 @@ const SECTIONS: { id: Section; label: string }[] = [
 export function Settings() {
   const identity = useStore((s) => s.identity);
   const caps = useStore((s) => s.caps);
+  // Stand-in agents exist only in demo mode; the real app never offers them.
+  const demo = useStore((s) => s.demo);
   const [section, setSection] = useState<Section>("profile");
   // These switches are the product's intended settings; nothing reads them yet.
   const [tg, setTg] = useState({ findable: true, autosend: true, speak: false, approve: true, browser: true, nFinish: true, nNeeds: true, nSound: false, motion: false });
@@ -126,9 +128,11 @@ export function Settings() {
                   <Row title="Back up your key" desc="If this computer is lost, a backup is the only way to get your GNSIS back."><button type="button" className="btn-secondary" disabled title="Not in this build yet">Back up…</button></Row>
                   <Row title="Conversation history" desc="Stored on this computer."><button type="button" className="btn-secondary" disabled title="Not in this build yet">Clear history…</button></Row>
                 </Group>
-                <Group title="Developer">
-                  <Row title="Load demo agents" desc="Fills the dock with sample agents so every state can be reviewed."><button type="button" className="btn-secondary" onClick={() => { actions.loadDemo(); setState({ settingsOpen: false }); }}>Load</button></Row>
-                </Group>
+                {demo && (
+                  <Group title="Developer">
+                    <Row title="Load demo agents" desc="Fills the dock with sample agents so every state can be reviewed."><button type="button" className="btn-secondary" onClick={() => { actions.loadDemo(); setState({ settingsOpen: false }); }}>Load</button></Row>
+                  </Group>
+                )}
                 <Group>
                   <Row title="Erase GNSIS from this computer" desc="Deletes your key, agents and history here. This can’t be undone.">
                     <button type="button" className="btn-danger" onClick={async () => {

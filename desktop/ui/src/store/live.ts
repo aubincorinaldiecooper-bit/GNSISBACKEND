@@ -11,10 +11,20 @@ import type { LinkState, LiveEvent } from "../host";
 import type { Turn } from "../demo/data";
 import { clock } from "../lib/platform";
 
+/**
+ * What the session is really doing, from device truth, never from intent:
+ * `connecting` until the host reports the microphone on, `responding` while a
+ * reply is actually playing, `listening` otherwise.
+ */
+export type LivePhase = "connecting" | "listening" | "responding";
+
 export interface LiveState {
   /** The conversation the words land in. */
   to: string;
   startedAt: number;
+  phase: LivePhase;
+  /** When the microphone really came on. The clock counts from here, not from the button press. */
+  listeningSince: number | null;
   muted: boolean;
   link: LinkState;
   linkDetail?: string;
@@ -41,6 +51,8 @@ export function startLiveState(to: string, now: number, link: LinkState): LiveSt
   return {
     to,
     startedAt: now,
+    phase: "connecting",
+    listeningSince: null,
     muted: false,
     link,
     agent: null,
@@ -86,11 +98,16 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
     }
     case "agent.cut": {
       if (live.agent?.text.trim()) commit.push(agentTurn(cutText(live.agent.text)));
-      next = { ...live, agent: null, agentSpeaking: false, agentLevel: 0 };
+      next = { ...live, agent: null, agentSpeaking: false, agentLevel: 0, phase: settle(live.phase, false) };
       break;
     }
     case "agent.speaking":
-      next = { ...live, agentSpeaking: ev.speaking, agentLevel: ev.speaking ? live.agentLevel : 0 };
+      next = {
+        ...live,
+        agentSpeaking: ev.speaking,
+        agentLevel: ev.speaking ? live.agentLevel : 0,
+        phase: settle(live.phase, ev.speaking),
+      };
       break;
     case "agent.level":
       next = { ...live, agentLevel: clamp(ev.level) };
@@ -127,6 +144,11 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
           ended: { reason: ev.detail || (ev.state === "denied" ? "The microphone was not allowed." : "The microphone stopped.") },
         };
       }
+      // The one event that means the microphone is really capturing: only
+      // now does the session listen, and only now does its clock start.
+      if (ev.state === "on" && live.phase === "connecting") {
+        next = { ...live, phase: live.agentSpeaking ? "responding" : "listening", listeningSince: now };
+      }
       break;
     }
     case "action": {
@@ -143,7 +165,8 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
   return { live: next, commit };
 }
 
-function actionLine(state: string, text: string): string | null {
+/** The line an action's outcome leaves in the chat; its start leaves none. */
+export function actionLine(state: string, text: string): string | null {
   const said = text.trim();
   if (!said) return null;
   switch (state) {
@@ -160,12 +183,24 @@ function actionLine(state: string, text: string): string | null {
   }
 }
 
-/** The turns still open when live ends, plus the closing line. */
+/** A reply playing makes the session respond; anything else leaves it listening, once it is listening at all. */
+function settle(phase: LivePhase, speaking: boolean): LivePhase {
+  if (phase === "connecting") return phase;
+  return speaking ? "responding" : "listening";
+}
+
+/**
+ * The turns still open when live ends, plus the closing line. A session that
+ * never got its microphone was never a conversation: it leaves no duration
+ * line, only the reason it stopped, if it was not the person's choice.
+ */
 export function endLiveTurns(live: LiveState, now: number, note?: string): Turn[] {
   const out: Turn[] = [];
   if (live.agent?.text.trim()) out.push(agentTurn(live.agentSpeaking ? cutText(live.agent.text) : live.agent.text));
   if (live.user) out.push({ role: "user", text: live.user.text, spoken: true, spokenMs: Math.max(0, now - live.user.startedAt) });
-  out.push({ role: "system", text: `Live conversation · ${clock(Math.max(1000, now - live.startedAt))}` });
+  if (live.listeningSince !== null) {
+    out.push({ role: "system", text: `Live conversation · ${clock(Math.max(1000, now - live.listeningSince))}` });
+  }
   if (note) out.push({ role: "system", text: note });
   return out;
 }
@@ -180,6 +215,8 @@ export function openTurns(live: LiveState): Turn[] {
 
 export interface LiveInfo {
   on: boolean;
+  /** Pressed, but the microphone is not capturing yet: nothing the person says is heard. */
+  connecting: boolean;
   name: string;
   agentNow: boolean;
   userNow: boolean;
@@ -189,19 +226,20 @@ export interface LiveInfo {
 }
 
 export function liveInfo(live: LiveState | null, name: string, now: number): LiveInfo {
-  if (!live) return { on: false, name: "", agentNow: false, userNow: false, amp: 0, status: "", muted: false };
-  const agentNow = live.agentSpeaking;
-  const userNow = !live.muted && live.userSpeaking;
-  const t = clock(now - live.startedAt);
+  if (!live) return { on: false, connecting: false, name: "", agentNow: false, userNow: false, amp: 0, status: "", muted: false };
+  const connecting = live.phase === "connecting";
+  const agentNow = !connecting && live.agentSpeaking;
+  const userNow = !connecting && !live.muted && live.userSpeaking;
+  const t = clock(now - (live.listeningSince ?? now));
   let status: string;
-  if (live.link === "connecting") status = "Connecting…";
-  else if (live.link === "error") status = "Couldn’t connect";
+  if (live.link === "error") status = "Couldn’t connect";
   else if (live.link === "closed") status = "Not connected";
+  else if (connecting || live.link === "connecting") status = "Connecting to GNSIS…";
   else if (userNow) status = `Listening · ${t}`;
   else if (agentNow) status = `${name} is speaking · ${t}`;
   else status = (live.muted ? "You’re muted · " : "Listening · ") + t;
   const amp = agentNow ? live.agentLevel : userNow ? live.userLevel : 0;
-  return { on: true, name, agentNow, userNow, amp, status, muted: live.muted };
+  return { on: true, connecting, name, agentNow, userNow, amp, status, muted: live.muted };
 }
 
 /** Five bars for the armed button: real level, with a little motion so speech reads as speech. */

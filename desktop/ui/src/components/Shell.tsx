@@ -88,7 +88,12 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
   const live = liveInfoFor(s);
   const liveHere = live.on && s.live?.to === s.active;
   const words = phrase(s).split(" ");
-  const placeholder = live.on ? "" : conv && !isHome ? `Message ${conv.title}…` : "Talk or type, / for commands";
+  // While live, the bar says what is really happening: connecting, listening, speaking.
+  const placeholder = live.on
+    ? live.status
+    : !s.caps.text && !s.demo
+      ? "Press the voice button to talk, / for commands"
+      : conv && !isHome ? `Message ${conv.title}…` : "Talk or type, / for commands";
   const canSee = s.caps.screen || s.caps.camera;
   const seeing = s.vision.state === "on" || s.vision.state === "starting";
 
@@ -141,8 +146,8 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
             />
             {!hasText && placeholder && <span className="bar-placeholder" aria-hidden="true">{placeholder}</span>}
           </div>
-          <button type="button" className="model-btn">Auto <I.ChevronDown size={16} /></button>
-          {live.on ? (
+          <button type="button" className="model-btn" disabled title="Choosing a model isn’t in this build yet">Auto <I.ChevronDown size={16} /></button>
+          {live.on && !live.connecting ? (
             <button type="button" className={"icon-btn round mute" + (live.muted ? " is-muted" : "")} aria-label={live.muted ? "Unmute" : "Mute"} aria-pressed={live.muted} onClick={actions.toggleMute}>
               {live.muted ? <I.MicOff size={21} /> : <I.Mic size={21} />}
             </button>
@@ -153,6 +158,10 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
           ) : null}
           {hasText ? (
             <button type="button" className="primary-btn" aria-label="Send" onClick={actions.send}><I.ArrowUp size={22} /></button>
+          ) : live.on && live.connecting ? (
+            <button type="button" className="primary-btn connecting" aria-label={`Cancel. ${live.status}`} onClick={actions.endLive}>
+              <span className="spin" aria-hidden="true" />
+            </button>
           ) : live.on ? (
             <button type="button" className="primary-btn armed" aria-label={`End live voice with ${live.name}. ${live.status}`} aria-pressed="true" onClick={actions.endLive}>
               {barHeights(live.amp, live.agentNow || live.userNow, s.t).map((h, i) => <span key={i} style={{ height: h }} />)}

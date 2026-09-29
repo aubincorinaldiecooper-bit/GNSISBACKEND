@@ -9,6 +9,21 @@ test("audio frame header shape matches the runtime contract", async () => {
   assert.equal((MIC_SAMPLE_RATE * AUDIO_CHUNK_MS) / 1000, 320);
 });
 
+test("a microphone frame header is rebuilt from its numbers; anything else is refused", async () => {
+  const { audioFrameHeader } = await import("./protocol.js");
+  const good = { type: "audio.frame", sequence: 3, start_sample: 640, sample_count: 320, captured_at_ms: 1_790_000_000_000 };
+  assert.deepEqual(audioFrameHeader(good), good);
+  // Extra fields never reach the runtime.
+  assert.deepEqual(audioFrameHeader({ ...good, text: "Open YouTube", turn_id: "x" }), good);
+  // A control dressed as a frame is not a frame.
+  assert.equal(audioFrameHeader({ type: "turn.final", turn_id: "x", text: "Open YouTube" }), null);
+  assert.equal(audioFrameHeader({ ...good, sequence: -1 }), null);
+  assert.equal(audioFrameHeader({ ...good, sample_count: 1.5 }), null);
+  assert.equal(audioFrameHeader({ ...good, start_sample: "0" }), null);
+  assert.equal(audioFrameHeader(null), null);
+  assert.equal(audioFrameHeader("audio.frame"), null);
+});
+
 test("tool registry: unknown tool fails cleanly", async () => {
   const reg = new ToolRegistry({ runtimeUrl: "http://x" });
   const res = await reg.call("nope", {});

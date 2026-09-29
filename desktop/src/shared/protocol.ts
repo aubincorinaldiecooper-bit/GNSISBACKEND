@@ -17,6 +17,26 @@ export interface AudioFrameHeader {
   captured_at_ms: number;
 }
 
+/**
+ * The header main forwards for a microphone frame, rebuilt from its numbers.
+ *
+ * The renderer's object is never sent on as it is: the runtime reads any JSON
+ * text frame as a control, so passing it through would let the renderer send
+ * the runtime any control it liked with a frame of audio attached. Anything
+ * that is not a well-formed frame header is refused.
+ */
+export function audioFrameHeader(value: unknown): AudioFrameHeader | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const count = (k: string) => (Number.isSafeInteger(v[k]) && (v[k] as number) >= 0 ? (v[k] as number) : null);
+  const sequence = count("sequence");
+  const start = count("start_sample");
+  const samples = count("sample_count");
+  const at = count("captured_at_ms");
+  if (v.type !== "audio.frame" || sequence === null || start === null || samples === null || at === null) return null;
+  return { type: "audio.frame", sequence, start_sample: start, sample_count: samples, captured_at_ms: at };
+}
+
 export type VideoSource = "screen" | "camera";
 
 export interface ScreenFrameMetadata {

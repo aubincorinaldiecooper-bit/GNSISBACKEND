@@ -23,6 +23,7 @@ import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
+import { TypedTurns } from "../host/typedTurns.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
 import { hostLog } from "./hostLog.js";
@@ -32,7 +33,7 @@ import {
   ElectronShortcuts,
 } from "../host/electronMain.js";
 import type { HostEvent } from "../host/protocol.js";
-import type { AudioFrameHeader, ClientControl, ScreenFrameMetadata } from "../shared/protocol.js";
+import { audioFrameHeader, type ClientControl, type ScreenFrameMetadata } from "../shared/protocol.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { HOST_TOOL_SCHEMAS, HOST_TOOLS_VERSION } from "../tools/catalog.js";
 import { FilesTool } from "../tools/files.js";
@@ -124,6 +125,14 @@ const utterances =
         log: hostLog,
       })
     : null;
+// What the person types, sent as their own turn on this connection and kept
+// in the same TurnLog once the runtime accepts it. See host/typedTurns.ts.
+const typedTurns = new TypedTurns({
+  send: (control) => host.sendControl(control as unknown as ClientControl),
+  turns,
+  ready: () => host.connected && lastReady !== null && !duplexClosed,
+  log: hostLog,
+});
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
@@ -144,6 +153,7 @@ const host = new HostSession({
   onControl: (c) => {
     broker.handleControl(c as Record<string, unknown>);
     utterances?.handleControl(c as Record<string, unknown>);
+    typedTurns.handleControl(c as Record<string, unknown>);
     const type = (c as { type?: string })?.type;
     if (type === "ready") {
       lastReady = c;
@@ -161,6 +171,7 @@ const host = new HostSession({
   onClosed: (code) => {
     duplexClosed = true;
     hostLog("transport", `duplex closed code=${code}`);
+    typedTurns.abandonAll();
     sendToRenderer("duplex:closed", code, "");
   },
   onScreen: (update) => {
@@ -341,6 +352,7 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
+  ipcMain.handle("turn:text", (_e, text: unknown) => typedTurns.send(text));
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
@@ -356,15 +368,31 @@ app.whenReady().then(async () => {
     host.connect(SESSION_ID);
     host.ready();
   });
-  ipcMain.on("call:start", () => host.startCall());
+  // How much microphone audio a call really sent: the first frame, and the
+  // total when it ends, so "the mic was on but nothing arrived" shows in the log.
+  let callFrames = 0;
+  let droppedFrames = 0;
+  ipcMain.on("call:start", () => {
+    callFrames = 0;
+    hostLog("host", "call started");
+    host.startCall();
+  });
   ipcMain.on("call:end", (_e, reason) => {
     const why = typeof reason === "string" && reason ? reason : "renderer";
-    hostLog("host", `call ended reason=${why}`);
+    hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
     host.endCall(why, { stop: false });
   });
-  ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) => {
+  ipcMain.on("duplex:audioFrame", (_e, raw: unknown, pcm: unknown) => {
+    const header = audioFrameHeader(raw);
+    if (!header || !(pcm instanceof Uint8Array)) {
+      // Once, then every 500th: a steady stream of bad frames would bury the log.
+      if (droppedFrames++ % 500 === 0) hostLog("audio", `a microphone frame was not well formed; dropped (${droppedFrames} so far)`);
+      return;
+    }
     const audio = Buffer.from(pcm);
     host.sendAudioFrame(header, audio);
+    callFrames += 1;
+    if (callFrames === 1) hostLog("audio", `first microphone frame sent (${audio.byteLength} bytes)`);
     utterances?.feed(header, audio);
   });
   if (utterances) setInterval(() => utterances.idle(Date.now()), 1_000);

@@ -1,6 +1,6 @@
 import { AGENT_ANSWER, AGENT_STEPS, APPROVAL, STEP_TICKS, type Conv, type Turn } from "../demo/data";
-import { actions, getState, isWorking, liveTurnsFor, phrase, presence, setState, useStore, type State } from "../store/store";
-import { AgentFace, Face } from "../lib/face";
+import { actions, activity, getState, isWorking, liveTurnsFor, phrase, presence, setState, useStore, type State } from "../store/store";
+import { AgentFace, Face, ThinkingDots } from "../lib/face";
 import { clock } from "../lib/platform";
 import * as I from "./Icons";
 
@@ -18,12 +18,8 @@ export function ChatWindow({ height }: { height: number | "auto" }) {
           {conv.kind === "agent" && <AgentSteps s={s} c={conv} />}
           <Turns s={s} c={conv} />
           {s.listening && s.listenTo === conv.id && <LiveBubble s={s} />}
+          <Pending s={s} c={conv} />
           {conv.stopped && <div className="muted small">Stopped</div>}
-          {s.panelHidden && (
-            <button type="button" className="ghost-btn start" onClick={() => setState({ panelHidden: false })}>
-              <I.PanelIcon size={18} /> Show panel
-            </button>
-          )}
         </div>
       </div>
     </section>
@@ -53,7 +49,54 @@ function Tabs({ s }: { s: State }) {
           );
         })}
       </div>
+      <ActivityButton s={s} />
       <button type="button" className="icon-btn" aria-label="New chat" onClick={() => actions.openAgent("gnsis")}><I.Plus /></button>
+    </div>
+  );
+}
+
+/**
+ * Opens and closes the Activity drawer. It never opens by itself: an agent
+ * that needs the person turns it orange, one at work gives it a moving dot,
+ * and finished results the person has not seen are counted on it.
+ */
+function ActivityButton({ s }: { s: State }) {
+  const a = activity(s);
+  const open = !s.panelHidden;
+  const note = a.needs ? `, ${a.needs} need${a.needs === 1 ? "s" : ""} you` : a.working ? `, ${a.working} working` : a.unread ? `, ${a.unread} new` : "";
+  return (
+    <button
+      type="button"
+      className={"icon-btn activity-btn" + (open ? " is-open" : "") + (a.needs ? " needs" : "")}
+      aria-label={(open ? "Hide activity" : "Show activity") + note}
+      aria-pressed={open}
+      onClick={actions.toggleActivity}
+    >
+      <I.PanelIcon size={20} />
+      {a.needs > 0 ? (
+        <span className="mark-needs" aria-hidden="true">!</span>
+      ) : a.working > 0 ? (
+        <span className="mark-dot is-working activity-working" aria-hidden="true" />
+      ) : a.unread > 0 ? (
+        <span className="mark-badge" aria-hidden="true">{a.unread}</span>
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * What happens after a typed message, until GNSIS answers: sending, then
+ * working — with what GNSIS is doing on the computer, when it is doing
+ * something. Outcomes land in the thread as lines; this only fills the wait.
+ */
+function Pending({ s, c }: { s: State; c: Conv }) {
+  let text: string | null = null;
+  if (s.working?.to === c.id) text = `Working: ${s.working.text}`;
+  else if (s.awaiting?.to === c.id) text = s.awaiting.state === "sent" ? "Sending…" : `${c.title} is working on it`;
+  if (!text) return null;
+  return (
+    <div className="pending-line" role="status" aria-live="polite">
+      <ThinkingDots /> <span>{text}</span>
     </div>
   );
 }

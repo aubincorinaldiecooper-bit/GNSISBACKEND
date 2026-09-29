@@ -23,6 +23,12 @@ export interface GnsisBridge {
   requestPermission(kind: string): Promise<string>;
   sendControl(control: unknown): void;
   sendHostEvent(event: unknown): void;
+  /**
+   * What the person typed, sent by the main process as their `turn.final` on
+   * its own runtime connection, exactly as their spoken words are, and kept
+   * as a trusted turn once the runtime accepts it.
+   */
+  sendTurn(text: string): Promise<TurnResult>;
   hostLog(line: string): void;
   /** What the main process knows about the runtime link right now. */
   linkState(): Promise<LinkState>;
@@ -42,6 +48,8 @@ export interface GnsisBridge {
   /** What GNSIS is doing or did on this computer (main's ActionBroker). */
   onAction(fn: (update: ActionUpdate) => void): void;
 }
+
+export type TurnResult = { ok: true; turnId: string } | { ok: false; reason: string };
 
 export interface ActionUpdate {
   callId: string;

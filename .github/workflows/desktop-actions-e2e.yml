@@ -46,6 +46,8 @@ jobs:
         run: desktop/scripts/e2e-actions.sh files-move-asked
       - name: Move a real file; the person's words, transcribed through the runtime, cover it
         run: desktop/scripts/e2e-actions.sh files-move-spoken
+      - name: Move a real file; the person's typed words, accepted by the runtime, cover it
+        run: desktop/scripts/e2e-actions.sh files-move-typed
       - name: Open a real Mac app through the same path
         if: runner.os == 'macOS'
         run: desktop/scripts/e2e-actions.sh open-app '{"name":"open","arguments":{"target":"TextEdit"}}'
