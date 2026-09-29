@@ -14,3 +14,12 @@ This subtree implements the GNSIS Desktop Host. In addition to the repository-ro
 
 - **Host correctness gate is binding.** Before computer-use baselines, fix and measure: socket errors must not crash Electron main; streamed playback chunks must not overlap; daemon playback cancellation must stop/discard stale local audio and emit authoritative cancellation; worklet resampling must preserve fractional phase across callbacks and sustain the intended 16 kHz ratio; mic mute/unmute must not leave the UI sending into a dead session.
 - **Preserve shipped fixes.** Do not reopen or regress #106 preload-as-`preload.mjs` or #111 token-gated screen socket opening without concrete regression evidence.
+
+## Interface rules — set by the owner, 29 September 2026
+
+These are the owner's instructions. They bind every change to the GNSIS interface under `desktop/ui/**` and the Electron renderer.
+
+- **Beautiful UI only.** Every visible part of the GNSIS interface comes from the Beautiful UI kit (https://github.com/slev12397/beautiful-ui), used as the kit ships it: its components and its design tokens. Do not design, draw or style interface elements of your own, and do not imitate or re-create a kit component instead of using it. Arranging the kit's components and filling them with GNSIS's content is the only work allowed on top of the kit.
+- **When the kit has nothing for a need, stop and ask.** Say plainly what is missing and wait for the owner's decision. Never fill the gap with home-made UI, however small.
+- **Dark mode only.** GNSIS uses the kit's dark theme. There is no light mode and no switch between them.
+- **Show before building.** Every change is shown to the owner first — pictures or a video made from a separate mockup for anything visible, a plain-words account of what changes and what the person would notice for anything else — and nothing is written into the app, committed or pushed until the owner says yes.
