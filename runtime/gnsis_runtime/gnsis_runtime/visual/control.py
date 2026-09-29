@@ -49,17 +49,27 @@ class VisualStep:
     expected_state: ExpectedState | None = None
     target: Point | None = None
     text: str | None = None
+    option: str | None = None
     url: str | None = None
     direction: str | None = None
+    tab_id: int | None = None
+    wait_ms: int | None = None
     context: str = "browser"
     planner: str = "system1"
     confidence: float | None = None
+    # r24 is execution cleanup, never perception: off unless a step opts in.
+    resolve_target: bool = False
+    max_radius_px: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_radius_px is not None and not 0 <= self.max_radius_px <= 24:
+            raise ValueError("max_radius_px must be within 0..24")
 
     def detail(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.target is not None:
             out["target"] = self.target.to_json()
-        for name in ("text", "url", "direction"):
+        for name in ("text", "option", "url", "direction", "tab_id", "wait_ms"):
             value = getattr(self, name)
             if value is not None:
                 out[name] = value
