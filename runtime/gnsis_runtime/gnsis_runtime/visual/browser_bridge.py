@@ -519,10 +519,30 @@ class BrowserExecutor:
     def execute(self, step: VisualStep) -> ExecutionReport:
         frame = find_frame(self.screen_frames, step.frame_id)
         source_tab_id = _tab(frame_source(frame).get("tab_id"))
-        request = build_action_request(step, call_id=new_call_id(), frame=frame, source_tab_id=source_tab_id)
+        call_id = new_call_id()
+        try:
+            request = build_action_request(step, call_id=call_id, frame=frame, source_tab_id=source_tab_id)
+        except PermissionError as exc:
+            return ExecutionReport(
+                execution=Execution(actuator_success=False, call_id=call_id, error=str(exc)[:MAX_ERROR]),
+                viewport=frame.image.size if frame is not None else None,
+                metadata={
+                    "policy_blocked": True,
+                    "authority": step.authority.to_json() if step.authority is not None else None,
+                },
+            )
         self.sent.append(request)
         message = self.peer.run(self.peer.act(request, timeout_s=self.timeout_s), self.timeout_s + 5)
-        return report_from_bridge(message, request=request, frame_size=frame.image.size if frame is not None else None)
+        report = report_from_bridge(message, request=request, frame_size=frame.image.size if frame is not None else None)
+        return ExecutionReport(
+            execution=report.execution,
+            acted_at_ms=report.acted_at_ms,
+            viewport=report.viewport,
+            candidates=report.candidates,
+            target_box=report.target_box,
+            source_ref=report.source_ref,
+            metadata={**dict(report.metadata), "authority": step.authority.to_json() if step.authority is not None else None},
+        )
 
 
 class ScreenChannel:
