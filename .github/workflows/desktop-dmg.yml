@@ -2,9 +2,17 @@ name: desktop-dmg
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - "runtime/configs/gnsis-host-tools.json"
+      - ".github/workflows/desktop-dmg.yml"
   pull_request:
     paths:
       - "desktop/**"
+      - "runtime/configs/gnsis-host-tools.json"
       - ".github/workflows/desktop-dmg.yml"
 
 jobs:

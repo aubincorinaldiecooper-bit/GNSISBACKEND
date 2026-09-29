@@ -99,25 +99,6 @@
       }
     },
     {
-      "name": "browser_agent",
-      "description": "Carry out a multi-step task in the person's existing browser using GNSIS Browser visual navigation.",
-      "parameters": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "task"
-        ],
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 1000,
-            "description": "The browser task to carry out, in the person's words."
-          }
-        }
-      }
-    },
-    {
       "name": "input",
       "description": "Type, press keys, or click in the app in front, when the other tools cannot do it. Look at the screen afterwards.",
       "parameters": {

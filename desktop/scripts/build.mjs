@@ -17,7 +17,18 @@ rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist/main", { recursive: true });
 mkdirSync("dist/renderer", { recursive: true });
 
-await build({ ...shared, entryPoints: ["src/main/main.ts"], outfile: "dist/main/main.js" });
+await build({
+  ...shared,
+  // `ws` is CommonJS internally and still requires Node built-ins such as
+  // `events`. The Electron main bundle is ESM, so give esbuild's CommonJS
+  // compatibility shim a real Node require instead of the browser-style
+  // dynamic-require fallback that crashes at app startup.
+  banner: {
+    js: 'import { createRequire as __gnsisCreateRequire } from "node:module"; const require = __gnsisCreateRequire(import.meta.url);',
+  },
+  entryPoints: ["src/main/main.ts"],
+  outfile: "dist/main/main.js",
+});
 await build({ ...shared, entryPoints: ["src/preload.ts"], outfile: "dist/main/preload.mjs" });
 // The renderer is the React UI (@gnsis/ui) over the Electron host. Its
 // stylesheet and the fonts it ships come out beside the script, so the

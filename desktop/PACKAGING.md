@@ -34,15 +34,17 @@ artifact uploads.
 The packaged app resolves the runtime in this order:
 
 1. `GNSIS_RUNTIME_URL` environment variable (dev/CI);
-2. `<userData>/gnsis.json` — `{"runtimeUrl": "http://127.0.0.1:8080"}`
+2. `<userData>/gnsis.json` — optional developer/local override
    (`~/Library/Application Support/GNSIS/gnsis.json` on macOS);
-3. `http://127.0.0.1:8080`.
+3. `https://gnsis.studio`.
 
-The JSON file is the supported seam for pointing an installed build at a
-remote runtime today and at `LocalGNSISProvider` later — no repackaging.
+A normal user does not configure a runtime. A fresh install connects to
+`https://gnsis.studio` automatically. The environment variable and JSON file
+remain only as supported seams for development, testing, and the future
+`LocalGNSISProvider`.
 
-To talk to the production runtime, point `runtimeUrl` at the site
-(`https://gnsis.studio`), not at the runtime's own `.modal.run` address. The
+Production traffic goes through the site, not the runtime's own
+`.modal.run` address. The
 site forwards `/ws/duplex` and `/ws/screen` and adds the two things the
 runtime requires and the app does not hold: its front-door secret
 (`X-GNSIS-Edge`) and the Modal proxy credentials. A direct connection to the
@@ -100,6 +102,11 @@ as a state, not a crash — other functionality remains usable.
 
 ## Actions on the Mac
 
+Browser use requires **no Chrome extension and no Chrome Web Store install**.
+GNSIS uses the browser the person already has open: the shared screen stream is
+the visual source, browser automation owns tabs/navigation, and the native input
+tool handles clicks, typing and keys under macOS Accessibility permission.
+
 When the model asks GNSIS to do something — open an app or a site, move or
 rename a file, use the open browser, type or click — the runtime sends it to
 this app, which does it and answers. The four tools are listed in
@@ -138,8 +145,8 @@ really a link into a hidden, system or outside place is treated as that place.
 1. Deploy the runtime from this commit (`modal deploy modal/gnsis_voice.py`,
    or the worker's deploy route), then run `scripts/verify-modal-gnsis.py`:
    `/health` lists `host_tools` with version `desktop-v1`.
-2. Install the DMG from this commit's `desktop-dmg` run, point
-   `gnsis.json` at `https://gnsis.studio`, start it. The host log
+2. Install the DMG from this commit's `desktop-dmg` run and start it. A
+   fresh install connects to `https://gnsis.studio` automatically. The host log
    (`~/Library/Application Support/GNSIS/logs/gnsis-host.log`) shows
    `actions offered: open,files,browser,input` and `tools agreed with runtime:`
    with the same four.
