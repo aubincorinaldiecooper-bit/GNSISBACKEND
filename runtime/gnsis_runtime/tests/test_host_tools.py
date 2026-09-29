@@ -229,7 +229,7 @@ def test_the_shipped_catalog_is_what_the_desktop_speaks():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
     assert catalog is not None
     assert catalog.version == "desktop-v1"
-    assert catalog.names() == ("open", "files", "browser", "input")
+    assert catalog.names() == ("open", "files", "browser", "browser_agent", "input")
 
 
 def test_a_desktop_is_shown_only_the_tools_it_offered():
