@@ -2,11 +2,13 @@ from pathlib import Path
 
 import pytest
 
+from gnsis_runtime.screen import LatestScreenFrameBuffer, ScreenFrame
 from gnsis_runtime.visual.real_runs import (
     BrowserExecutionEvidence,
     RealRunConsent,
     RealRunCoordinator,
     RealRunRecorder,
+    wait_for_post_action_frames,
 )
 
 
@@ -115,3 +117,23 @@ def test_no_post_frame_is_not_falsely_marked_failed(tmp_path: Path):
     )
     assert record.verified_success is None
     assert record.verification_reason == "no post-action visual frame available"
+
+
+
+def test_waits_for_frames_newer_than_action_source():
+    buffer = LatestScreenFrameBuffer(max_history_frames=8)
+    buffer.publish(ScreenFrame("f-1", object(), captured_at_ms=100))
+    buffer.consume_for_unit()
+
+    buffer.publish(ScreenFrame("f-2", object(), captured_at_ms=200))
+    buffer.consume_for_unit()
+    buffer.publish(ScreenFrame("f-3", object(), captured_at_ms=300))
+    buffer.consume_for_unit()
+
+    assert wait_for_post_action_frames(
+        buffer,
+        before_frame_id="f-1",
+        timeout_ms=0,
+        min_frames=1,
+        max_frames=2,
+    ) == ("f-2", "f-3")
