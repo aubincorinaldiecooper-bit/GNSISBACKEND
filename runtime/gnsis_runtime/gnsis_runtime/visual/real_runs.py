@@ -218,6 +218,40 @@ class RealRunCoordinator:
         return record
 
 
+    def finalize_from_history(
+        self,
+        *,
+        screen_frames: LatestScreenFrameBuffer,
+        run_id: str,
+        case_id: str,
+        frame_id: str,
+        goal: str,
+        action: str,
+        execution: dict[str, Any],
+        source_ref: str | None = None,
+        user_corrected: bool = False,
+        metadata: dict[str, Any] | None = None,
+        timeout_ms: int = 1500,
+    ) -> RealRunRecord:
+        post_frame_ids = wait_for_post_action_frames(
+            screen_frames,
+            before_frame_id=frame_id,
+            timeout_ms=timeout_ms,
+        )
+        return self.finalize(
+            run_id=run_id,
+            case_id=case_id,
+            frame_id=frame_id,
+            goal=goal,
+            action=action,
+            execution=execution,
+            post_frame_ids=post_frame_ids,
+            source_ref=source_ref,
+            user_corrected=user_corrected,
+            metadata=metadata,
+        )
+
+
 
 def wait_for_post_action_frames(
     screen_frames: LatestScreenFrameBuffer,
