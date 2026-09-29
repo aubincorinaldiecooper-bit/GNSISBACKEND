@@ -56,6 +56,7 @@ class ActionAuthority:
     policy_decision: PolicyDecision
     policy_reason: str
     capability_manifest_id: str
+    allowed_actions: tuple[str, ...]
     confirmation: ConfirmationState = "not_required"
 
     def __post_init__(self) -> None:
@@ -70,6 +71,10 @@ class ActionAuthority:
             raise ValueError("invalid policy decision")
         if self.confirmation not in {"not_required", "approved", "denied", "missing"}:
             raise ValueError("invalid confirmation state")
+        allowed = tuple(dict.fromkeys(str(action).strip() for action in self.allowed_actions if str(action).strip()))
+        if not allowed:
+            raise ValueError("allowed_actions must name at least one capability")
+        object.__setattr__(self, "allowed_actions", allowed)
 
     @property
     def execution_allowed(self) -> bool:
@@ -86,6 +91,7 @@ class ActionAuthority:
             "policy_decision": self.policy_decision,
             "policy_reason": self.policy_reason,
             "capability_manifest_id": self.capability_manifest_id,
+            "allowed_actions": list(self.allowed_actions),
             "confirmation": self.confirmation,
         }
 
