@@ -84,7 +84,7 @@ class ActionAuthority:
             return self.confirmation == "approved"
         return self.confirmation in {"not_required", "approved"}
 
-    def to_json(self) -> dict[str, str]:
+    def to_json(self) -> dict[str, Any]:
         return {
             "turn_id": self.turn_id,
             "provenance": self.provenance,
