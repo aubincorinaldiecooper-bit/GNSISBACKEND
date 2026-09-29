@@ -62,7 +62,12 @@ export function judge(action: PreparedAction, turn: TrustedTurn | null, nowMs: n
   const fresh = turn != null && nowMs - turn.endedAtMs <= TURN_FRESH_MS && nowMs >= turn.endedAtMs - 5_000;
   const provenance: Provenance = !fresh
     ? "unknown"
-    : action.scope.every((target) => target.source === "selection" || saidIn(target.value, turn!.text))
+    : action.scope.every(
+          (target) =>
+            target.source === "selection" ||
+            saidIn(target.value, turn!.text) ||
+            (target.also ?? []).some((name) => saidIn(name, turn!.text)),
+        )
       ? "direct_user"
       : "mixed";
   const turnId = fresh ? turn!.turnId : null;

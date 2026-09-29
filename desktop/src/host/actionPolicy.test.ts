@@ -96,3 +96,26 @@ test("a reason goes into the log without the words it quotes", () => {
   assert.equal(reasonForLog(reason), "always asked: clicking “…” may send, buy, delete or commit something");
   assert.equal(reasonForLog("asked for in the person's own words"), "asked for in the person's own words");
 });
+
+test("everyday shortcuts are named by what they do, as well as by their key", async () => {
+  const { InputTool } = await import("../tools/mac/input.js");
+  const shell = { run: async () => ({ code: 0, stdout: "", stderr: "" }) };
+  const input = new InputTool(shell, { bounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) });
+  const verdict = async (keys: string, words: string) => judge(await input.prepare({ action: "keys", keys }), said(words), NOW);
+  for (const [keys, words] of [
+    ["cmd+c", "copy that"],
+    ["cmd+v", "paste it here"],
+    ["cmd+s", "save this document"],
+    ["cmd+f", "find the word budget"],
+    ["cmd+z", "undo that"],
+    ["cmd+t", "open a new tab"],
+    ["cmd+c", "press command c"],
+  ] as const) {
+    assert.equal((await verdict(keys, words)).decision, "allow", `${keys} for “${words}”`);
+  }
+  // A shortcut the person did not ask for, by name or key, is still asked about.
+  assert.equal((await verdict("cmd+v", "copy that")).decision, "confirm");
+  assert.equal((await verdict("enter", "search for pasta recipes")).decision, "confirm");
+  // Quitting is always asked about, however it is named.
+  assert.equal((await verdict("cmd+q", "quit, press command q")).decision, "confirm");
+});

@@ -27,6 +27,20 @@ const CONSEQUENTIAL_KEYS: Record<string, string> = {
   "ctrl+cmd+q": "locks the screen",
   "cmd+option+shift+q": "logs out",
 };
+/**
+ * Everyday shortcuts by what they do, so "copy that" or "save this" names
+ * cmd+c or cmd+s as surely as "press command c" does. Only these: each is
+ * one the person asks for by its name in ordinary speech, and none of them
+ * sends or deletes anything.
+ */
+const SHORTCUT_NAMES: Record<string, string[]> = {
+  "cmd+c": ["copy"],
+  "cmd+v": ["paste"],
+  "cmd+s": ["save"],
+  "cmd+f": ["find"],
+  "cmd+z": ["undo"],
+  "cmd+t": ["new tab"],
+};
 /** Button names whose press sends, buys, deletes or commits. */
 const CONSEQUENTIAL_LABEL = /\b(send|buy|pay|purchase|order|delete|remove|erase|submit|confirm|publish|post|transfer|sign|accept|agree|install|trash)\b/i;
 
@@ -83,7 +97,7 @@ export class InputTool implements ActionTool {
           action,
           effect: "input",
           summary: `Press ${combo}`,
-          scope: [{ value: combo.split("+").pop()!, source: "named" }],
+          scope: [{ value: combo.split("+").pop()!, source: "named", also: SHORTCUT_NAMES[combo] }],
           consequential: CONSEQUENTIAL_KEYS[combo] ? `${combo} ${CONSEQUENTIAL_KEYS[combo]}` : undefined,
           needs,
           run: async () => {

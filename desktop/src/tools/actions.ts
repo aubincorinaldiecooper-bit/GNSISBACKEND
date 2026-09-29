@@ -28,6 +28,11 @@ export type Verified = "disk" | "app" | "browser" | "screen" | "none";
 export interface ScopeTarget {
   value: string;
   source: "named" | "selection";
+  /**
+   * Other ways a person says the same thing, each of which counts as naming
+   * it: a shortcut by what it does ("copy" for cmd+c), not only by its key.
+   */
+  also?: string[];
 }
 
 export interface PreparedAction {
