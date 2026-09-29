@@ -49,8 +49,9 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
 
 function BrowserCard({ c }: { c: Conv }) {
   const done = Math.min(4, Math.floor((c.agentT ?? 0) / STEP_TICKS));
-  const spots = [[60, 10], [150, 30], [140, 62], [70, 130], [360, 180]];
-  const [x, y] = spots[Math.min(done, spots.length - 1)];
+  // Where it was at the panel's design width (552 px of page), as fractions of the page.
+  const spots = [[0.11, 10], [0.27, 30], [0.25, 62], [0.13, 130], [0.65, 180]];
+  const [fx, y] = spots[Math.min(done, spots.length - 1)];
   const loading = done === 0 && (c.agentT ?? 0) < AGENT_TOTAL;
   return (
     <>
@@ -68,7 +69,7 @@ function BrowserCard({ c }: { c: Conv }) {
             <div><h2>Ingredients</h2><ul><li>200 g spaghetti</li><li>100 g Pecorino Romano, finely grated</li><li>2 tsp black peppercorns, cracked</li><li>Salt for the pasta water</li></ul></div>
             <div><h2>Method</h2><ol><li>Toast the pepper in a dry pan until fragrant.</li><li>Cook the pasta and save a mug of its water.</li><li>Off the heat, toss pasta, pepper and cheese with splashes of water until glossy.</li></ol></div>
           </div>
-          <svg className="agent-cursor" style={{ left: x, top: y }} width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+          <svg className="agent-cursor" style={{ left: `calc(${fx * 100}% - 11px)`, top: y }} width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 3l15 7.5-6.5 1.8L9.7 19z" fill="#141821" stroke="#ffffff" strokeWidth="1.5" strokeLinejoin="round" />
           </svg>
         </div>

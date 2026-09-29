@@ -71,7 +71,7 @@ export function Settings() {
             {section === "profile" && (
               <>
                 <div className="card row-card"><Face name={identity.publicId} gnsis size={84} /><div><h2>Your GNSIS</h2><p className="muted">Created on this computer. Your private key never leaves it.</p></div></div>
-                <Group title="Sharing">
+                <Group title="Sharing" note={inert ? NOT_YET_NOTE : undefined}>
                   <div className="field-block">
                     <Label title="Public ID" desc="Safe to share. People can use it to find and message your GNSIS. It never reveals your private key." />
                     <div className="field-row">
@@ -128,7 +128,7 @@ export function Settings() {
             )}
             {section === "privacy" && (
               <>
-                <Group>
+                <Group note={NOT_YET_NOTE}>
                   <Row title="Private key" desc={keyNote}><span className="chip green">{identity.storage === "keychain" ? "In this Mac’s Keychain" : "On this device"}</span></Row>
                   <Row title="Back up your key" desc="If this computer is lost, a backup is the only way to get your GNSIS back."><button type="button" className="btn-secondary" disabled title="Not in this build yet">Back up…</button></Row>
                   <Row title="Conversation history" desc="This app doesn’t keep the chat: it clears when GNSIS closes.">{null}</Row>

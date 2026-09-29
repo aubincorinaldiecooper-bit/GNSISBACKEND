@@ -255,8 +255,8 @@ function lowerFirst(text: string): string {
 }
 
 function createWindow(): void {
-  // The product UI lays out a chat beside an agent panel; below ~1100 px the
-  // two overlap, so the window opens at a comfortable desktop size.
+  // The product UI keeps room for the Activity drawer beside the chat; at
+  // 1100 px the chat narrows a little to keep that room, so that is the floor.
   win = new BrowserWindow({
     width: 1440,
     height: 900,

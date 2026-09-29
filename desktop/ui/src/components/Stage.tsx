@@ -20,11 +20,12 @@ const BOTTOM = 32;
 const BAR_H = 68;
 const DOCK_H = 84;
 const GAP = 14;
-/** The chat and the bar: one width, centred, whatever else is open. */
+/** The chat and the bar at their widest. */
 export const CHAT_W = 720;
 const EDGE = 24;
 const DRAWER_GAP = 24;
-const DRAWER_MIN = 300;
+/** Narrow enough to leave room for the chat, wide enough for an agent's work to be read. */
+export const DRAWER_MIN = 440;
 const DRAWER_MAX = 600;
 
 export interface StageLayout {
@@ -36,17 +37,19 @@ export interface StageLayout {
 }
 
 /**
- * Where things go. The chat is centred and never moves or resizes when the
- * Activity drawer opens or closes; the drawer comes in at the right edge of
- * the window, as wide as the room beside the chat allows. Only a window too
- * narrow for even the narrowest drawer lets it lie over the chat's edge, the
- * way a side sheet does, rather than push the chat aside.
+ * Where things go. The chat's place depends on the window only, never on the
+ * Activity drawer, so opening or closing the drawer moves nothing. The chat
+ * is centred when the window is wide enough to keep room for the drawer
+ * beside it; otherwise it sits as far left of centre as that room needs, and
+ * on the narrowest windows it is a little narrower too. The drawer comes in
+ * at the right edge and fills the room beside the chat, never overlapping it.
  */
 export function stageLayout(w: number, h: number): StageLayout {
-  const chatLeft = Math.max(EDGE, Math.round((w - CHAT_W) / 2));
-  const room = w - EDGE - (chatLeft + CHAT_W) - DRAWER_GAP;
-  const drawerW = Math.max(Math.min(DRAWER_MIN, w - 2 * EDGE), Math.min(DRAWER_MAX, room));
-  return { chatLeft, chatW: CHAT_W, drawerLeft: w - EDGE - drawerW, drawerW, drawerH: Math.min(642, h - BOTTOM - 48) };
+  const chatW = Math.max(0, Math.min(CHAT_W, w - 2 * EDGE - DRAWER_GAP - DRAWER_MIN));
+  const chatLeft = Math.max(EDGE, Math.min(Math.round((w - chatW) / 2), w - EDGE - DRAWER_MIN - DRAWER_GAP - chatW));
+  const room = w - EDGE - (chatLeft + chatW) - DRAWER_GAP;
+  const drawerW = Math.min(DRAWER_MAX, room);
+  return { chatLeft, chatW, drawerLeft: w - EDGE - drawerW, drawerW, drawerH: Math.min(642, h - BOTTOM - 48) };
 }
 
 /**
@@ -73,7 +76,6 @@ export function Stage() {
         {winOpen && !showCommands && <ChatWindow height="auto" />}
         {showCommands && <Commands />}
       </div>
-      {/* After the chat, so on a narrow window it lies over the chat's edge, not under it. */}
       {showPanel && <AgentPanel left={drawerLeft} width={drawerW} height={drawerH} />}
       <Shell g={{ shellLeft, shellW, shellH: bar ? BAR_H : DOCK_H }} />
       {!bar && s.dockMenu && <DockMenu left={shellLeft + shellW - 300} />}

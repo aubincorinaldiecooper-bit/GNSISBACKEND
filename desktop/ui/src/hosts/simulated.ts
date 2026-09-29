@@ -19,10 +19,22 @@ export class SimulatedLiveHost implements LiveHost {
   /** Time scale: 1 = the script's own pace; tests use a small number. */
   private readonly tenth: number;
 
-  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; tenthMs?: number } = {}) {
+  /**
+   * `text`, `transcript`, `screen`, `camera`: what it claims it can do. The
+   * defaults suit design review; the preview's `?mac` claims what the Mac
+   * app can do today, so the screens show what a person there would see.
+   */
+  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; tenthMs?: number } = {}) {
     this.script = opts.script ?? (() => liveScript(null));
     this.tenth = opts.tenthMs ?? 100;
-    this.caps = { voice: true, text: true, screen: false, camera: false, transcript: opts.transcript ?? true, overlay: false };
+    this.caps = {
+      voice: true,
+      text: opts.text ?? true,
+      screen: opts.screen ?? false,
+      camera: opts.camera ?? false,
+      transcript: opts.transcript ?? true,
+      overlay: false,
+    };
   }
 
   capabilities(): HostCapabilities {

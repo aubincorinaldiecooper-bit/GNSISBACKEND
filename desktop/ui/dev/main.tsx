@@ -5,13 +5,17 @@
  *
  *   npm run ui:preview   (from desktop/)  → dist/ui-preview/, serve it over http
  *   ?demo                fills the dock with the sample agents
+ *   ?mac                 the host claims only what the Mac app can do today:
+ *                        no typing, no words from speech, screen and camera
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { GnsisApp, LocalIdentityStore, SimulatedLiveHost } from "../src/index";
 
 const params = new URLSearchParams(location.search);
-const host = new SimulatedLiveHost();
+const host = new SimulatedLiveHost(
+  params.has("mac") ? { text: false, transcript: false, screen: true, camera: true } : {},
+);
 const identity = new LocalIdentityStore();
 
 createRoot(document.getElementById("root")!).render(
