@@ -2,16 +2,16 @@ import { useEffect } from "react";
 import type { LiveHost } from "../host";
 
 /**
- * An overlay host covers the whole screen with a transparent window. Clicks
- * on empty areas must reach the apps underneath, so the UI reports where its
+ * An overlay host covers the screen with a transparent window. Clicks on
+ * empty areas must reach the apps underneath, so the UI reports where its
  * interactive surfaces are (every element marked `data-hit`) and the host
- * turns cursor pass-through on and off as the pointer moves. A host without
- * `reportHitRects` is an ordinary window and nothing is reported.
+ * turns cursor pass-through on and off as the pointer moves. Only an overlay
+ * host is sent them: an ordinary window takes every click anyway.
  */
 export function useHitRects(host: LiveHost) {
   useEffect(() => {
     const report = host.reportHitRects?.bind(host);
-    if (!report) return;
+    if (!report || !host.capabilities().overlay) return;
     let last = "";
     let timer = 0;
     const tick = () => {

@@ -48,7 +48,7 @@ test("opening the Activity drawer never moves or resizes the chat, and the two n
   assert.equal(wide.chatLeft, (1920 - CHAT_W) / 2);
 });
 
-test("the Activity panel shows what GNSIS sees: nothing made up, the real picture once it is shared", async () => {
+test("the Activity panel shows what is shared with GNSIS: nothing made up, the real picture once it is shared", async () => {
   const { setState } = await import("../store/store");
   const { ScreenCard } = await import("./ScreenView");
   const render = () => renderToStaticMarkup(createElement(ScreenCard));
@@ -56,9 +56,11 @@ test("the Activity panel shows what GNSIS sees: nothing made up, the real pictur
   const host = new SimulatedLiveHost({ screen: true, camera: true });
   configure(host, ids);
   enterDesktop(identity, false);
+  setState({ link: "ready" });
 
   const off = render();
-  assert.match(off, /GNSIS isn’t looking at your screen or camera\./);
+  assert.match(off, /Shared with GNSIS/);
+  assert.match(off, /You aren’t sharing your screen or camera with GNSIS\./);
   assert.match(off, /Share my screen/);
   assert.match(off, /Use camera/);
   assert.doesNotMatch(off, /<video/);
@@ -69,14 +71,23 @@ test("the Activity panel shows what GNSIS sees: nothing made up, the real pictur
   assert.match(starting, />Cancel</);
   assert.doesNotMatch(starting, /<video/, "no picture before GNSIS has one");
 
-  // On, and the host has the picture: it is shown, with a way to open it large.
+  // On, and the host has the picture: it is shown, with a way to open it large,
+  // and the card does not claim GNSIS gets it at this detail.
   const picture = {} as MediaStream;
   host.visionStream = () => picture;
   setState({ vision: { source: "screen", state: "on" } });
   const on = render();
   assert.match(on, /<video/);
   assert.match(on, /aria-label="Open your screen, as shared with GNSIS"/);
+  assert.match(on, /GNSIS gets smaller still pictures of it/);
   assert.match(on, /Stop sharing/);
+
+  // The connection drops: the picture is still shared locally, but it is not reaching GNSIS.
+  setState({ link: "closed" });
+  const paused = render();
+  assert.match(paused, /Paused: GNSIS isn’t connected, so it isn’t getting your screen/);
+  assert.doesNotMatch(paused, /GNSIS gets smaller still pictures/);
+  setState({ link: "ready" });
 
   // On, but this host cannot hand over its picture: say so, never show a stand-in.
   host.visionStream = () => null;
@@ -87,7 +98,15 @@ test("the Activity panel shows what GNSIS sees: nothing made up, the real pictur
   setState({ vision: { source: "screen", state: "denied", detail: "macOS hasn’t allowed GNSIS to record your screen." } });
   const denied = render();
   assert.match(denied, /macOS hasn’t allowed GNSIS to record your screen\./);
-  assert.match(denied, /Try again/);
+  assert.match(denied, /Try sharing again/);
+  assert.match(denied, /Use camera/);
+
+  // A camera problem is retried on the camera, never by sharing the screen instead.
+  setState({ vision: { source: "camera", state: "error", detail: "The camera is in use by another app." } });
+  const camera = render();
+  assert.match(camera, /Try the camera again/);
+  assert.match(camera, /Share my screen/, "sharing the screen stays its own, plainly named button");
+  assert.doesNotMatch(camera, /Try sharing again/);
 });
 
 test("the screen view is only offered where the host can share a screen or camera", () => {

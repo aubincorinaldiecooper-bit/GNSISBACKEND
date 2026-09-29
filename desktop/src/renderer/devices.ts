@@ -186,12 +186,16 @@ export function pcmLevel(pcm: Uint8Array): number {
 
 const FRAME_FALLBACK_HZ = 1;
 
+/** A running capture and the picture it shares. */
+interface SharedCapture {
+  stop(): void;
+  stream: MediaStream;
+}
+
 export class Vision {
   private channel: ScreenChannelConfig | null = null;
   private readonly capture = new CaptureManager();
   private source: "screen" | "camera" | null = null;
-  /** The capture being shared right now, for the person's own view of it. */
-  private live: MediaStream | null = null;
   /** The daemon accepted a frame from the current source. */
   onAccepted?: (source: "screen" | "camera") => void;
   /** The OS ended the capture (the user stopped sharing, unplugged the camera). */
@@ -210,9 +214,13 @@ export class Vision {
     return this.capture.active ? this.source : null;
   }
 
-  /** The picture being shared, so the person can see what GNSIS is sent; null when nothing is. */
+  /**
+   * The picture being shared, so the person can see it too; null when
+   * nothing is. It belongs to the running session, so a capture that was
+   * called off while its picker was still open can never replace it.
+   */
   get stream(): MediaStream | null {
-    return this.capture.active ? this.live : null;
+    return (this.capture.session as SharedCapture | null)?.stream ?? null;
   }
 
   applyChannel(channel: ScreenChannelConfig): void {
@@ -260,7 +268,6 @@ export class Vision {
       let statsTimer: ReturnType<typeof setInterval> | null = null;
       const stop = () => {
         stopped = true;
-        if (this.live === stream) this.live = null;
         if (captureTimer) clearInterval(captureTimer);
         captureTimer = null;
         if (statsTimer) clearInterval(statsTimer);
@@ -274,8 +281,7 @@ export class Vision {
           }
         }
       };
-      const sessionHandle = { stop };
-      this.live = stream;
+      const sessionHandle: SharedCapture = { stop, stream };
       // OS-ended capture is a real capture-ending event; a stale onended after
       // a switch must not tear down the newer session.
       track.onended = () => {

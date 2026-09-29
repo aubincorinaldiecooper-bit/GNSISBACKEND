@@ -44,6 +44,7 @@ import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
+import { PersonApp, appToRestore } from "./personApp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -206,18 +207,44 @@ const broker = new ActionBroker({
   log: hostLog,
   notify: (update) => sendToRenderer("action:update", update),
   lookAfter: (sinceMs) => screenWatch.lookAfter(sinceMs),
+  aroundInput: asTheirInput,
 });
 
+/** The app the person was last using, noted each time an app comes to the front (macOS). */
+const personApp = new PersonApp(app.getName(), frontAppName);
+
 /**
- * Ask the person before an action runs. A native alert, because the GNSIS
- * window may be behind the app GNSIS is about to act on; GNSIS comes forward
- * for it, and when the action types or clicks into another app, that app is
- * put back in front before it runs. Floating, it is a free-standing alert in
- * the middle of the screen: a sheet would hang from the top edge of the
- * see-through window, where nothing else of GNSIS is.
+ * Keys, typing and clicks GNSIS sends go to the app the person is using, not
+ * to GNSIS. When GNSIS is in front (the person just clicked one of its cards,
+ * or answered its Allow box), their app is put back in front first. While the
+ * action runs, the floating window lets every click through, so a click GNSIS
+ * sends reaches the app underneath even where a card is.
+ */
+async function asTheirInput<T>(run: () => Promise<T>): Promise<T> {
+  clickThrough?.suspend();
+  try {
+    const back = appToRestore(await frontAppName(), app.getName(), personApp.name);
+    if (back) {
+      // Activating a running app needs no permission.
+      await systemShell.run("/usr/bin/open", ["-a", back]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      hostLog("execution", "put the person's app back in front before typing or clicking");
+    }
+    return await run();
+  } finally {
+    clickThrough?.resume();
+  }
+}
+
+/**
+ * Ask the person before an action runs. A native alert that GNSIS comes
+ * forward for, so it is seen whatever app the person is in; an action that
+ * types or clicks then puts their app back in front before it runs
+ * (asTheirInput). Floating, it is a free-standing alert in the middle of the
+ * screen: a sheet would hang from the top edge of the see-through window,
+ * where nothing else of GNSIS is.
  */
 async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<boolean> {
-  const previous = request.typesIntoFrontApp ? await frontAppName() : null;
   // The summary can quote what is typed, or name a file or site: it is shown
   // to the person, not written to the log; the broker has logged the call.
   hostLog("execution", `call ${request.callId}: asking the person (${reasonForLog(request.reason)})`);
@@ -236,12 +263,6 @@ async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<
   const result = win && !OVERLAY ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const allowed = result.response === 0 && !signal.aborted;
   hostLog("execution", `call ${request.callId}: the person ${allowed ? "allowed" : "did not allow"} it`);
-  if (allowed && previous && previous !== app.getName()) {
-    // Activating a running app needs no permission; the action then types
-    // into the app the person was using, not into GNSIS.
-    await systemShell.run("/usr/bin/open", ["-a", previous]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
   return allowed;
 }
 
@@ -259,12 +280,16 @@ function lowerFirst(text: string): string {
 
 /**
  * How GNSIS appears. On macOS it floats: one see-through window over the
- * whole screen, kept above other windows, where only GNSIS's own cards take
- * clicks and everything else falls through to the apps underneath. There is
- * no backdrop of its own. GNSIS_WINDOW=standard puts it back in an ordinary
- * window with a drawn backdrop, which is also the choice on other systems.
+ * main display's usable area (all but the menu bar and the Dock), kept above
+ * other windows, where only GNSIS's own cards take clicks and everything
+ * else falls through to the apps underneath. There is no backdrop of its own.
+ * GNSIS_WINDOW=standard puts it back in an ordinary window with a drawn
+ * backdrop. Other systems always get the ordinary window: on Linux the
+ * pointer stops being reported once a window lets clicks through, so GNSIS
+ * would stop taking clicks for good.
  */
-const OVERLAY = (process.env.GNSIS_WINDOW ?? (process.platform === "darwin" ? "overlay" : "standard")) === "overlay";
+const WINDOW_ASKED = process.env.GNSIS_WINDOW ?? (process.platform === "darwin" ? "overlay" : "standard");
+const OVERLAY = WINDOW_ASKED === "overlay" && process.platform === "darwin";
 let clickThrough: ClickThrough | null = null;
 /**
  * How large GNSIS draws itself; 1 is the size it was designed at. 0.8 is the
@@ -299,6 +324,9 @@ function createWindow(): void {
       movable: false,
       maximizable: false,
       fullscreenable: false,
+      // A click on a card works the first time, even while another app is in
+      // front (which, floating, is nearly always).
+      acceptFirstMouse: true,
       webPreferences,
     });
     // Above ordinary windows, so clicking an app underneath does not bury GNSIS.
@@ -317,6 +345,7 @@ function createWindow(): void {
       webPreferences,
     });
   }
+  if (WINDOW_ASKED === "overlay" && !OVERLAY) hostLog("host", `window: floating is macOS only; ordinary window on ${process.platform}`);
   hostLog("host", `window: ${OVERLAY ? "floating over the desktop" : "ordinary window"} at ${Math.round(UI_SCALE * 100)}%`);
   // GNSIS_DEMO=1 fills the dock with the sample agents so every state of the
   // interface can be reviewed in the packaged app, where there is no URL to
@@ -482,6 +511,11 @@ app.whenReady().then(async () => {
     reported = true;
     hostLog("host", `floating window: the page reported ${cards} card(s) that take clicks`);
   });
+  if (process.platform === "darwin") {
+    // Each time an app comes to the front, note it if it is not GNSIS.
+    systemPreferences.subscribeWorkspaceNotification("NSWorkspaceDidActivateApplicationNotification", () => void personApp.noteFront());
+    void personApp.noteFront();
+  }
   displays.on("display-metrics-changed", fitOverlay);
   displays.on("display-added", fitOverlay);
   displays.on("display-removed", fitOverlay);

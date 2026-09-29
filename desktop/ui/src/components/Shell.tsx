@@ -126,7 +126,11 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
           type="button"
           className={"icon-btn round" + (seeing ? " is-seeing" : "")}
           aria-label={
-            seeing
+            s.vision.state === "starting"
+              ? `Starting to share your ${s.vision.source}. Change what GNSIS sees`
+              : seeing && s.link !== "ready"
+                ? `Your ${s.vision.source} is shared, but GNSIS isn’t connected, so it isn’t getting it. Change what GNSIS sees`
+              : seeing
               ? `GNSIS is looking at your ${s.vision.source}. Change what it sees`
               : trouble
                 ? `Let GNSIS see your screen or camera. It didn’t start: ${s.vision.detail}`

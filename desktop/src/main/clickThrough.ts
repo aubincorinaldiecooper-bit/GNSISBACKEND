@@ -1,9 +1,10 @@
 /**
- * The floating window covers the whole screen but is see-through, so it
- * must not swallow clicks meant for the apps underneath. The renderer reports
- * where its cards are ([data-hit] rectangles, in page pixels); this watches
- * the pointer and lets the window take mouse input only while the pointer is
- * over one of them. Everywhere else, clicks and scrolls fall through.
+ * The floating window covers the main display's usable area (everything but
+ * the menu bar and the Dock) but is see-through, so it must not swallow
+ * clicks meant for the apps underneath. The renderer reports where its cards
+ * are ([data-hit] rectangles, in page pixels); this watches the pointer and
+ * lets the window take mouse input only while the pointer is over one of
+ * them. Everywhere else, clicks and scrolls fall through.
  *
  * No Electron import, so it can be tested with a stand-in window.
  */
@@ -51,6 +52,8 @@ export class ClickThrough {
   /** Starts out letting everything through, until the page says where its cards are. */
   private ignoring = true;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** While GNSIS's own clicks are being sent, every click goes through. */
+  private suspended = 0;
 
   constructor(
     private readonly win: ThroughWindow,
@@ -64,9 +67,26 @@ export class ClickThrough {
     this.update();
   }
 
+  /**
+   * Let every click through, cards included, until resume(): for clicks GNSIS
+   * sends to the app underneath, which must not land in GNSIS's own window.
+   */
+  suspend(): void {
+    this.suspended += 1;
+    if (this.win.isDestroyed() || this.ignoring) return;
+    this.ignoring = true;
+    this.win.setIgnoreMouseEvents(true, { forward: true });
+  }
+
+  resume(): void {
+    this.suspended = Math.max(0, this.suspended - 1);
+    this.update();
+  }
+
   /** Take or release the mouse for where the pointer is right now. */
   update(): void {
     if (this.win.isDestroyed()) return this.stop();
+    if (this.suspended > 0) return;
     const p = this.cursor();
     const b = this.win.getBounds();
     const over = overCard(this.rects, p.x - b.x, p.y - b.y, this.win.webContents.getZoomFactor() || 1);
@@ -75,7 +95,11 @@ export class ClickThrough {
     this.win.setIgnoreMouseEvents(this.ignoring, { forward: true });
   }
 
-  /** The pointer is watched about 25 times a second: fast enough that a card never feels dead. */
+  /**
+   * The pointer is checked about 25 times a second, so for up to 40 ms after
+   * it leaves a card a click can still land in GNSIS. GNSIS's own clicks are
+   * covered by suspend().
+   */
   start(everyMs = 40): void {
     this.stop();
     this.timer = setInterval(() => this.update(), everyMs);

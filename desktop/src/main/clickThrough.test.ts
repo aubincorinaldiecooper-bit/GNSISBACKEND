@@ -58,3 +58,20 @@ test("a closed window stops the watching", () => {
   through.update();
   assert.deepEqual(w.calls, [true]);
 });
+
+test("while GNSIS sends its own clicks, every click goes through its window, cards included", () => {
+  const w = fakeWindow();
+  const pointer = { x: 700, y: 25 + 500 };
+  const through = new ClickThrough(w.win, () => pointer);
+  through.setRects([[360, 400, 720, 300]]);
+  assert.equal(through.takingClicks, true, "the pointer rests on a card");
+  through.suspend();
+  assert.equal(through.takingClicks, false, "GNSIS's click goes to the app underneath");
+  through.update();
+  assert.equal(through.takingClicks, false, "the pointer check does not take it back mid-action");
+  through.suspend();
+  through.resume();
+  assert.equal(through.takingClicks, false, "still suspended until the last action ends");
+  through.resume();
+  assert.equal(through.takingClicks, true, "afterwards the card takes clicks again");
+});

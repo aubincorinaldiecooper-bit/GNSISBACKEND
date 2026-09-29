@@ -266,8 +266,10 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .screen-open { position: absolute; z-index: 1; left: 50%; top: 50%; height: 36px; padding: 0 16px; border-radius: 18px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 8px 24px rgba(46, 84, 230, 0.35); pointer-events: none; opacity: 0; transform: translate(-50%, -50%) scale(0.92); transition: opacity 180ms var(--spring), transform 180ms var(--spring); }
 .screen-frame.is-live:hover .screen-open, .screen-frame.is-live:focus-visible .screen-open { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 .screen-spin { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; animation: spin 0.9s linear infinite; }
-.screen-foot { min-height: 40px; display: flex; align-items: center; gap: 10px; }
+.screen-foot { min-height: 40px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 10px; }
+.screen-foot .grow { flex: 1 1 150px; }
 .live-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(31, 164, 99, 0.18); }
+.live-dot.is-paused { background: var(--orange); box-shadow: 0 0 0 3px rgba(232, 134, 26, 0.18); }
 .btn-secondary.compact, .btn-dark.compact { height: 36px; padding: 0 14px; border-radius: 11px; font-size: 14px; gap: 6px; }
 .screen-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(11, 13, 18, 0.32); animation: fade-in 200ms var(--spring) both; }
 .screen-viewer { width: min(960px, 90vw); display: flex; flex-direction: column; border-radius: 22px; overflow: hidden; background: #0b0d12; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45); animation: viewer-in 280ms var(--spring) both; }

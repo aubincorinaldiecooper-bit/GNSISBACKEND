@@ -70,6 +70,12 @@ export interface ActionBrokerDeps {
   notify?(update: ActionUpdate): void;
   /** Wait until the runtime has a view of the screen taken after `sinceMs`. */
   lookAfter?(sinceMs: number): Promise<Look>;
+  /**
+   * Runs an allowed action that presses keys, types or clicks into the app in
+   * front. The host uses it to put the person's own app back in front first,
+   * and to let every click through its own window while the action runs.
+   */
+  aroundInput?<T>(run: () => Promise<T>): Promise<T>;
   now?(): number;
 }
 
@@ -216,7 +222,8 @@ export class ActionBroker {
     const started = this.now();
     this.deps.event({ type: "action.started", ...base, ts_ms: started, action: prepared.action, effect: prepared.effect });
     this.deps.notify?.({ callId, state: "working", text: prepared.summary });
-    const done = await prepared.run();
+    const done =
+      prepared.effect === "input" && this.deps.aroundInput ? await this.deps.aroundInput(() => prepared.run()) : await prepared.run();
     // Anything that may have changed what is on screen is checked by looking:
     // hold the answer until a frame taken after the action has gone out.
     const look = prepared.effect === "read" ? undefined : await this.deps.lookAfter?.(this.now());

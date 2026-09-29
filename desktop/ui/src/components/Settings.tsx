@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Face } from "../lib/face";
 import { shareLink } from "../lib/identity";
 import { copyText } from "../lib/platform";
@@ -32,6 +32,14 @@ export function Settings() {
   const [note, setNote] = useState("");
   const [dock, setDock] = useState<"bottom" | "top">("bottom");
   const [glass, setGlass] = useState(55);
+  // Esc closes Settings, as it would any panel: floating, it sits over other apps.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) setState({ settingsOpen: false });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   if (!identity) return null;
   const link = shareLink(identity);
   const keyNote = getIdentityStore()?.storageNote ?? "";

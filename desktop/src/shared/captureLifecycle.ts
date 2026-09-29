@@ -22,6 +22,11 @@ export class CaptureManager {
     return this.current !== null;
   }
 
+  /** The session that is actually running; never one still being acquired or already called off. */
+  get session(): CaptureHandle | null {
+    return this.current;
+  }
+
   /**
    * Stop the current session, then start the next one. A stop (or another
    * switch) that comes while the next one is still being acquired — the

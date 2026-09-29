@@ -263,3 +263,61 @@ test("the log tells a call that never matched the tool from one that failed whil
   await answer(sent, "c4");
   assert.ok(logs.some((l) => /call c4 files → failed \[arguments_rejected\]/.test(l)), logs.join("\n"));
 });
+
+test("an allowed action that types or clicks runs through the host's input hook; others do not", async () => {
+  const registry = new ToolRegistry({ runtimeUrl: "http://127.0.0.1:1" });
+  const ran: string[] = [];
+  const tool = (name: string, effect: "input" | "change"): ActionTool => ({
+    name,
+    platforms: [process.platform],
+    async prepare(args) {
+      return {
+        tool: name,
+        action: String(args.action),
+        effect,
+        summary: `${name} ${String(args.action)}`,
+        scope: [{ value: "x", source: "named" }],
+        needs: [],
+        run: async () => {
+          ran.push(`${name}:run`);
+          return { verified: "none", message: "Done." };
+        },
+      };
+    },
+  });
+  registry.registerAction(tool("input", "input"));
+  registry.registerAction(tool("files", "change"));
+  const sent: Array<Record<string, unknown>> = [];
+  const broker = new ActionBroker({
+    registry,
+    send: (c) => sent.push(c),
+    event: () => {},
+    confirm: async () => true,
+    accessibility: () => true,
+    latestTurn: () => null,
+    log: () => {},
+    aroundInput: async (run) => {
+      ran.push("hook:before");
+      try {
+        return await run();
+      } finally {
+        ran.push("hook:after");
+      }
+    },
+  });
+  broker.handleControl({ type: "ready", host_tools: { accepted: ["input", "files"] } });
+  const request = (callId: string, name: string) => ({
+    type: "tool.call",
+    call_id: callId,
+    dispatch: "client",
+    tool_calls: [{ name, arguments: name === "input" ? { action: "keys", keys: "cmd+v" } : move }],
+    tool_response_expected: true,
+  });
+  broker.handleControl(request("c1", "input"));
+  const response = await answer(sent, "c1");
+  assert.deepEqual(ran, ["hook:before", "input:run", "hook:after"], JSON.stringify(response));
+  ran.length = 0;
+  broker.handleControl(request("c2", "files"));
+  await answer(sent, "c2");
+  assert.deepEqual(ran, ["files:run"], "a file move does not touch the front app");
+});

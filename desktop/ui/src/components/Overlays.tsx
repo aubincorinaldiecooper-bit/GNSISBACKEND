@@ -53,6 +53,7 @@ export function VisionMenu({ left }: { left: number }) {
   const seeing = v.state === "on" || v.state === "starting";
   let status = "";
   if (v.state === "starting") status = v.source === "screen" ? "Starting to share your screen…" : "Turning the camera on…";
+  else if (v.state === "on" && s.link !== "ready") status = `Paused: GNSIS isn’t connected, so it isn’t getting your ${v.source === "camera" ? "camera" : "screen"}.`;
   else if (v.state === "on") status = v.source === "screen" ? "GNSIS can see your screen." : "GNSIS can see through the camera.";
   else if (v.state === "denied") status = v.detail || "Permission was not given.";
   else if (v.state === "error") status = v.detail || "It could not start.";
