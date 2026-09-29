@@ -100,6 +100,11 @@ as a state, not a crash — other functionality remains usable.
 
 ## Actions on the Mac
 
+Browser use requires **no Chrome extension and no Chrome Web Store install**.
+GNSIS uses the browser the person already has open: the shared screen stream is
+the visual source, browser automation owns tabs/navigation, and the native input
+tool handles clicks, typing and keys under macOS Accessibility permission.
+
 When the model asks GNSIS to do something — open an app or a site, move or
 rename a file, use the open browser, type or click — the runtime sends it to
 this app, which does it and answers. The four tools are listed in
