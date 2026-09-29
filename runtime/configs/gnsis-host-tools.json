@@ -7,7 +7,9 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["target"],
+        "required": [
+          "target"
+        ],
         "properties": {
           "target": {
             "type": "string",
@@ -24,13 +26,40 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "properties": {
-          "action": {"type": "string", "enum": ["list", "find", "move", "rename", "new_folder"]},
-          "path": {"type": "string", "maxLength": 512, "description": "The file or folder acted on. For list and find, the folder to look in."},
-          "to": {"type": "string", "maxLength": 512, "description": "For move, the folder to move it into."},
-          "name": {"type": "string", "maxLength": 255, "description": "For rename, the new name. For new_folder, its name."},
-          "query": {"type": "string", "maxLength": 128, "description": "For find, part of the name or a kind such as pdf."}
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "find",
+              "move",
+              "rename",
+              "new_folder"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "The file or folder acted on. For list and find, the folder to look in."
+          },
+          "to": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "For move, the folder to move it into."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "For rename, the new name. For new_folder, its name."
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "For find, part of the name or a kind such as pdf."
+          }
         }
       }
     },
@@ -40,11 +69,51 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "properties": {
-          "action": {"type": "string", "enum": ["tabs", "switch", "go", "back", "forward", "reload"]},
-          "url": {"type": "string", "maxLength": 2048, "description": "For go, the address to load in the current tab."},
-          "tab": {"type": "integer", "minimum": 1, "maximum": 100, "description": "For switch, the tab number from tabs."}
+          "action": {
+            "type": "string",
+            "enum": [
+              "tabs",
+              "switch",
+              "go",
+              "back",
+              "forward",
+              "reload"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "For go, the address to load in the current tab."
+          },
+          "tab": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "For switch, the tab number from tabs."
+          }
+        }
+      }
+    },
+    {
+      "name": "browser_agent",
+      "description": "Carry out a multi-step task in the person's existing browser using GNSIS Browser visual navigation.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "The browser task to carry out, in the person's words."
+          }
         }
       }
     },
@@ -54,14 +123,45 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "properties": {
-          "action": {"type": "string", "enum": ["type", "keys", "click"]},
-          "text": {"type": "string", "maxLength": 1000, "description": "For type, the text."},
-          "keys": {"type": "string", "maxLength": 64, "description": "For keys, like cmd+f, enter, escape."},
-          "label": {"type": "string", "maxLength": 128, "description": "For click, the visible name of the button or item."},
-          "x": {"type": "number", "minimum": 0, "maximum": 1, "description": "For click without a name, 0 to 1 across the shared screen."},
-          "y": {"type": "number", "minimum": 0, "maximum": 1, "description": "0 to 1 down the shared screen."}
+          "action": {
+            "type": "string",
+            "enum": [
+              "type",
+              "keys",
+              "click"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "For type, the text."
+          },
+          "keys": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "For keys, like cmd+f, enter, escape."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "For click, the visible name of the button or item."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "For click without a name, 0 to 1 across the shared screen."
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "0 to 1 down the shared screen."
+          }
         }
       }
     }
