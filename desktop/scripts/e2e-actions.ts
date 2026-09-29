@@ -212,13 +212,22 @@ class Mic {
   }
 }
 
+/**
+ * The lines of a timeline file the runtime has finished writing. It appends
+ * while this reads, so the last line may be only half there: a line counts
+ * once its newline is written.
+ */
+function completeLines(text: string): string[] {
+  return text.split("\n").slice(0, -1).filter(Boolean);
+}
+
 async function printTimeline(callId: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   let lines: string[] = [];
   while (Date.now() < deadline) {
     const names = (await fs.readdir(MEDIA_DIR).catch(() => [] as string[])).filter((n) => n.endsWith(".timeline.jsonl"));
     lines = [];
-    for (const name of names) lines.push(...(await fs.readFile(path.join(MEDIA_DIR, name), "utf8")).split("\n").filter(Boolean));
+    for (const name of names) lines.push(...completeLines(await fs.readFile(path.join(MEDIA_DIR, name), "utf8")));
     const kinds = lines.map((l) => JSON.parse(l) as { kind: string; correlation_id: string | null }).filter((e) => e.correlation_id === callId).map((e) => e.kind);
     if (kinds.includes("tool.response.injected") && kinds.includes("action.completed")) break;
     await new Promise((r) => setTimeout(r, 100));
