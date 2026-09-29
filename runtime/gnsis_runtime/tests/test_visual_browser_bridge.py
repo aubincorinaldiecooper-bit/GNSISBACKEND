@@ -10,6 +10,7 @@ from gnsis_runtime.screen import LatestScreenFrameBuffer, ScreenFrame
 from gnsis_runtime.visual.browser_bridge import (
     BrowserExecutor,
     BrowserHubPeer,
+    StaleFrameError,
     build_action_request,
     parse_capture_frame,
     report_from_bridge,
@@ -107,6 +108,36 @@ def test_request_refuses_actions_outside_the_capability_manifest():
             frame=_frame(),
             source_tab_id=7,
         )
+
+
+def test_intent_not_traced_to_the_person_needs_explicit_approval_even_when_policy_allows():
+    for provenance in ("unknown", "observed_untrusted"):
+        assert _authority(provenance=provenance).execution_allowed is False
+        with pytest.raises(PermissionError, match=f"{provenance} provenance"):
+            build_action_request(
+                _step(authority=_authority(provenance=provenance)), call_id="c", frame=_frame(), source_tab_id=7
+            )
+        assert _authority(provenance=provenance, confirmation="approved").execution_allowed is True
+    # Where the person is on record, the policy decision stands.
+    for provenance in ("direct_user", "mixed", "delegated_result"):
+        assert _authority(provenance=provenance).execution_allowed is True
+
+
+def test_a_request_needs_the_tab_its_frame_came_from():
+    untied = {
+        "back": {"target": None},
+        "reload": {"target": None},
+        "scroll": {"target": None, "direction": "down"},
+        "click": {},
+    }
+    for action, extra in untied.items():
+        with pytest.raises(StaleFrameError, match="observe again"):
+            build_action_request(
+                _step(action=action, **extra), call_id="c", frame=_frame(tab_id=None), source_tab_id=None
+            )
+    for action in ("wait", "done"):
+        request = build_action_request(_step(action=action, target=None), call_id="c", frame=None, source_tab_id=None)
+        assert request["source_tab_id"] is None
 
 
 def test_target_cleanup_is_off_unless_a_step_opts_in_and_is_capped_at_24px():
@@ -227,6 +258,26 @@ def test_unknown_bridge_outcome_is_not_misreported_as_not_carried_out():
     assert report.execution.error is None
     assert report.metadata["outcome_unknown"] is True
     assert report.metadata["bridge"]["error"] == "cancellation unconfirmed"
+
+
+@pytest.mark.parametrize(
+    ("evidence", "field"),
+    [
+        ({"target_box": {"x": 600, "y": 180, "height": 40}}, "target_box"),
+        ({"target_box": "600,180,120,40"}, "target_box"),
+        ({"resolve_target": True, "resolution_method": "nearby", "resolved_target": {"x": "left", "y": 200}}, "resolved_target"),
+        ({"page_viewport": {"width": "wide", "height": 800}}, "page_viewport"),
+        ({"started_at_ms": "soon"}, "started_at_ms"),
+        ({"completed_at_ms": 4000}, "completed_at_ms"),
+        ({"latency_ms": -3}, "latency_ms"),
+    ],
+)
+def test_malformed_evidence_from_an_action_that_ran_is_left_out_and_named(evidence, field):
+    request = build_action_request(_step(resolve_target=True), call_id="call_1", frame=_frame(), source_tab_id=7)
+    report = report_from_bridge(_result(**evidence), request=request, frame_size=(640, 400))
+    assert report.execution.actuator_success is True
+    assert report.candidates["raw"].point == Point(320, 100)
+    assert report.metadata["bridge"]["malformed_evidence"] == [field]
 
 
 def test_reports_fit_the_canonical_record():
@@ -394,6 +445,22 @@ def test_executor_blocks_a_step_without_authority_before_sending():
     report = executor.execute(_step(authority=None))
     assert report.execution.actuator_success is False
     assert report.metadata["policy_blocked"] is True
+    assert executor.sent == []
+
+
+def test_executor_does_not_send_an_action_it_cannot_tie_to_a_tab():
+    peer = BrowserHubPeer(allowed_origins=None)
+    buffer = LatestScreenFrameBuffer()
+    buffer.publish(_frame(tab_id=None))
+    buffer.consume_for_unit()
+    executor = BrowserExecutor(peer, buffer, timeout_s=1)
+    # A frame with no browser tab behind it, and a frame that has left the history.
+    for step in (_step(action="back", target=None), _step(frame_id="gone")):
+        report = executor.execute(step)
+        assert report.execution.actuator_success is False
+        assert "observe again" in report.execution.error
+        assert report.metadata["stale_frame"] is True
+        assert "policy_blocked" not in report.metadata
     assert executor.sent == []
 
 

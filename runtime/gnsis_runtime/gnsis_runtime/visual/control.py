@@ -80,7 +80,11 @@ class ActionAuthority:
     def execution_allowed(self) -> bool:
         if self.policy_decision == "deny":
             return False
-        if self.policy_decision == "confirm":
+        # A generic allow is not enough when the intent cannot be traced to the
+        # person: unknown provenance fails closed, and an action induced by
+        # observed content needs their explicit confirmation
+        # (docs/computer-use/AGENTS.md, "Required provenance classes").
+        if self.policy_decision == "confirm" or self.provenance in {"unknown", "observed_untrusted"}:
             return self.confirmation == "approved"
         return self.confirmation in {"not_required", "approved"}
 

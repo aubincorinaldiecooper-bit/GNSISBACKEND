@@ -28,6 +28,7 @@ import base64
 import io
 import json
 import logging
+import math
 import secrets
 import threading
 from dataclasses import dataclass
@@ -47,11 +48,20 @@ BRIDGE_ACTIONS = frozenset(
     {"click", "type", "select", "scroll", "navigate", "open_url", "back", "reload", "wait", "done", "recover", "switch_tab", "close_tab"}
 )
 POINT_ACTIONS = frozenset({"click", "type", "select", "recover"})
+# The only actions the bridge runs without checking the tab a frame came from.
+TAB_FREE_ACTIONS = frozenset({"wait", "done"})
 MAX_ERROR = 300
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 
 
 # ------------------------------------------------------------------ the codec
+
+
+class StaleFrameError(ValueError):
+    """The step's frame can no longer tie it to the browser tab it was chosen on.
+
+    Nothing has been sent, so the step can be re-observed and tried again.
+    """
 
 
 def new_call_id() -> str:
@@ -85,7 +95,7 @@ def build_action_request(
     decision: dict[str, Any] = {"action": step.action}
     if step.target is not None:
         if frame is None:
-            raise ValueError("a targeted browser action needs the frame it was chosen on")
+            raise StaleFrameError("a targeted browser action needs the frame it was chosen on; observe again before acting")
         width, height = frame.image.size
         decision["target"] = {"x": step.target.x, "y": step.target.y}
         decision["viewport"] = {"width": width, "height": height}
@@ -103,11 +113,20 @@ def build_action_request(
         raise PermissionError("browser action has no trusted user-intent authority")
     if not authority.execution_allowed:
         raise PermissionError(
-            f"browser action policy did not allow execution: {authority.policy_decision} ({authority.policy_reason})"
+            "browser action policy did not allow execution: "
+            f"{authority.policy_decision}, {authority.provenance} provenance, confirmation {authority.confirmation} "
+            f"({authority.policy_reason})"
         )
     if step.action not in authority.allowed_actions:
         raise PermissionError(
             f"browser action {step.action!r} is not in capability manifest {authority.capability_manifest_id!r}"
+        )
+    if source_tab_id is None and step.action not in TAB_FREE_ACTIONS:
+        # Without the tab, nothing ties the action to what was observed: it
+        # would run on whichever tab is active by then.
+        raise StaleFrameError(
+            f"no browser tab is known for frame {step.frame_id!r}: it has left the frame history or did not come "
+            "from a browser tab; observe again before acting"
         )
     return {
         "type": "browser.action",
@@ -128,11 +147,8 @@ def _page_to_frame(page: Any, frame_size: tuple[int, int] | None) -> Callable[[f
 
     if frame_size is None or not isinstance(page, Mapping):
         return None
-    try:
-        page_w, page_h = float(page["width"]), float(page["height"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    if page_w <= 0 or page_h <= 0:
+    page_w, page_h = _number(page.get("width")), _number(page.get("height"))
+    if page_w is None or page_h is None or page_w <= 0 or page_h <= 0:
         return None
     frame_w, frame_h = frame_size
 
@@ -186,39 +202,72 @@ def report_from_bridge(
             },
         )
 
+    # The action has already run. Evidence that does not parse is left out and
+    # named, never allowed to raise: an exception here would lose the outcome.
     evidence = message.get("evidence") if isinstance(message.get("evidence"), Mapping) else {}
+    malformed: list[str] = []
     method = evidence.get("resolution_method")
     method = str(method) if method is not None else None
     to_frame = _page_to_frame(evidence.get("page_viewport"), frame_size)
+    if to_frame is None and frame_size is not None and evidence.get("page_viewport") is not None:
+        malformed.append("page_viewport")
     candidates = {}
     target_box = None
     if raw is not None:
         candidates["raw"] = raw
-        if evidence.get("resolve_target"):
-            resolved = evidence.get("resolved_target")
-            if isinstance(resolved, Mapping) and to_frame is not None:
-                x, y = to_frame(resolved["x"], resolved["y"])
+        if evidence.get("resolve_target") and evidence.get("resolved_target") is not None:
+            resolved = _xy(evidence.get("resolved_target"))
+            if resolved is None:
+                malformed.append("resolved_target")
+            elif to_frame is not None:
+                x, y = to_frame(*resolved)
                 candidates["raw+r24"] = Candidate("resolved", Point(x, y), method)
         box = evidence.get("target_box")
-        if isinstance(box, Mapping) and to_frame is not None:
-            x0, y0 = to_frame(box["x"], box["y"])
-            x1, y1 = to_frame(float(box["x"]) + float(box["width"]), float(box["y"]) + float(box["height"]))
-            if x1 > x0 and y1 > y0:
-                target_box = Box(x0, y0, round(x1 - x0, 3), round(y1 - y0, 3))
+        if box is not None:
+            corner = _xy(box)
+            width = _number(box.get("width")) if isinstance(box, Mapping) else None
+            height = _number(box.get("height")) if isinstance(box, Mapping) else None
+            if corner is None or width is None or height is None:
+                malformed.append("target_box")
+            elif to_frame is not None:
+                x0, y0 = to_frame(*corner)
+                x1, y1 = to_frame(corner[0] + width, corner[1] + height)
+                if x1 > x0 and y1 > y0:
+                    target_box = Box(x0, y0, round(x1 - x0, 3), round(y1 - y0, 3))
     executed = None
     if raw is not None:
         executed = "raw+r24" if evidence.get("resolve_target") and method not in (None, "raw-point") else "raw"
-    started = evidence.get("started_at_ms")
+    timing: dict[str, float | None] = {}
+    for name in ("started_at_ms", "completed_at_ms", "latency_ms"):
+        value = _number(evidence.get(name))
+        if evidence.get(name) is not None and (value is None or value < 0):
+            malformed.append(name)
+            value = None
+        timing[name] = value
+    started, completed = timing["started_at_ms"], timing["completed_at_ms"]
+    if started is not None and completed is not None and completed < started:
+        malformed.append("completed_at_ms")
+        completed = None
     execution = Execution(
         executed_variant=executed,
         actuator_success=True,
         source_tab_id=_tab(evidence.get("source_tab_id")),
         executed_tab_id=_tab(evidence.get("executed_tab_id")),
         started_at_ms=int(started) if started is not None else None,
-        completed_at_ms=int(evidence["completed_at_ms"]) if evidence.get("completed_at_ms") is not None else None,
-        latency_ms=float(evidence["latency_ms"]) if evidence.get("latency_ms") is not None else None,
+        completed_at_ms=int(completed) if completed is not None else None,
+        latency_ms=timing["latency_ms"],
         call_id=call_id,
     )
+    bridge: dict[str, Any] = {
+        "message": str(message.get("message") or "")[:MAX_ERROR],
+        "done": bool(message.get("done")),
+        "replayed": bool(message.get("replayed")),
+        "resolution_method": method,
+        "page_viewport": dict(evidence["page_viewport"]) if isinstance(evidence.get("page_viewport"), Mapping) else None,
+        "page_target_box": dict(evidence["target_box"]) if isinstance(evidence.get("target_box"), Mapping) else None,
+    }
+    if malformed:
+        bridge["malformed_evidence"] = malformed
     return ExecutionReport(
         execution=execution,
         # The bridge and the tab capture both stamp with the browser's clock,
@@ -227,17 +276,27 @@ def report_from_bridge(
         viewport=frame_size,
         candidates=candidates,
         target_box=target_box,
-        metadata={
-            "bridge": {
-                "message": str(message.get("message") or "")[:MAX_ERROR],
-                "done": bool(message.get("done")),
-                "replayed": bool(message.get("replayed")),
-                "resolution_method": method,
-                "page_viewport": dict(evidence["page_viewport"]) if isinstance(evidence.get("page_viewport"), Mapping) else None,
-                "page_target_box": dict(evidence["target_box"]) if isinstance(evidence.get("target_box"), Mapping) else None,
-            }
-        },
+        metadata={"bridge": bridge},
     )
+
+
+def _number(value: Any) -> float | None:
+    """A finite number from the bridge's evidence, or None."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _xy(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, Mapping):
+        return None
+    x, y = _number(value.get("x")), _number(value.get("y"))
+    return None if x is None or y is None else (x, y)
 
 
 def _tab(value: Any) -> int | None:
@@ -546,6 +605,17 @@ class BrowserExecutor:
                 viewport=frame.image.size if frame is not None else None,
                 metadata={
                     "policy_blocked": True,
+                    "authority": step.authority.to_json() if step.authority is not None else None,
+                },
+            )
+        except StaleFrameError as exc:
+            # Never sent, so certainly not carried out: the controller may observe
+            # again and make its one alternate attempt on a fresh frame.
+            return ExecutionReport(
+                execution=Execution(actuator_success=False, call_id=call_id, error=str(exc)[:MAX_ERROR]),
+                viewport=frame.image.size if frame is not None else None,
+                metadata={
+                    "stale_frame": True,
                     "authority": step.authority.to_json() if step.authority is not None else None,
                 },
             )
