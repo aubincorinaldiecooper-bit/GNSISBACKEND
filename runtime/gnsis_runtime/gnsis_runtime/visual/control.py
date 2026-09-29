@@ -34,7 +34,60 @@ from .real_runs import Box, Candidate, Execution, Point, RealRunCoordinator, Rea
 from .verification import ExpectedState, VerificationResult, actuator_reported_failure, ambiguous
 
 StepStatus = Literal["succeeded", "unverified", "escalated"]
+ActionProvenance = Literal["direct_user", "mixed", "observed_untrusted", "delegated_result", "unknown"]
+PolicyDecision = Literal["allow", "confirm", "deny"]
+ConfirmationState = Literal["not_required", "approved", "denied", "missing"]
 DEFAULT_MAX_REVERIFY = 2
+
+
+@dataclass(frozen=True, slots=True)
+class ActionAuthority:
+    """Trusted execution authority attached to a model-produced visual step.
+
+    The visual model may propose an action, but it cannot grant itself authority
+    to execute it. The caller binds the step to a trusted user turn and records
+    the policy/confirmation result plus the capability manifest that was in
+    force. Browser execution fails closed unless this object explicitly permits
+    the action.
+    """
+
+    turn_id: str
+    provenance: ActionProvenance
+    policy_decision: PolicyDecision
+    policy_reason: str
+    capability_manifest_id: str
+    confirmation: ConfirmationState = "not_required"
+
+    def __post_init__(self) -> None:
+        for name in ("turn_id", "policy_reason", "capability_manifest_id"):
+            value = str(getattr(self, name)).strip()
+            if not value:
+                raise ValueError(f"{name} must be a non-empty string")
+            object.__setattr__(self, name, value)
+        if self.provenance not in {"direct_user", "mixed", "observed_untrusted", "delegated_result", "unknown"}:
+            raise ValueError("invalid action provenance")
+        if self.policy_decision not in {"allow", "confirm", "deny"}:
+            raise ValueError("invalid policy decision")
+        if self.confirmation not in {"not_required", "approved", "denied", "missing"}:
+            raise ValueError("invalid confirmation state")
+
+    @property
+    def execution_allowed(self) -> bool:
+        if self.policy_decision == "deny":
+            return False
+        if self.policy_decision == "confirm":
+            return self.confirmation == "approved"
+        return self.confirmation in {"not_required", "approved"}
+
+    def to_json(self) -> dict[str, str]:
+        return {
+            "turn_id": self.turn_id,
+            "provenance": self.provenance,
+            "policy_decision": self.policy_decision,
+            "policy_reason": self.policy_reason,
+            "capability_manifest_id": self.capability_manifest_id,
+            "confirmation": self.confirmation,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +113,7 @@ class VisualStep:
     # r24 is execution cleanup, never perception: off unless a step opts in.
     resolve_target: bool = False
     max_radius_px: int | None = None
+    authority: ActionAuthority | None = None
 
     def __post_init__(self) -> None:
         if self.max_radius_px is not None and not 0 <= self.max_radius_px <= 24:
@@ -153,11 +207,34 @@ class VerifiedStepController:
             frame_id=step.frame_id,
             planner=step.planner,
             expected_state=step.expected_state.description if step.expected_state else None,
+            authority=step.authority.to_json() if step.authority is not None else None,
         )
         first, record = self._attempt(step, attempt=1)
         records = [record]
         if first.status == "success":
             return self._finish(step, "succeeded", "The expected result is visible.", first, True, False, None, records)
+        if self._policy_blocked(record):
+            return self._finish(
+                step,
+                "escalated",
+                f"Execution was blocked by policy: {record.execution.error or first.reason}",
+                first,
+                None,
+                False,
+                None,
+                records,
+            )
+        if self._outcome_unknown(record):
+            return self._finish(
+                step,
+                "escalated",
+                f"The browser action may have happened, so it will not be retried automatically: {first.reason}",
+                first,
+                None,
+                False,
+                None,
+                records,
+            )
         if first.status == "ambiguous" and not self._failed_to_act(record):
             if step.expected_state is None:
                 return self._finish(step, "unverified", first.reason, first, None, False, None, records)
@@ -218,8 +295,15 @@ class VerifiedStepController:
             and looks < self.max_reverify
             and not actuator_reported_failure(execution.to_json())
         ):
+            # A re-look must wait for evidence newer than what was already judged.
+            # Re-reading the same settled window can exhaust every retry in
+            # milliseconds while the page is still loading.
+            newer_than = window.frames[-1].frame_id if window is not None and window.frames else None
             looks += 1
-            verification, window = self._verify(step, report)
+            verification, next_window = self._verify(step, report, newer_than_frame_id=newer_than)
+            window = next_window
+            if newer_than is not None and (window is None or not window.frames):
+                break
         self._emit(
             "visual.verification",
             step,
@@ -253,7 +337,13 @@ class VerifiedStepController:
         )
         return verification, record
 
-    def _verify(self, step: VisualStep, report: ExecutionReport):
+    def _verify(
+        self,
+        step: VisualStep,
+        report: ExecutionReport,
+        *,
+        newer_than_frame_id: str | None = None,
+    ):
         if actuator_reported_failure(report.execution.to_json()):
             return ambiguous(f"The action was not carried out: {report.execution.error or 'the actuator reported failure'}."), None
         return self.coordinator.verify(
@@ -266,11 +356,20 @@ class VerifiedStepController:
             action_detail=step.detail(),
             acted_at_ms=report.acted_at_ms,
             window=self.window,
+            newer_than_frame_id=newer_than_frame_id,
         )
 
     @staticmethod
     def _failed_to_act(record: RealRunRecord) -> bool:
         return actuator_reported_failure(record.execution.to_json())
+
+    @staticmethod
+    def _outcome_unknown(record: RealRunRecord) -> bool:
+        return bool(record.metadata.get("outcome_unknown"))
+
+    @staticmethod
+    def _policy_blocked(record: RealRunRecord) -> bool:
+        return bool(record.metadata.get("policy_blocked"))
 
     def _finish(
         self,
