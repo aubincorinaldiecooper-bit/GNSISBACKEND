@@ -258,6 +258,15 @@ def test_absence_cues_and_already_visible_results():
     assert "already visible" in already.reason
 
 
+def test_absence_only_is_ambiguous_when_the_cue_was_never_readable_before():
+    reader = FakeReader()
+    verifier = SemanticVisualVerifier([OcrTextJudge(reader)])
+    gone = ExpectedState("The error banner is gone", absent_text=("Payment failed",))
+    result = verifier.verify(ocr_request(reader, [], ["Order summary"], expected=gone))
+    assert result.status == "ambiguous"
+    assert "not reliably readable before" in result.reason
+
+
 def test_low_ocr_confidence_is_not_a_label():
     reader = FakeReader()
     before = reader.on(frame("f-1", 100), "USD")
