@@ -31,6 +31,21 @@ def _authority(**overrides) -> ActionAuthority:
         policy_decision="allow",
         policy_reason="asked for directly",
         capability_manifest_id="browser-v1",
+        allowed_actions=(
+            "click",
+            "type",
+            "select",
+            "scroll",
+            "navigate",
+            "open_url",
+            "back",
+            "reload",
+            "wait",
+            "done",
+            "recover",
+            "switch_tab",
+            "close_tab",
+        ),
         confirmation="not_required",
     )
     values.update(overrides)
