@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useStore } from "../store/store";
+import { useStore, viewing } from "../store/store";
 import { AgentPanel } from "./AgentPanel";
 import { ChatWindow } from "./ChatWindow";
 import { Commands, DockMenu, Greeting, Toast, VisionMenu } from "./Overlays";
@@ -34,10 +34,12 @@ export function Stage() {
   const winOpen = bar && s.winOpen && !!s.convs[s.active];
   const showPanel = winOpen && !s.panelHidden;
   const wide = w >= 1380;
-  const panelW = wide ? 600 : 520;
+  const fullPanelW = wide ? 600 : 520;
   const stackW = showPanel ? (wide ? 640 : 580) : 720;
-  const groupW = showPanel ? stackW + 40 + panelW : stackW;
+  const groupW = showPanel ? stackW + 40 + fullPanelW : stackW;
   const left = Math.max(24, Math.round((w - groupW) / 2));
+  // A narrow window never pushes the drawer, and its close button, off the edge.
+  const panelW = Math.min(fullPanelW, w - 24 - left - stackW - 40);
   const panelH = Math.min(642, h - BOTTOM - 48);
   const winH = panelH - BAR_H - GAP;
   const dockW = dockGeometry(s).width;
@@ -56,7 +58,7 @@ export function Stage() {
       {!bar && s.dockMenu && <DockMenu left={shellLeft + shellW - 300} />}
       {bar && s.visionMenu && <VisionMenu left={shellLeft + 52} />}
       {!bar && s.greet && !s.dockMenu && <Greeting left={shellLeft + 7} />}
-      {bar && s.toast && s.toast.id !== s.active && <Toast left={shellLeft + shellW - 380} />}
+      {bar && s.toast && !viewing(s, s.toast.id) && <Toast left={shellLeft + shellW - 380} />}
       {s.settingsOpen && <Settings />}
     </div>
   );

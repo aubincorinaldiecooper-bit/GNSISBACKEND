@@ -3,7 +3,10 @@ import { test } from "node:test";
 import { SimulatedLiveHost } from "../hosts/simulated";
 import type { Identity, IdentityStore, LiveEvent, LiveHost } from "../host";
 import { dockGeometry, rankedAgents } from "../components/Shell";
-import { NO_ANSWER_YET, REPLY_TIMEOUT_MS, actions, activity, configure, enterDesktop, filteredCommands, getState, presence, resetStore, setState, tick } from "./store";
+import {
+  CLOSED_BEFORE_ANSWER, NO_ANSWER_YET, REPLY_TIMEOUT_MS, TYPING_LINK_DOWN, TYPING_WHILE_CONNECTING, TYPING_WHILE_LIVE,
+  actions, activity, configure, enterDesktop, eraseIdentity, filteredCommands, getState, presence, resetStore, setState, tick,
+} from "./store";
 import { TYPING_NOT_CONNECTED } from "../demo/data";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -233,8 +236,30 @@ test("the Activity drawer is hidden until the person opens it; an agent that nee
   s = getState();
   assert.deepEqual(activity(s), { needs: 1, working: 2, unread: 1 });
   assert.equal(s.panelHidden, true, "an agent needing the person does not force the drawer open");
+  // Opening an agent's chat is asking to see it: its work shows beside it.
   actions.openAgent("roof");
+  assert.equal(getState().panelHidden, false);
+  // Back in GNSIS's own chat, the drawer is closed again.
+  actions.openAgent("gnsis");
   assert.equal(getState().panelHidden, true);
+});
+
+test("in the real app, GNSIS's own actions light the Activity button: waiting for an OK, and running", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  assert.deepEqual(activity(getState()), { needs: 0, working: 0, unread: 0 });
+  host.push({ type: "action", state: "waiting", text: "Open youtube.com in a new tab in Google Chrome" });
+  assert.deepEqual(getState().asking, { to: "gnsis", text: "Open youtube.com in a new tab in Google Chrome" });
+  assert.deepEqual(activity(getState()), { needs: 1, working: 0, unread: 0 });
+  host.push({ type: "action", state: "working", text: "Open youtube.com in a new tab in Google Chrome" });
+  assert.equal(getState().asking, null);
+  assert.deepEqual(activity(getState()), { needs: 0, working: 1, unread: 0 });
+  host.push({ type: "action", state: "done", text: "Google Chrome opened a new tab at youtube.com." });
+  assert.deepEqual(activity(getState()), { needs: 0, working: 0, unread: 0 });
+  assert.equal(getState().panelHidden, true, "none of it opens the drawer");
 });
 
 test("typing: the message shows at once, goes to GNSIS through the host, and GNSIS's answer lands in the chat", async () => {
@@ -264,8 +289,8 @@ test("typing: the message shows at once, goes to GNSIS through the host, and GNS
   s = getState();
   assert.equal(s.working, null);
   assert.deepEqual(s.convs.gnsis.turns.at(-1), { role: "system", text: "Done: Google Chrome is on youtube.com." });
+  assert.equal(s.awaiting?.state, "accepted", "what GNSIS did is not its answer: the message stays open");
   // Its words arrive in pieces and become one reply.
-  setState({ awaiting: { to: "gnsis", since: Date.now(), state: "accepted" } });
   host.push({ type: "agent.text", text: "Here are the", endOfTurn: false, interrupted: false });
   assert.deepEqual(getState().reply, { to: "gnsis", text: "Here are the" });
   host.push({ type: "agent.text", text: " results.", endOfTurn: true, interrupted: false });
@@ -361,4 +386,174 @@ test("a real build offers only the commands that do something, and never starts 
   // Demo mode keeps every command, for design review.
   enterDesktop(identity, true);
   assert.equal(filteredCommands("/").length, 5);
+});
+
+/** A desktop with a host that takes typed messages, accepted when the test says so. */
+function typingDesk() {
+  resetStore();
+  const host = new RecordingHost();
+  host.text = true;
+  const pending: Array<{ text: string; accept(): void; reject(e: Error): void }> = [];
+  host.textResult = () => new Promise<void>((accept, reject) => pending.push({ text: host.calls.at(-1)!.slice("sendText:".length), accept, reject }));
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  host.push({ type: "link", state: "ready" });
+  actions.openAgent("gnsis");
+  const type = (text: string) => { setState({ text }); actions.send(); };
+  return { host, pending, type };
+}
+
+test("typing: GNSIS's words after it acts still land — a preamble, the action, then the result", async () => {
+  const { host, pending, type } = typingDesk();
+  type("Open YouTube");
+  pending[0].accept();
+  await sleep(0);
+  host.push({ type: "agent.text", text: "Sure, opening it.", endOfTurn: true, interrupted: false });
+  host.push({ type: "action", state: "working", text: "Open youtube.com in a new tab in Google Chrome" });
+  host.push({ type: "action", state: "done", text: "Google Chrome opened a new tab at youtube.com." });
+  host.push({ type: "agent.text", text: "It is open.", endOfTurn: true, interrupted: false });
+  assert.deepEqual(getState().convs.gnsis.turns.slice(-4).map((t) => t.text), [
+    "Open YouTube", "Sure, opening it.", "Done: Google Chrome opened a new tab at youtube.com.", "It is open.",
+  ]);
+});
+
+test("typing: each message keeps its own place — one failing never changes what is said about the next", async () => {
+  const { pending, type } = typingDesk();
+  type("first");
+  type("second");
+  pending[0].reject(Object.assign(new Error("GNSIS didn’t confirm it got your message. Try again in a moment."), { unconfirmed: true }));
+  await sleep(0);
+  let s = getState();
+  assert.equal(s.awaiting?.state, "sent", "the second message is still on its way");
+  assert.deepEqual(s.convs.gnsis.turns.at(-1), { role: "system", text: "GNSIS didn’t confirm it got your message. Try again in a moment." }, "a message that went out is not called “not sent”");
+  pending[1].accept();
+  await sleep(0);
+  s = getState();
+  assert.equal(s.awaiting?.state, "accepted");
+});
+
+test("typing: the no-answer line waits while GNSIS is working, and counts from when the runtime had the message", async () => {
+  const { host, pending, type } = typingDesk();
+  type("Open YouTube");
+  setState((st) => ({ awaiting: { ...st.awaiting!, since: Date.now() - REPLY_TIMEOUT_MS - 5_000 } }));
+  pending[0].accept();
+  await sleep(0);
+  tick();
+  assert.equal(getState().awaiting?.state, "accepted", "a slow send does not use up the wait");
+  host.push({ type: "action", state: "working", text: "Open a new tab" });
+  setState((st) => ({ awaiting: { ...st.awaiting!, since: Date.now() - REPLY_TIMEOUT_MS - 1 } }));
+  tick();
+  assert.ok(!getState().convs.gnsis.turns.some((t) => t.text === NO_ANSWER_YET), "not while the action runs");
+  host.push({ type: "action", state: "done", text: "Opened a new tab." });
+  setState((st) => ({ awaiting: { ...st.awaiting!, since: Date.now() - REPLY_TIMEOUT_MS - 1 } }));
+  tick();
+  assert.equal(getState().convs.gnsis.turns.at(-1)?.text, NO_ANSWER_YET);
+});
+
+test("typing: a connection that closes before GNSIS answers says so, and keeps what had arrived", async () => {
+  const { host, pending, type } = typingDesk();
+  type("Open YouTube");
+  pending[0].accept();
+  await sleep(0);
+  host.push({ type: "agent.text", text: "Let me open that for", endOfTurn: false, interrupted: false });
+  host.push({ type: "link", state: "closed", detail: "The session ended." });
+  const s = getState();
+  assert.equal(s.awaiting, null);
+  assert.equal(s.reply, null);
+  assert.deepEqual(s.convs.gnsis.turns.slice(-2).map((t) => t.text), ["Let me open that—", CLOSED_BEFORE_ANSWER]);
+});
+
+test("typing: a reply still arriving is never lost — not to live voice, and not to the next message", async () => {
+  const { host, pending, type } = typingDesk();
+  type("Open YouTube");
+  pending[0].accept();
+  await sleep(0);
+  host.push({ type: "agent.text", text: "Let me", endOfTurn: false, interrupted: false });
+  // Live voice starts mid-reply: the reply carries on as the live one.
+  actions.startLive("gnsis");
+  host.push({ type: "mic", state: "on" });
+  host.push({ type: "agent.text", text: " check that.", endOfTurn: true, interrupted: false });
+  assert.equal(getState().convs.gnsis.turns.at(-1)?.text, "Let me check that.");
+  actions.endLive();
+  assert.equal(getState().reply, null, "no stale reply is left blinking after the call");
+  // A second message mid-reply keeps the first reply as it stands.
+  type("And search Andrew Tate");
+  pending[1].accept();
+  await sleep(0);
+  host.push({ type: "agent.text", text: "Searching now", endOfTurn: false, interrupted: false });
+  type("Thanks");
+  const turns = getState().convs.gnsis.turns.slice(-3).map((t) => t.text);
+  assert.deepEqual(turns, ["And search Andrew Tate", "Searching now", "Thanks"]);
+});
+
+test("typing that cannot go is explained for the moment the person is in", async () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  const last = () => getState().convs.gnsis.turns.at(-1)?.text;
+  // Live and listening: never point at the button that would end the call.
+  actions.startLive("gnsis");
+  setState({ text: "open youtube" });
+  actions.send();
+  assert.equal(last(), TYPING_WHILE_CONNECTING);
+  host.push({ type: "mic", state: "on" });
+  setState({ text: "open youtube" });
+  actions.send();
+  assert.equal(last(), TYPING_WHILE_LIVE);
+  actions.endLive();
+  // A runtime that takes typing, with the link down: the link is what is missing.
+  host.text = true;
+  host.push({ type: "link", state: "ready" });
+  host.text = false;
+  host.push({ type: "link", state: "closed", detail: "The session ended." });
+  setState({ text: "open youtube", mode: "bar", winOpen: true });
+  actions.send();
+  assert.equal(last(), TYPING_LINK_DOWN);
+});
+
+test("news for a closed chat marks it and says so", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  actions.closeTab("gnsis");
+  host.push({ type: "action", state: "failed", text: "Google Chrome did not open a new tab." });
+  const s = getState();
+  assert.equal(s.convs.gnsis.unread, true);
+  assert.deepEqual(s.toast && { id: s.toast.id, text: s.toast.text }, { id: "gnsis", text: "Couldn’t do it: Google Chrome did not open a new tab." });
+  actions.openAgent("gnsis");
+  assert.equal(getState().convs.gnsis.unread, false);
+});
+
+test("erasing GNSIS stops what it was seeing before the welcome screen shows", async () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.setVision("screen");
+  host.push({ type: "vision", source: "screen", state: "on" });
+  assert.equal(await eraseIdentity(), null);
+  const s = getState();
+  assert.ok(host.calls.includes("stopVision"));
+  assert.deepEqual(s.vision, { source: null, state: "off" });
+  assert.equal(s.phase, "welcome");
+});
+
+test("screen sharing that never gets a picture is stopped, and the reason shows in the chat", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  actions.setVision("screen");
+  t.mock.timers.tick(20_000);
+  await Promise.resolve();
+  await Promise.resolve();
+  const s = getState();
+  assert.ok(host.calls.includes("stopVision"), "the capture is stopped, not left running behind an error");
+  assert.equal(s.vision.state, "error");
+  assert.match(s.convs.gnsis.turns.at(-1)?.text ?? "", /sharing your screen was stopped/);
 });

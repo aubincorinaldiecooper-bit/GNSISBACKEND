@@ -47,6 +47,7 @@ test("a turn the runtime never confirms is reported as not delivered, and never 
   const result = await typed.send("Open YouTube");
   assert.equal(result.ok, false);
   assert.match(!result.ok ? result.reason : "", /didn’t confirm/);
+  assert.equal(!result.ok && result.unconfirmed, true, "it went out, so it is not called “not sent”");
   assert.equal(turns.latest(), null);
 });
 

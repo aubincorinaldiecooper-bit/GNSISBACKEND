@@ -11,12 +11,14 @@
  * Telemetry parity with the old debug page is deliberate: every daemon
  * control still goes to the host log (minus the two ACK echoes), and the mic,
  * capture and screen-channel lines are unchanged, so a real-Mac acceptance run
- * can still be read from <userData>/logs/gnsis-host.log.
+ * can still be read from <userData>/logs/gnsis-host.log. The log is meant to
+ * be shared, so a control goes in without its credentials and without words:
+ * see forLog.
  */
 
 import type { HostCapabilities, LinkState, LiveEvent, LiveHost, VisionSource } from "@gnsis/ui";
 import type { ScreenChannelConfig } from "../shared/protocol.js";
-import type { GnsisBridge, ScreenUpdate } from "./bridge.js";
+import type { GnsisBridge, ScreenUpdate, TurnResult } from "./bridge.js";
 import type { Log } from "./devices.js";
 
 export interface MicLike {
@@ -206,13 +208,14 @@ export class ElectronLiveHost implements LiveHost {
     if (!words) throw new Error("There is nothing to send.");
     if (!this.typedTurns) throw new Error("Typing isn’t connected to GNSIS yet.");
     this.log(`typed turn requested (${words.length} chars)`);
-    const result = await this.bridge.sendTurn(words).catch((e: unknown) => ({
+    const result: TurnResult = await this.bridge.sendTurn(words).catch((e: unknown) => ({
       ok: false as const,
       reason: e instanceof Error && e.message ? e.message : "The message could not reach GNSIS.",
     }));
     if (!result.ok) {
       this.log(`typed turn failed: ${result.reason}`);
-      throw new Error(result.reason);
+      // The UI says "not sent" only for a message that never went out.
+      throw Object.assign(new Error(result.reason), { unconfirmed: result.unconfirmed === true });
     }
     this.log(`typed turn ${result.turnId} accepted`);
   }
@@ -321,6 +324,13 @@ export class ElectronLiveHost implements LiveHost {
     if (!this.live) return;
     try {
       await this.devices.mic.start();
+      // Muted again, or ended, while the microphone was opening: the stop
+      // that came then had nothing to release yet, so release it now.
+      if (this.muted || !this.live) {
+        this.devices.mic.stop();
+        this.log("unmute abandoned: muted or ended while the microphone opened");
+        return;
+      }
       this.log("unmuted");
     } catch (e) {
       const detail = micProblem(e);
@@ -355,7 +365,7 @@ export class ElectronLiveHost implements LiveHost {
     const c = control as { type?: string; [k: string]: unknown } | null;
     const type = c?.type;
     if (type === "playback.ack.done" || type === "host.event.done") return;
-    this.log(`<- ${type ?? "?"} ${JSON.stringify(control).slice(0, 160)}`);
+    this.log(`<- ${type ?? "?"} ${forLog(control).slice(0, 160)}`);
     switch (type) {
       case "runtime.status":
         if (c?.status === "loading") this.setLink("connecting", "GNSIS is loading itself onto a machine.");
@@ -506,6 +516,26 @@ const isDenied = (e: unknown) => (e as { name?: string } | null)?.name === "NotA
  * that only records a typed turn (for the action policy and background tasks)
  * never replies to it, so typing stays off rather than seem to do nothing.
  */
+/** Fields that carry what someone said, typed or asked for: logged as their length only. */
+const WORDS = new Set(["text", "arguments", "content", "transcript", "final_asr"]);
+
+/**
+ * A runtime control as the host log keeps it: its shape, ids and flags, with
+ * every credential (a resume token, the screen token) removed and every field
+ * of words reduced to its length. The log is shared after a test run; it must
+ * not hand over the session or repeat what the person said.
+ */
+export function forLog(control: unknown): string {
+  return JSON.stringify(control, (key, value) => {
+    if (/token|secret|password/i.test(key)) return "<redacted>";
+    if (WORDS.has(key) && value !== null && value !== undefined) {
+      const size = typeof value === "string" ? value.length : JSON.stringify(value).length;
+      return `<${size} chars>`;
+    }
+    return value;
+  }) ?? String(control);
+}
+
 const answersTypedTurns = (ready: unknown): boolean =>
   (ready as { typed_turns?: unknown } | null)?.typed_turns === true;
 

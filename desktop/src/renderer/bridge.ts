@@ -49,7 +49,7 @@ export interface GnsisBridge {
   onAction(fn: (update: ActionUpdate) => void): void;
 }
 
-export type TurnResult = { ok: true; turnId: string } | { ok: false; reason: string };
+export type TurnResult = { ok: true; turnId: string } | { ok: false; reason: string; unconfirmed?: boolean };
 
 export interface ActionUpdate {
   callId: string;

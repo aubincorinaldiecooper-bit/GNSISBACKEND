@@ -18,7 +18,11 @@ import type { TurnLog } from "./turns.js";
 export const MAX_TYPED_CHARS = 4_000;
 const ACCEPT_TIMEOUT_MS = 8_000;
 
-export type TypedTurnResult = { ok: true; turnId: string } | { ok: false; reason: string };
+/**
+ * `unconfirmed`: the turn went out but was never confirmed, so the runtime
+ * may have it after all — the person is not told it was "not sent".
+ */
+export type TypedTurnResult = { ok: true; turnId: string } | { ok: false; reason: string; unconfirmed?: boolean };
 
 export interface TypedTurnOptions {
   /** Send a control on this desktop's duplex socket. */
@@ -63,7 +67,7 @@ export class TypedTurns {
       const timer = setTimeout(() => {
         if (!this.waiting.delete(turnId)) return;
         this.opts.log("turns", `typed turn ${turnId} was not confirmed by the runtime in time`);
-        resolve({ ok: false, reason: "GNSIS didn’t confirm it got your message. Try again in a moment." });
+        resolve({ ok: false, reason: "GNSIS didn’t confirm it got your message. Try again in a moment.", unconfirmed: true });
       }, this.opts.acceptTimeoutMs ?? ACCEPT_TIMEOUT_MS);
       this.waiting.set(turnId, { text, sentAtMs: now, resolve, timer });
       this.opts.send({
@@ -95,7 +99,7 @@ export class TypedTurns {
     for (const [turnId, turn] of this.waiting) {
       clearTimeout(turn.timer);
       this.opts.log("turns", `typed turn ${turnId} abandoned: connection closed`);
-      turn.resolve({ ok: false, reason });
+      turn.resolve({ ok: false, reason, unconfirmed: true });
     }
     this.waiting.clear();
   }

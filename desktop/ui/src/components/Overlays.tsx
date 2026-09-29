@@ -36,7 +36,7 @@ export function DockMenu({ left }: { left: number }) {
         </button>
       ))}
       <hr />
-      <button type="button" className="menu-item" onClick={() => { actions.openAgent("gnsis"); setState({ dockMenu: false }); }}><I.Pencil size={18} /> New chat</button>
+      <button type="button" className="menu-item" onClick={() => { actions.openAgent("gnsis"); setState({ dockMenu: false }); }}><I.Pencil size={18} /> Open chat</button>
       <button type="button" className="menu-item" onClick={() => setState({ dockMenu: false, settingsOpen: true })}><I.Gear size={18} /> Settings</button>
     </div>
   );

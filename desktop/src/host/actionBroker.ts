@@ -144,18 +144,24 @@ export class ActionBroker {
     this.deps.event({ type: "action.requested", ...base, ts_ms: started, redelivered: control.redelivered === true, turn_id: typeof control.turn_id === "string" ? control.turn_id : null });
 
     let response: Record<string, unknown>;
+    // Why a failed call failed, in the log too: which permission is missing,
+    // or whether the call never matched the tool at all. Never the message,
+    // which can name the person's files or sites.
+    let why = "";
     try {
       response = await this.carryOut(callId, tool, args, record.abort.signal, base);
     } catch (err) {
       const problem = err instanceof ActionProblem ? err : new ActionProblem("failed", `Something went wrong: ${String((err as Error)?.message ?? err)}`);
       response = { status: problem.status, message: problem.message, ...problem.detail };
-      this.deps.event({ type: "action.failed", ...base, ts_ms: this.now(), status: problem.status, category: categoryOf(problem), latency_ms: this.now() - started });
+      const category = categoryOf(problem);
+      why = ` [${problem.detail.stage === "arguments" ? "arguments_rejected" : category}]`;
+      this.deps.event({ type: "action.failed", ...base, ts_ms: this.now(), status: problem.status, category, latency_ms: this.now() - started });
       this.deps.notify?.({ callId, state: problem.status === "needs_permission" ? "needs_permission" : "failed", text: problem.message });
     }
     record.done = true;
     record.response = fit(response);
     this.deps.send({ type: "tool.response", call_id: callId, content: record.response });
-    this.deps.log("execution", `call ${callId} ${tool} → ${String(record.response.status)} (${this.now() - started} ms)`);
+    this.deps.log("execution", `call ${callId} ${tool} → ${String(record.response.status)}${why} (${this.now() - started} ms)`);
   }
 
   private async carryOut(
@@ -169,7 +175,7 @@ export class ActionBroker {
       throw new ActionProblem("unsupported", `${tool} was not agreed for this session, so this computer will not run it.`);
     }
     const argumentProblem = checkArguments(tool, args);
-    if (argumentProblem) throw new ActionProblem("failed", `The request did not match the ${tool} tool: ${argumentProblem}.`);
+    if (argumentProblem) throw new ActionProblem("failed", `The request did not match the ${tool} tool: ${argumentProblem}.`, { stage: "arguments" });
 
     const prepared = await this.deps.registry.prepareAction(tool, args);
     // The model often answers before the person's last words are transcribed;

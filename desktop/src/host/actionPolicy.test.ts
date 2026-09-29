@@ -75,4 +75,18 @@ test("names match the way people say them", () => {
   assert.ok(saidIn("github.com", "open GitHub"));
   assert.ok(!saidIn("Projects", "put it in my documents"));
   assert.ok(!saidIn("", "anything"));
+  assert.ok(saidIn("github.com", "open git hub"), "words in a row still make a name");
+  assert.ok(saidIn("youtube.com", "Open YouTube and search Andrew Tate"));
+});
+
+test("a name has to be the person's words, not a piece of them", () => {
+  // Hosts hidden inside "Open YouTube and search Andrew Tate" were never named.
+  const words = "Open YouTube and search Andrew Tate";
+  for (const host of ["ubeand.com", "you.com", "drewt.net", "earch.org", "ndrewtat.io"]) {
+    assert.ok(!saidIn(host, words), `${host} was not named`);
+  }
+  assert.ok(!saidIn("port.txt", "open the report"), "nor is a file whose name is inside another word");
+  // An injected address to one of those hosts is asked about, not run.
+  const injected = action({ effect: "open_remote", scope: [{ value: "ubeand.com", source: "named" }] });
+  assert.equal(judge(injected, said(words), NOW).decision, "confirm");
 });

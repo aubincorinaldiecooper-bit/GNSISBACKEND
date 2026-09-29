@@ -121,6 +121,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .ghost-btn { height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 14px; border: 1px solid rgba(20, 24, 33, 0.1); background: rgba(255, 255, 255, 0.6); font-size: 15px; font-weight: 500; }
 .chip { height: 30px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 15px; background: rgba(20, 24, 33, 0.07); font-size: 14px; font-weight: 500; color: var(--ink-2); flex-shrink: 0; }
 .chip.green { background: var(--green-tint); color: var(--green-ink); }
+.chip.orange { background: rgba(232, 134, 26, 0.16); color: #8a4a06; }
 
 /* ---------- desktop layout ---------- */
 .desktop { position: fixed; inset: 0; }
@@ -133,7 +134,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .dock-layer { padding: 0 14px; }
 .bar-layer { padding: 0 12px 0 10px; }
 .divider { width: 1px; height: 34px; margin: 0 10px; flex-shrink: 0; background: rgba(20, 24, 33, 0.16); }
-.dock-sun { width: 64px; height: 64px; border: 0; border-radius: 32px; background: transparent; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
+.dock-sun { position: relative; width: 64px; height: 64px; border: 0; border-radius: 32px; background: transparent; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
+.dock-sun .dock-news { right: 2px; bottom: 4px; }
 .dock-agent { position: relative; width: 64px; height: 68px; border: 0; background: transparent; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
 .dock-dots { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); display: flex; }
 .dock-more { width: 52px; height: 44px; flex-shrink: 0; border: 0; border-radius: 22px; background: rgba(20, 24, 33, 0.07); font-size: 15px; font-weight: 600; color: var(--ink-2); }
@@ -302,6 +304,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .switch.on { background: var(--accent); }
 .switch.on span { transform: translateX(20px); }
 .select { height: 42px; min-width: 190px; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(20, 24, 33, 0.14); background: #fff; font-size: 15px; }
+.select:disabled, input[type="range"]:disabled { opacity: 0.5; cursor: not-allowed; }
 .segmented { display: flex; gap: 4px; padding: 4px; border-radius: 14px; background: rgba(20, 24, 33, 0.06); }
 .segmented button { height: 36px; padding: 0 16px; border: 0; border-radius: 10px; background: transparent; font-size: 15px; font-weight: 500; }
 .segmented button.on { background: #fff; }

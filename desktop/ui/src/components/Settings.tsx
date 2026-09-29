@@ -20,8 +20,13 @@ export function Settings() {
   const caps = useStore((s) => s.caps);
   // Stand-in agents exist only in demo mode; the real app never offers them.
   const demo = useStore((s) => s.demo);
+  // These switches are the product's intended settings, and nothing reads
+  // them yet. In the real app they are shown but switched off, so none of them
+  // looks like it controls what GNSIS does. Demo mode keeps them live for review.
+  const inert = !demo;
+  const notYet = inert ? NOT_YET : undefined;
+  const [eraseNote, setEraseNote] = useState("");
   const [section, setSection] = useState<Section>("profile");
-  // These switches are the product's intended settings; nothing reads them yet.
   const [tg, setTg] = useState({ findable: true, autosend: true, speak: false, approve: true, browser: true, nFinish: true, nNeeds: true, nSound: false, motion: false });
   const [copied, setCopied] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -45,7 +50,7 @@ export function Settings() {
     setNote("Sharing isn’t available here, so the link was copied instead.");
   };
   const toggle = (k: keyof typeof tg, label: string) => (
-    <button type="button" role="switch" aria-label={label} aria-checked={tg[k]} className={"switch" + (tg[k] ? " on" : "")} onClick={() => flip(k)}><span /></button>
+    <button type="button" role="switch" aria-label={label} aria-checked={tg[k]} className={"switch" + (tg[k] ? " on" : "")} disabled={inert} title={notYet} onClick={() => flip(k)}><span /></button>
   );
 
   return (
@@ -90,17 +95,17 @@ export function Settings() {
             {section === "voice" && (
               <Group>
                 <Row title="Wake gesture" desc="Starts or ends live voice with whoever is in front, same as the voice button. There is no hardware gesture yet; ⌥Space stands in while GNSIS is focused."><span className="chip">⌥Space</span></Row>
-                <Row title="Microphone"><Select label="Microphone" options={["Built-in microphone", "External microphone"]} /></Row>
+                <Row title="Microphone"><Select label="Microphone" options={["Built-in microphone", "External microphone"]} disabled={inert} /></Row>
                 {caps.transcript && <Row title="Send when I stop talking" desc="For dictation. Sends after a short pause.">{toggle("autosend", "Send when I stop talking")}</Row>}
                 <Row title="Read replies out loud">{toggle("speak", "Read replies out loud")}</Row>
-                <Row title="Voice"><Select label="Voice" options={["Calm", "Bright", "Deep"]} /></Row>
+                <Row title="Voice"><Select label="Voice" options={["Calm", "Bright", "Deep"]} disabled={inert} /></Row>
               </Group>
             )}
             {section === "agents" && (
               <Group>
                 <Row title="Ask before sending emails or messages" desc="Agents show you an approval card first.">{toggle("approve", "Ask before sending emails or messages")}</Row>
                 <Row title="Let agents use a browser" desc="Needed for tasks like finding a recipe or filling out a form.">{toggle("browser", "Let agents use a browser")}</Row>
-                <Row title="Remove finished agents from the dock" desc="They stay in All agents."><Select label="Remove finished agents from the dock" options={["After 10 minutes", "After 1 hour", "After 1 day", "Never"]} /></Row>
+                <Row title="Remove finished agents from the dock" desc="They stay in All agents."><Select label="Remove finished agents from the dock" options={["After 10 minutes", "After 1 hour", "After 1 day", "Never"]} disabled={inert} /></Row>
               </Group>
             )}
             {section === "notif" && (
@@ -112,10 +117,10 @@ export function Settings() {
             )}
             {section === "appear" && (
               <Group>
-                <Row title="Glass transparency"><input type="range" aria-label="Glass transparency" min={20} max={85} value={glass} onChange={(e) => setGlass(Number(e.target.value))} /></Row>
+                <Row title="Glass transparency"><input type="range" aria-label="Glass transparency" min={20} max={85} value={glass} disabled={inert} title={notYet} onChange={(e) => setGlass(Number(e.target.value))} /></Row>
                 <Row title="Dock position">
                   <div className="segmented" role="radiogroup" aria-label="Dock position">
-                    {(["bottom", "top"] as const).map((d) => <button key={d} type="button" role="radio" aria-checked={dock === d} className={dock === d ? "on" : ""} onClick={() => setDock(d)}>{d === "bottom" ? "Bottom" : "Top"}</button>)}
+                    {(["bottom", "top"] as const).map((d) => <button key={d} type="button" role="radio" aria-checked={dock === d} className={dock === d ? "on" : ""} disabled={inert} title={notYet} onClick={() => setDock(d)}>{d === "bottom" ? "Bottom" : "Top"}</button>)}
                   </div>
                 </Row>
                 <Row title="Reduce motion" desc="Turns off breathing faces and sliding windows.">{toggle("motion", "Reduce motion")}</Row>
@@ -126,7 +131,7 @@ export function Settings() {
                 <Group>
                   <Row title="Private key" desc={keyNote}><span className="chip green">{identity.storage === "keychain" ? "In this Mac’s Keychain" : "On this device"}</span></Row>
                   <Row title="Back up your key" desc="If this computer is lost, a backup is the only way to get your GNSIS back."><button type="button" className="btn-secondary" disabled title="Not in this build yet">Back up…</button></Row>
-                  <Row title="Conversation history" desc="Stored on this computer."><button type="button" className="btn-secondary" disabled title="Not in this build yet">Clear history…</button></Row>
+                  <Row title="Conversation history" desc="This app doesn’t keep the chat: it clears when GNSIS closes.">{null}</Row>
                 </Group>
                 {demo && (
                   <Group title="Developer">
@@ -134,10 +139,10 @@ export function Settings() {
                   </Group>
                 )}
                 <Group>
-                  <Row title="Erase GNSIS from this computer" desc="Deletes your key, agents and history here. This can’t be undone.">
+                  <Row title="Erase GNSIS from this computer" desc={eraseNote || "Deletes your key from this computer. This can’t be undone."}>
                     <button type="button" className="btn-danger" onClick={async () => {
                       if (!window.confirm("Erase your GNSIS from this computer? This can’t be undone.")) return;
-                      await eraseIdentity();
+                      setEraseNote((await eraseIdentity()) ?? "");
                     }}>Erase…</button>
                   </Row>
                 </Group>
@@ -159,6 +164,8 @@ function Label({ title, desc }: { title: string; desc?: string }) {
 function Row({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
   return <div className="row"><Label title={title} desc={desc} />{children}</div>;
 }
-function Select({ label, options }: { label: string; options: string[] }) {
-  return <select aria-label={label} className="select">{options.map((o) => <option key={o}>{o}</option>)}</select>;
+function Select({ label, options, disabled }: { label: string; options: string[]; disabled?: boolean }) {
+  return <select aria-label={label} className="select" disabled={disabled} title={disabled ? NOT_YET : undefined}>{options.map((o) => <option key={o}>{o}</option>)}</select>;
 }
+
+const NOT_YET = "Not in this build yet";

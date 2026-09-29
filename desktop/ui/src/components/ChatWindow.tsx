@@ -50,7 +50,9 @@ function Tabs({ s }: { s: State }) {
         })}
       </div>
       <ActivityButton s={s} />
-      <button type="button" className="icon-btn" aria-label="New chat" onClick={() => actions.openAgent("gnsis")}><I.Plus /></button>
+      {s.active !== "gnsis" && (
+        <button type="button" className="icon-btn" aria-label="Open your chat with GNSIS" onClick={() => actions.openAgent("gnsis")}><I.Plus /></button>
+      )}
     </div>
   );
 }
@@ -61,14 +63,19 @@ function Tabs({ s }: { s: State }) {
  * and finished results the person has not seen are counted on it.
  */
 function ActivityButton({ s }: { s: State }) {
-  const a = activity(s);
   const open = !s.panelHidden;
+  const c = s.convs[s.active];
+  // In an agent's chat the drawer shows that agent's work, so the button says
+  // so and carries no marks for the others; their faces in the tabs do that.
+  const home = !c || c.panel === "agents";
+  const a = home ? activity(s) : { needs: 0, working: 0, unread: 0 };
   const note = a.needs ? `, ${a.needs} need${a.needs === 1 ? "s" : ""} you` : a.working ? `, ${a.working} working` : a.unread ? `, ${a.unread} new` : "";
+  const what = home ? "activity" : `${c.title}’s work`;
   return (
     <button
       type="button"
       className={"icon-btn activity-btn" + (open ? " is-open" : "") + (a.needs ? " needs" : "")}
-      aria-label={(open ? "Hide activity" : "Show activity") + note}
+      aria-label={(open ? `Hide ${what}` : `Show ${what}`) + note}
       aria-pressed={open}
       onClick={actions.toggleActivity}
     >
@@ -92,7 +99,8 @@ function ActivityButton({ s }: { s: State }) {
 function Pending({ s, c }: { s: State; c: Conv }) {
   let text: string | null = null;
   if (s.working?.to === c.id) text = `Working: ${s.working.text}`;
-  else if (s.awaiting?.to === c.id) text = s.awaiting.state === "sent" ? "Sending…" : `${c.title} is working on it`;
+  // While the reply itself is arriving, it speaks for itself.
+  else if (s.awaiting?.to === c.id && s.reply?.to !== c.id) text = s.awaiting.state === "sent" ? "Sending…" : `${c.title} is working on it`;
   if (!text) return null;
   return (
     <div className="pending-line" role="status" aria-live="polite">

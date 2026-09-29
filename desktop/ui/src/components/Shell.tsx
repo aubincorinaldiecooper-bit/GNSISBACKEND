@@ -44,10 +44,13 @@ export function Shell({ g }: { g: Geometry }) {
 
 function DockLayer({ s, hidden }: { s: State; hidden: boolean }) {
   const { shown, more } = dockGeometry(s);
+  const news = !!s.convs.gnsis?.unread;
   return (
     <div className="dock-layer" aria-hidden={hidden} style={{ opacity: hidden ? 0 : 1, pointerEvents: hidden ? "none" : "auto" }}>
-      <button type="button" className="dock-sun" aria-label="Open your chat with GNSIS" onClick={() => actions.openAgent("gnsis")}>
+      <button type="button" className="dock-sun" aria-label={news ? "Open your chat with GNSIS, new result" : "Open your chat with GNSIS"} onClick={() => actions.openAgent("gnsis")}>
         <Face name={s.identity?.publicId ?? "GNSIS"} size={50} gnsis />
+        {/* Something landed in GNSIS's chat while it was closed. */}
+        {news && <span className="mark-badge dock-news" aria-hidden="true">1</span>}
       </button>
       <span className="divider" aria-hidden="true" />
       {shown.map((r) => (
@@ -96,6 +99,11 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
       : conv && !isHome ? `Message ${conv.title}…` : "Talk or type, / for commands";
   const canSee = s.caps.screen || s.caps.camera;
   const seeing = s.vision.state === "on" || s.vision.state === "starting";
+  const trouble = (s.vision.state === "denied" || s.vision.state === "error") && !!s.vision.detail;
+  // The face collapses the chat to the dock, which also ends live voice.
+  const closeLabel = s.live
+    ? `Close the chat and end live voice with ${s.convs[s.live.to]?.title ?? "GNSIS"}`
+    : s.agentIds.length ? "Close the chat and show all agents" : "Close the chat";
 
   const faceStyle = liveHere
     ? { transform: `scale(${1 + (live.agentNow ? 0.08 * live.amp : 0)}) translateY(${live.userNow ? 1.5 : 0}px)` }
@@ -110,14 +118,20 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
 
   return (
     <div className="bar-layer" aria-hidden={hidden} style={{ width, opacity: hidden ? 0 : 1, pointerEvents: hidden ? "none" : "auto" }}>
-      <button type="button" className="addr-face" aria-label={`Talking to ${addressee.title}. Show all agents`} onClick={actions.toDock}>
+      <button type="button" className="addr-face" aria-label={closeLabel} title={closeLabel} onClick={actions.toDock}>
         <Face name={isHome ? s.identity?.publicId ?? "GNSIS" : addressee.title} gnsis={isHome} size={34} style={faceStyle} pop={!!addressee.bornT && s.t - addressee.bornT < 8} />
       </button>
       {canSee ? (
         <button
           type="button"
           className={"icon-btn round" + (seeing ? " is-seeing" : "")}
-          aria-label={seeing ? `GNSIS is looking at your ${s.vision.source}. Change what it sees` : "Let GNSIS see your screen or camera"}
+          aria-label={
+            seeing
+              ? `GNSIS is looking at your ${s.vision.source}. Change what it sees`
+              : trouble
+                ? `Let GNSIS see your screen or camera. It didn’t start: ${s.vision.detail}`
+                : "Let GNSIS see your screen or camera"
+          }
           aria-expanded={s.visionMenu}
           aria-pressed={seeing}
           onClick={() => setState({ visionMenu: !s.visionMenu })}
@@ -156,7 +170,8 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
               <I.Mic size={21} />
             </button>
           ) : null}
-          {hasText ? (
+          {/* While live, Cancel or End stays put whatever is typed; Enter still sends. */}
+          {hasText && !live.on ? (
             <button type="button" className="primary-btn" aria-label="Send" onClick={actions.send}><I.ArrowUp size={22} /></button>
           ) : live.on && live.connecting ? (
             <button type="button" className="primary-btn connecting" aria-label={`Cancel. ${live.status}`} onClick={actions.endLive}>

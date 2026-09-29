@@ -126,7 +126,20 @@ function WatchCard({ c }: { c: Conv }) {
 
 function AgentsCard({ s }: { s: State }) {
   const rows = rankedAgents(s);
+  // What GNSIS itself is doing on this computer: what the Activity button's
+  // marks are about when no agent is.
+  const now = s.asking ? { needs: true, text: s.asking.text } : s.working ? { needs: false, text: `Working: ${s.working.text}` } : null;
   return (
+    <>
+    {now && (
+      <div className="card">
+        <div className="card-title">GNSIS right now</div>
+        <div className="list-row shown" role="status">
+          {now.needs ? <span className="chip orange">Needs you</span> : <ThinkingDots />}
+          <span className="grow">{now.text}</span>
+        </div>
+      </div>
+    )}
     <div className="card">
       <div className="card-title">Your agents</div>
       {rows.length === 0 && <p className="muted">No agents are running.</p>}
@@ -138,5 +151,6 @@ function AgentsCard({ s }: { s: State }) {
         </button>
       ))}
     </div>
+    </>
   );
 }

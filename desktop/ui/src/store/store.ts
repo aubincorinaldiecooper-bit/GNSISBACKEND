@@ -46,14 +46,22 @@ export interface State {
   apCustom: string;
   live: LiveState | null;
   /**
-   * A typed message waiting on GNSIS: `sent` until the runtime accepts it,
-   * then `accepted` until GNSIS answers, acts, or the wait runs out.
+   * The typed message GNSIS owes an answer: `sent` until the runtime accepts
+   * it, then `accepted` until GNSIS's reply to it ends, the wait runs out, or
+   * the connection closes. What GNSIS does meanwhile keeps it open and starts
+   * the wait over. `seq` tells one message from the next.
    */
-  awaiting: { to: string; since: number; state: "sent" | "accepted" } | null;
+  awaiting: { to: string; seq: number; since: number; state: "sent" | "accepted" } | null;
   /** GNSIS's reply to a typed message, while its words are still arriving (outside live voice). */
   reply: { to: string; text: string } | null;
   /** What GNSIS is doing on this computer right now, until it reports how it went. */
   working: { to: string; text: string } | null;
+  /** An action GNSIS is waiting for the person to allow, until it runs or is refused. */
+  asking: { to: string; text: string } | null;
+  /** The rest of a reply the person cut off by ending live voice: not shown when it arrives. */
+  dropTail: boolean;
+  /** Some runtime in this session offered typed turns: when typing is off now, the link is what is missing. */
+  typingOffered: boolean;
   /** the runtime link as last reported by the host, live or not */
   link: LinkState;
   vision: VisionState;
@@ -70,13 +78,21 @@ const VISION_START_TIMEOUT_MS = 20_000;
 export const REPLY_TIMEOUT_MS = 60_000;
 /** Said when GNSIS accepted a typed message but neither answered nor acted on it in time. */
 export const NO_ANSWER_YET = "GNSIS hasn’t answered that yet. It may still be working; you can also try asking with your voice.";
+/** Said when the connection closes while a typed message is still owed an answer. */
+export const CLOSED_BEFORE_ANSWER = "The connection to GNSIS closed before it answered.";
+/** Typing that cannot be delivered because the connection is down, on a runtime that does take typing. */
+export const TYPING_LINK_DOWN = "Not sent. GNSIS isn’t connected right now. Try again in a moment.";
+/** Typing that cannot be delivered during live voice: the voice button would end the call, so do not point at it. */
+export const TYPING_WHILE_LIVE = "Typing isn’t connected to GNSIS yet. You’re live, so just say it.";
+export const TYPING_WHILE_CONNECTING = "Typing isn’t connected to GNSIS yet. It’s still connecting; say it once the bar shows Listening.";
 
 const initial: State = {
   phase: "loading", creating: false, identity: null, caps: NO_CAPS,
   mode: "dock", convs: {}, agentIds: [], tabs: ["gnsis"], active: "gnsis", winOpen: false,
   listening: false, listenTo: null, heard: 0, hold: 0, text: "", t: 0, now: Date.now(), seq: 0,
   panelHidden: true, menuOpen: false, dockMenu: false, visionMenu: false, settingsOpen: false,
-  toast: null, apPick: null, apCustom: "", live: null, awaiting: null, reply: null, working: null, link: "connecting",
+  toast: null, apPick: null, apCustom: "", live: null, awaiting: null, reply: null, working: null, asking: null,
+  dropTail: false, typingOffered: false, link: "connecting",
   vision: { source: null, state: "off" }, greet: false, demo: false,
 };
 
@@ -94,7 +110,7 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l);
 }
 export function useStore<T>(select: (s: State) => T): T {
-  return useSyncExternalStore(subscribe, () => select(state));
+  return useSyncExternalStore(subscribe, () => select(state), () => select(state));
 }
 /** Tests only: back to the initial state, host and all. */
 export function resetStore() {
@@ -131,60 +147,119 @@ function onLiveEvent(ev: LiveEvent) {
       visionTimer = null;
     }
     setState({ vision: { source: ev.source, state: ev.state, detail: ev.detail } });
+    if ((ev.state === "denied" || ev.state === "error") && ev.detail) visionTrouble(ev.detail);
     return;
   }
   // What the host can do may change with the runtime it is connected to
   // (typing needs a runtime that answers typed turns), so read it again.
-  if (ev.type === "link") setState({ link: ev.state, caps: host ? host.capabilities() : getState().caps });
+  if (ev.type === "link") {
+    const caps = host ? host.capabilities() : getState().caps;
+    setState((s) => ({ link: ev.state, caps, typingOffered: s.typingOffered || caps.text }));
+  }
   if (!getState().live) {
     onIdleEvent(ev);
-    if (ev.type === "action") noteWorking(ev);
-    return;
+  } else {
+    let ended: string | undefined;
+    setState((s) => {
+      if (!s.live) return {};
+      const step = applyLiveEvent(s.live, ev, Date.now());
+      const c = s.convs[s.live.to];
+      const convs = step.commit.length && c ? { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...step.commit] } } : s.convs;
+      if (step.ended) ended = step.ended.reason;
+      // Only GNSIS's own reply answers a typed message; the person speaking,
+      // or a line about an action, leaves it open.
+      const answered = step.commit.some((t) => t.role === "agent") && s.awaiting?.to === s.live.to ? { awaiting: null } : {};
+      return { live: step.live, convs, ...answered };
+    });
+    if (ended !== undefined) finishLive(ended);
   }
-  let ended: string | undefined;
-  setState((s) => {
-    if (!s.live) return {};
-    const step = applyLiveEvent(s.live, ev, Date.now());
-    const c = s.convs[s.live.to];
-    const convs = step.commit.length && c ? { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...step.commit] } } : s.convs;
-    if (step.ended) ended = step.ended.reason;
-    const answered = step.commit.length && s.awaiting?.to === s.live.to ? { awaiting: null } : {};
-    return { live: step.live, convs, ...answered };
-  });
-  if (ev.type === "action") noteWorking(ev);
-  if (ended !== undefined) finishLive(ended);
+  if (ev.type === "action") noteAction(ev);
+  if (ev.type === "link" && (ev.state === "closed" || ev.state === "error")) linkLost();
 }
 
 /**
  * The moment an action starts is shown while it runs, and cleared by its
- * outcome — which lands in the chat as a line, live or not.
+ * outcome — which lands in the chat as a line, live or not. One waiting for
+ * the person's OK is kept until it runs or is refused, so the Activity button
+ * can show it.
  */
-function noteWorking(ev: Extract<LiveEvent, { type: "action" }>) {
+function noteAction(ev: Extract<LiveEvent, { type: "action" }>) {
   setState((s) => {
-    const to = s.live?.to ?? s.awaiting?.to ?? "gnsis";
-    if (ev.state === "working") return { working: ev.text.trim() ? { to, text: ev.text.trim() } : s.working };
-    return s.working ? { working: null } : {};
+    const to = s.live?.to ?? s.awaiting?.to ?? s.reply?.to ?? "gnsis";
+    const text = ev.text.trim();
+    const working = ev.state === "working" ? (text ? { to, text } : s.working) : null;
+    const asking = ev.state === "waiting" && text ? { to, text } : null;
+    return working === s.working && asking === s.asking ? {} : { working, asking };
+  });
+}
+
+/**
+ * The connection closed outside live voice (live says so itself as it ends):
+ * a reply still arriving stops where it is, and a typed message still owed an
+ * answer is told plainly that none is coming on this connection.
+ */
+function linkLost() {
+  setState((s) => {
+    if (s.live || (!s.reply && !s.awaiting)) return {};
+    let convs = flushReply(s, true);
+    const c = s.awaiting ? convs[s.awaiting.to] : undefined;
+    if (c) convs = { ...convs, [c.id]: { ...c, turns: [...c.turns, { role: "system", text: CLOSED_BEFORE_ANSWER }] } };
+    return { convs, reply: null, awaiting: null };
+  });
+}
+
+/** A reply still arriving, kept as it stands: ended with a dash when it was cut off. */
+function flushReply(s: State, cut: boolean): Record<string, Conv> {
+  const r = s.reply;
+  const c = r ? s.convs[r.to] : undefined;
+  if (!r || !c || !r.text.trim()) return s.convs;
+  const text = cut ? cutText(r.text) : r.text;
+  return { ...s.convs, [c.id]: { ...c, turns: [...c.turns, { role: "agent", text, stream: text.length }] } };
+}
+
+/**
+ * News for a chat. When the person is not looking at it, the chat is marked
+ * unread, and in the bar a toast says what came in.
+ */
+function land(s: State, to: string, turns: Turn[], news: string): Partial<State> {
+  const c = s.convs[to];
+  if (!c) return {};
+  const seen = viewing(s, to);
+  return {
+    convs: withConv(s, to, { turns: [...c.turns, ...turns], ...(seen ? {} : { unread: true }) }),
+    ...(seen || s.mode !== "bar" ? {} : { toast: { id: to, text: news, ttl: 80 } }),
+  };
+}
+
+/** Why the screen or camera is not being seen, said where the person will read it. */
+function visionTrouble(detail: string) {
+  setState((s) => {
+    const to = s.mode === "bar" && s.winOpen && s.convs[s.active] ? s.active : "gnsis";
+    const last = s.convs[to]?.turns.at(-1);
+    if (last?.role === "system" && last.text === detail) return {};
+    return land(s, to, [{ role: "system", text: detail }], detail);
   });
 }
 
 /**
  * Outside live voice, what GNSIS does on this computer still belongs in the
  * chat — an action the person approved after ending the call, or one they
- * asked for by typing. Its words belong there only as the answer to a typed
- * message; anything else arriving after live ended is the tail of a reply the
- * person already cut off.
+ * asked for by typing — and so do its words. The one exception is the rest of
+ * a reply the person cut off by ending live voice, which is not shown.
  */
 function onIdleEvent(ev: LiveEvent) {
   if (ev.type !== "action" && ev.type !== "agent.text") return;
   setState((s) => {
-    const to = s.awaiting?.to ?? s.reply?.to ?? (ev.type === "action" ? s.working?.to ?? "gnsis" : null);
-    const c = to ? s.convs[to] : undefined;
-    if (!to || !c) return {};
     if (ev.type === "action") {
       const line = actionLine(ev.state, ev.text);
-      if (!line) return {};
-      return { convs: withConv(s, to, { turns: [...c.turns, { role: "system", text: line }] }), awaiting: null };
+      const to = s.awaiting?.to ?? s.reply?.to ?? s.working?.to ?? "gnsis";
+      if (!line || !s.convs[to]) return {};
+      // GNSIS is still on it: a typed message stays open, and its wait starts over.
+      return { ...land(s, to, [{ role: "system", text: line }], line), awaiting: s.awaiting ? { ...s.awaiting, since: Date.now() } : null };
     }
+    if (s.dropTail) return ev.endOfTurn || ev.interrupted ? { dropTail: false } : {};
+    const to = s.reply?.to ?? s.awaiting?.to ?? "gnsis";
+    if (!s.convs[to]) return {};
     let text = (s.reply?.to === to ? s.reply.text : "") + ev.text;
     const done: Turn[] = [];
     if (ev.interrupted) {
@@ -196,8 +271,9 @@ function onIdleEvent(ev: LiveEvent) {
     }
     return {
       reply: text ? { to, text } : null,
-      awaiting: null,
-      convs: done.length ? withConv(s, to, { turns: [...c.turns, ...done] }) : s.convs,
+      // A reply that has ended is the answer; an empty end is not.
+      awaiting: done.length ? null : s.awaiting,
+      ...(done.length ? land(s, to, done, "Replied to you") : {}),
     };
   });
 }
@@ -232,9 +308,13 @@ export function presence(c: Conv, s: State): Presence {
   return { working, needs, unread, status, rank: needs ? 0 : working ? 1 : unread ? 2 : c.archived ? 4 : 3 };
 }
 
-/** What the Activity button shows: how many agents need the person, are working, or have news. */
+/**
+ * What the Activity button shows: how many things need the person, are
+ * working, or have news. GNSIS's own actions on this computer count too: one
+ * waiting for the person's OK needs them, one running is working.
+ */
 export function activity(s: State): { needs: number; working: number; unread: number } {
-  const out = { needs: 0, working: 0, unread: 0 };
+  const out = { needs: s.asking ? 1 : 0, working: s.working ? 1 : 0, unread: 0 };
   for (const id of s.agentIds) {
     const c = s.convs[id];
     if (!c) continue;
@@ -280,7 +360,7 @@ export function enterDesktop(identity: Identity, demo: boolean) {
   }
   setState({
     phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet: !demo, t: 0,
-    live: null, toast: null, awaiting: null, reply: null, working: null,
+    live: null, toast: null, awaiting: null, reply: null, working: null, asking: null, dropTail: false,
   });
 }
 
@@ -310,10 +390,28 @@ export async function createIdentity(): Promise<string | null> {
   }
 }
 
-export async function eraseIdentity() {
+/**
+ * Erase this computer's GNSIS. Everything it was doing stops first — live
+ * voice and the screen or camera it was seeing — so nothing keeps running
+ * behind the welcome screen. Returns why, if the key could not be erased.
+ */
+export async function eraseIdentity(): Promise<string | null> {
   finishLive();
-  await identityStore?.erase();
-  setState({ settingsOpen: false, identity: null, phase: "welcome", live: null });
+  if (visionTimer) {
+    clearTimeout(visionTimer);
+    visionTimer = null;
+  }
+  if (getState().vision.state !== "off") await host?.stopVision().catch(() => {});
+  try {
+    await identityStore?.erase();
+  } catch (e) {
+    return "Couldn’t erase your key from this computer. " + (plain(e) || "Try again.");
+  }
+  setState({
+    settingsOpen: false, identity: null, phase: "welcome", live: null, vision: { source: null, state: "off" },
+    awaiting: null, reply: null, working: null, asking: null,
+  });
+  return null;
 }
 
 // ---- live voice -------------------------------------------------------------
@@ -321,7 +419,13 @@ function endLivePatch(s: State, note?: string): Partial<State> {
   if (!s.live) return {};
   const c = s.convs[s.live.to];
   const turns = endLiveTurns(s.live, Date.now(), note);
-  return { live: null, convs: c ? { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...turns] } } : s.convs };
+  return {
+    live: null,
+    // Words the runtime still sends for the call just ended are its tail, not
+    // news: not shown — unless a typed message is still owed its answer.
+    dropTail: !s.awaiting,
+    convs: c ? { ...s.convs, [c.id]: { ...c, turns: [...c.turns, ...turns] } } : s.convs,
+  };
 }
 
 /** End live in the UI and tell the host. `note` is a plain sentence about why, if it was not the user's choice. */
@@ -349,8 +453,12 @@ export const actions = {
       // The chat being left was read up to now; its clock stops with the idle
       // ticks, so stamp it here rather than let it archive at once.
       const left = leaving(base);
+      // An agent's chat opens with its work beside it; GNSIS's own chat never
+      // opens the drawer, and coming back to it from an agent closes it again.
+      const panelHidden = id !== "gnsis" && s.convs[id]?.panel ? false : s.active !== "gnsis" ? true : s.panelHidden;
       return {
         ...(switching ? endLivePatch(s) : {}),
+        panelHidden,
         mode: "bar", dockMenu: false, visionMenu: false, active: id, winOpen: true, menuOpen: false, greet: false,
         toast: base.toast && base.toast.id === id ? null : base.toast,
         tabs: withTab(base.tabs, id),
@@ -388,10 +496,16 @@ export const actions = {
     if (!s0.caps.voice || s0.live) return;
     setState((s) => {
       const id = to && s.convs[to] ? to : "gnsis";
+      // A typed message's reply still arriving carries on as the live reply in
+      // the same chat; in another chat it is kept as it stands.
+      const carry = s.reply?.to === id ? s.reply.text : null;
+      const base = { ...s, convs: carry ? s.convs : flushReply(s, false) };
+      const live = startLiveState(id, Date.now(), s.link);
       return {
         mode: "bar", winOpen: true, active: id, tabs: withTab(s.tabs, id),
-        convs: withConv(s, id, { unread: false, archived: false, readAt: s.t }),
-        live: startLiveState(id, Date.now(), s.link), listening: false, heard: 0, hold: 0, now: Date.now(),
+        convs: withConv(base, id, { unread: false, archived: false, readAt: s.t }),
+        live: carry ? { ...live, agent: { text: carry } } : live, reply: null, dropTail: false,
+        listening: false, heard: 0, hold: 0, now: Date.now(),
         dockMenu: false, visionMenu: false, greet: false, toast: null, menuOpen: false,
       };
     });
@@ -437,17 +551,24 @@ export const actions = {
     if (source) {
       // "Starting" is a promise the runtime has to keep by accepting a frame.
       // If it never does, say so instead of showing a spinner for good.
+      // The capture is stopped too, so "not seeing" on screen really means off.
       visionTimer = setTimeout(() => {
         visionTimer = null;
-        setState((s) =>
-          s.vision.state === "starting" && s.vision.source === source
-            ? { vision: { source, state: "error", detail: "GNSIS hasn’t received a picture yet. The runtime may not be taking video." } }
-            : {},
-        );
+        const now = getState().vision;
+        if (now.state !== "starting" || now.source !== source) return;
+        const detail = `GNSIS hadn’t received a picture after ${VISION_START_TIMEOUT_MS / 1000} seconds, so sharing your ${source} was stopped. The runtime may not be taking video.`;
+        void h.stopVision().catch(() => {}).finally(() => {
+          setState({ vision: { source, state: "error", detail } });
+          visionTrouble(detail);
+        });
       }, VISION_START_TIMEOUT_MS);
     }
     const p = source ? h.startVision(source) : h.stopVision();
-    p.catch((e) => setState({ vision: { source, state: "error", detail: plain(e) || "The visual sense could not start." } }));
+    p.catch((e) => {
+      const detail = plain(e) || "The visual sense could not start.";
+      setState({ vision: { source, state: "error", detail } });
+      visionTrouble(detail);
+    });
   },
   mic() {
     const s = getState();
@@ -530,12 +651,13 @@ export const actions = {
       if (!s.caps.text || !host?.sendText) {
         // The host cannot deliver typed words. Show what was typed, and say so —
         // never a made-up reply.
+        const why = notConnected(s);
         setState((st) => ({
           text: "",
           mode: "bar",
           winOpen: true,
           active: id,
-          convs: withConv(st, id, { turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: TYPING_NOT_CONNECTED }] }),
+          convs: withConv(st, id, { turns: [...st.convs[id].turns, { role: "user", text: v }, { role: "system", text: why }] }),
         }));
         return;
       }
@@ -596,34 +718,59 @@ export function filteredCommands(text: string, s: Pick<State, "demo" | "caps"> =
   return available(s).filter((c) => c.name.slice(1).startsWith(q) || c.desc.toLowerCase().includes(q));
 }
 
+/** Why a typed message cannot go, said for the moment the person is in. */
+function notConnected(s: State): string {
+  if (s.typingOffered && s.link !== "ready") return TYPING_LINK_DOWN;
+  if (s.live) return s.live.phase === "connecting" ? TYPING_WHILE_CONNECTING : TYPING_WHILE_LIVE;
+  return TYPING_NOT_CONNECTED;
+}
+
 /**
  * A typed message, sent to GNSIS as the person's own turn. It shows at once;
  * then "Sending…" until the runtime accepts it, and "working" until GNSIS
- * answers or acts. If it could not be sent, the chat says why.
+ * answers. If it could not be sent, the chat says why. Each message keeps its
+ * own place in line: what happens to one never changes what the chat says
+ * about another.
  */
 function sendTyped(id: string, text: string) {
   const h = host;
   if (!h?.sendText) return;
-  setState((st) => ({
-    text: "",
-    mode: "bar",
-    winOpen: true,
-    active: id,
-    greet: false,
-    reply: null,
-    awaiting: { to: id, since: Date.now(), state: "sent" },
-    convs: withConv(st, id, { unread: false, archived: false, turns: [...st.convs[id].turns, { role: "user", text }] }),
-  }));
+  let seq = 0;
+  setState((st) => {
+    seq = st.seq + 1;
+    // A reply still arriving is kept as it stands; whatever follows is a new one.
+    const convs = flushReply(st, false);
+    return {
+      seq,
+      text: "",
+      mode: "bar",
+      winOpen: true,
+      active: id,
+      greet: false,
+      reply: null,
+      dropTail: false,
+      awaiting: { to: id, seq, since: Date.now(), state: "sent" },
+      convs: withConv({ ...st, convs }, id, { unread: false, archived: false, turns: [...convs[id].turns, { role: "user", text }] }),
+    };
+  });
   h.sendText(text).then(
-    () => setState((st) => (st.awaiting?.to === id && st.awaiting.state === "sent" ? { awaiting: { ...st.awaiting, state: "accepted" } } : {})),
+    // The wait for an answer starts when the runtime has the message.
+    () => setState((st) => (st.awaiting?.seq === seq && st.awaiting.state === "sent" ? { awaiting: { ...st.awaiting, state: "accepted", since: Date.now() } } : {})),
     (e: unknown) =>
       setState((st) => ({
-        awaiting: st.awaiting?.to === id ? null : st.awaiting,
-        convs: st.convs[id]
-          ? withConv(st, id, { turns: [...st.convs[id].turns, { role: "system", text: "Not sent. " + (plain(e) || "The message could not reach GNSIS.") }] })
-          : st.convs,
+        awaiting: st.awaiting?.seq === seq ? null : st.awaiting,
+        convs: st.convs[id] ? withConv(st, id, { turns: [...st.convs[id].turns, { role: "system", text: notSent(e) }] }) : st.convs,
       })),
   );
+}
+
+/**
+ * A message that went out but was never confirmed is not called "not sent":
+ * the runtime may have it. The host marks that case `unconfirmed`.
+ */
+function notSent(e: unknown): string {
+  const why = plain(e) || "The message could not reach GNSIS.";
+  return (e as { unconfirmed?: boolean } | null)?.unconfirmed ? why : "Not sent. " + why;
 }
 
 /** The chat being viewed, stamped as read now: called when the view moves away from it. */
@@ -637,7 +784,7 @@ function leaving(s: State): Record<string, Conv> {
  * stands still and nothing re-renders.
  */
 export function isBusy(s: State): boolean {
-  if (s.live || s.listening || s.toast || s.awaiting || s.reply || s.working) return true;
+  if (s.live || s.listening || s.toast || s.awaiting || s.reply || s.working || s.asking) return true;
   for (const id of ["gnsis", ...s.agentIds]) {
     const c = s.convs[id];
     if (!c) continue;
@@ -675,7 +822,11 @@ export function tick() {
   }
   const convs = { ...s.convs };
   let awaiting = s.awaiting;
-  if (awaiting && awaiting.state === "accepted" && Date.now() - awaiting.since > REPLY_TIMEOUT_MS && convs[awaiting.to]) {
+  // The wait counts from when the runtime had the message, or from GNSIS's
+  // last step on it; it does not run while an action is under way, waiting
+  // for the person, or while the reply is arriving.
+  const underWay = !!s.reply || (!!s.working && s.working.to === awaiting?.to) || !!s.asking;
+  if (awaiting && awaiting.state === "accepted" && !underWay && Date.now() - awaiting.since > REPLY_TIMEOUT_MS && convs[awaiting.to]) {
     // Accepted, but nothing came back: say so rather than wait in silence.
     const c = convs[awaiting.to];
     convs[awaiting.to] = { ...c, turns: [...c.turns, { role: "system", text: NO_ANSWER_YET }] };

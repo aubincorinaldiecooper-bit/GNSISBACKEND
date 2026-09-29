@@ -16,6 +16,8 @@ import { scriptProblem } from "./finder.js";
 import { jxa, literal, type Shell } from "./shell.js";
 
 type Family = "chromium" | "safari";
+/** The browser an action works in, and whether the person has it in front. */
+type Browser = { app: string; family: Family; inFront: boolean };
 const BROWSERS: Array<{ app: string; family: Family }> = [
   { app: "Google Chrome", family: "chromium" },
   { app: "Safari", family: "safari" },
@@ -98,27 +100,42 @@ export class BrowserTool implements ActionTool {
           summary: host ? `Open ${host} in a new tab in ${browser.app}` : `Open a new tab in ${browser.app}`,
           scope: host ? [{ value: host, source: "named" }] : [],
           run: async () => {
-            // With no window open there is nothing to count yet; the script makes one.
-            const before = await this.tabs(browser).then((tabs) => tabs.length, () => 0);
+            // A browser the person is using, in front with no window open,
+            // gets one. One running in the background with no window is not
+            // woken up: that is "no window open", as for every other action.
+            const before = await this.tabs(browser).then(
+              (tabs) => tabs.length,
+              (err: unknown) => {
+                if (!browser.inFront) throw err;
+                return 0;
+              },
+            );
             await this.script(browser, newTabScript(browser, url ? url.toString() : null));
-            let opened: Tab | undefined;
+            // From here the tab may well exist: a read that fails is "not
+            // checked", never "not done" — a retry would open a second one.
+            let checked = false;
+            let count = before;
             for (let i = 0; i < 20; i += 1) {
-              const tabs = await this.tabs(browser);
-              const active = tabs.find((t) => t.active);
-              // The new tab is there and in front: one more than before, and the last one.
-              if (!opened && tabs.length > before && active && active.n === tabs.length) opened = active;
-              if (opened && (!host || (active && hostOf(active.url) === host))) {
-                const on = host ? ` at ${host}` : "";
-                return {
-                  verified: "browser",
-                  message: `${browser.app} opened a new tab${on}; it now has ${tabs.length} tab${tabs.length === 1 ? "" : "s"}.`,
-                  detail: { url: active ? hostOf(active.url) : null, tabs: tabs.length },
-                };
+              const tabs = await this.tabs(browser).catch(() => null);
+              if (tabs) {
+                checked = true;
+                count = tabs.length;
+                const last = tabs[tabs.length - 1];
+                if (tabs.length > before && last && (!host || hostOf(last.url) === host)) {
+                  const on = host ? ` at ${host}` : "";
+                  const front = last.active ? "" : " It is not the tab in front.";
+                  return {
+                    verified: "browser",
+                    message: `${browser.app} opened a new tab${on}; it now has ${tabs.length} tab${tabs.length === 1 ? "" : "s"}.${front}`,
+                    detail: { url: hostOf(last.url), tabs: tabs.length },
+                  };
+                }
               }
               await this.wait(250);
             }
-            if (!opened) throw new ActionProblem("failed", `${browser.app} did not open a new tab.`);
-            return { verified: "screen", message: `${browser.app} opened a new tab for ${host}; the page has not arrived yet. Look at the screen.`, detail: { url: host } };
+            if (!checked) return { verified: "screen", message: `Asked ${browser.app} to open a new tab; it could not be checked. Look at the screen.`, detail: { url: host } };
+            if (count > before) return { verified: "screen", message: `${browser.app} opened a new tab for ${host}; the page has not arrived yet. Look at the screen.`, detail: { url: host } };
+            throw new ActionProblem("failed", `${browser.app} did not open a new tab.`);
           },
         };
       }
@@ -179,15 +196,15 @@ export class BrowserTool implements ActionTool {
   }
 
   /** The browser in front, else the first known one that is running. */
-  private async pick(): Promise<{ app: string; family: Family }> {
+  private async pick(): Promise<Browser> {
     const front = await this.frontApp();
     const inFront = BROWSERS.find((b) => b.app === front);
-    if (inFront) return inFront;
+    if (inFront) return { ...inFront, inFront: true };
     for (const browser of BROWSERS) {
       // `is running` is answered locally and sends the browser no event,
       // so it needs no permission and never launches it.
       const running = await jxa(this.shell, `Application(${literal(browser.app)}).running()`, browser.app).catch(() => "false");
-      if (running === "true") return browser;
+      if (running === "true") return { ...browser, inFront: false };
     }
     throw new ActionProblem("not_found", "No web browser is open. Open one, or ask GNSIS to open a web address.");
   }
@@ -226,21 +243,28 @@ export class BrowserTool implements ActionTool {
 
 /**
  * Open a tab at the end of the front window and bring it forward. With no
- * window open, a new window is made instead; its one tab is the new tab.
+ * window open, a browser in front gets a new window, whose one tab is the new
+ * tab; one in the background is left alone. Bringing the tab forward is
+ * tried, not required: a browser that will not do it still has the tab.
  */
-function newTabScript(browser: { app: string; family: Family }, url: string | null): string {
+function newTabScript(browser: Browser, url: string | null): string {
   const props = url ? `{ url: ${literal(url)} }` : "{}";
+  const noWindow = browser.inFront
+    ? browser.family === "chromium"
+      ? `app.Window().make();${url ? ` app.windows[0].activeTab.url = ${literal(url)};` : ""}`
+      : `app.Document().make();${url ? ` app.windows[0].currentTab.url = ${literal(url)};` : ""}`
+    : `throw new Error("${browser.app} has no window open.");`;
   if (browser.family === "chromium") {
     return [
       `const app = Application(${literal(browser.app)});`,
-      `if (app.windows.length === 0) { app.Window().make();${url ? ` app.windows[0].activeTab.url = ${literal(url)};` : ""} }`,
-      `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); w.activeTabIndex = w.tabs.length; }`,
+      `if (app.windows.length === 0) { ${noWindow} }`,
+      `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); try { w.activeTabIndex = w.tabs.length; } catch (e) {} }`,
     ].join(" ");
   }
   return [
     `const app = Application("Safari");`,
-    `if (app.windows.length === 0) { app.Document().make();${url ? ` app.windows[0].currentTab.url = ${literal(url)};` : ""} }`,
-    `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); w.currentTab = w.tabs[w.tabs.length - 1]; }`,
+    `if (app.windows.length === 0) { ${noWindow} }`,
+    `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); try { w.currentTab = w.tabs[w.tabs.length - 1]; } catch (e) {} }`,
   ].join(" ");
 }
 

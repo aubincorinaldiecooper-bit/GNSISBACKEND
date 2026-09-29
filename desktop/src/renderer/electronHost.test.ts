@@ -48,6 +48,7 @@ class FakeBridge implements GnsisBridge {
   closed(code: number) { this.handlers.closed?.(code, ""); }
   screen(u: ScreenUpdate) { this.handlers.screen?.(u); }
   interrupted() { this.handlers.interrupted?.(); }
+  action(u: import("./bridge.js").ActionUpdate) { this.handlers.action?.(u); }
 }
 
 function fakeDevices(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void> } = {}) {
@@ -343,6 +344,30 @@ test("End pressed while the microphone is still opening: it closes again and liv
   assert.ok(bridge.logs.some((l) => l.includes("cancelled while the microphone was opening")));
 });
 
+test("mute again, or End, while unmuting is still opening the microphone: it is closed as soon as it opens", async () => {
+  for (const second of ["mute", "end"] as const) {
+    const opts: { micGate?: Promise<void> } = {};
+    const { bridge, devices, events, host } = harness(opts);
+    await tick();
+    await host.startLive();
+    await host.setMuted(true);
+    assert.equal(devices.micActive, false);
+    let open!: () => void;
+    opts.micGate = new Promise<void>((resolve) => (open = resolve));
+    const unmute = host.setMuted(false);
+    await tick();
+    // The second click lands while the microphone is still opening.
+    if (second === "mute") await host.setMuted(true);
+    else await host.endLive();
+    open();
+    await unmute;
+    assert.equal(devices.micActive, false, `after ${second}, nothing is capturing`);
+    assert.equal(devices.calls.at(-1), "mic.stop");
+    assert.ok(bridge.logs.includes("unmute abandoned: muted or ended while the microphone opened"));
+    if (second === "end") assert.ok(events.some((e) => e.type === "mic" && e.state === "off"));
+  }
+});
+
 test("End while connecting, then start again: the second attempt waits for the first to unwind", async () => {
   let open!: () => void;
   const micGate = new Promise<void>((resolve) => (open = resolve));
@@ -392,8 +417,8 @@ test("typing is offered only when the runtime says it answers typed turns", asyn
   assert.deepEqual(bridge.turns, ["Open YouTube and search Andrew Tate"], "the words go to the main process, trimmed");
   assert.ok(bridge.logs.some((l) => l === "typed turn typed-1 accepted"));
 
-  bridge.turnResult = { ok: false, reason: "GNSIS didn’t confirm it got your message. Try again in a moment." };
-  await assert.rejects(host.sendText("Again"), /didn’t confirm it got your message/);
+  bridge.turnResult = { ok: false, reason: "GNSIS didn’t confirm it got your message. Try again in a moment.", unconfirmed: true };
+  await assert.rejects(host.sendText("Again"), (e: Error & { unconfirmed?: boolean }) => /didn’t confirm/.test(e.message) && e.unconfirmed === true);
   await assert.rejects(host.sendText("   "), /nothing to send/);
 
   // A link that ends takes typing with it, until the next ready offers it again.
@@ -410,4 +435,32 @@ test("typing is offered only when the runtime says it answers typed turns", asyn
   const late = harness({ state: { ready: { type: "ready", typed_turns: true }, connected: true, closed: false } });
   await tick();
   assert.equal(late.host.capabilities().text, true, "a ready that went by before the page loaded counts too");
+});
+
+test("the host log keeps a control's shape, never its credentials or its words", async () => {
+  const { bridge } = harness({ ready: false });
+  await tick();
+  const token = "rt_5c1c2c7e4b6a4d0f9e8a7b6c5d4e3f2a1b0c9d8";
+  bridge.control({ type: "ready", session_id: "host-42", resume_token: token, screen: { token: "scr_secret" }, typed_turns: true });
+  bridge.control({ type: "tool.call", call_id: "call_0123456789abcdef", tool_calls: [{ name: "input", arguments: { action: "type", text: "Andrew Tate" } }] });
+  bridge.control({ type: "chunk", text: "Searching YouTube for Andrew Tate now.", generation: 3 });
+  const log = bridge.logs.join("\n");
+  assert.ok(!log.includes(token) && !log.includes("scr_secret"), "no credential reaches the log");
+  assert.ok(!log.includes("Andrew Tate"), "no words reach the log");
+  assert.ok(log.includes('"session_id":"host-42"') && log.includes('"resume_token":"<redacted>"'));
+  assert.ok(log.includes('"name":"input"') && log.includes('"arguments":"<'), "the tool's name stays; its arguments become a length");
+  assert.ok(log.includes('"text":"<38 chars>"') && log.includes('"generation":3'));
+});
+
+test("what GNSIS does on the computer reaches the UI as it happens, without its words in the log", async () => {
+  const { bridge, events } = harness();
+  await tick();
+  bridge.action({ callId: "c1", state: "working", text: "Open youtube.com in a new tab in Google Chrome" });
+  bridge.action({ callId: "c1", state: "done", text: "Google Chrome opened a new tab at youtube.com." });
+  assert.deepEqual(events.filter((e) => e.type === "action"), [
+    { type: "action", state: "working", text: "Open youtube.com in a new tab in Google Chrome" },
+    { type: "action", state: "done", text: "Google Chrome opened a new tab at youtube.com." },
+  ]);
+  assert.ok(bridge.logs.includes("action c1 working") && bridge.logs.includes("action c1 done"));
+  assert.ok(!bridge.logs.some((l) => l.includes("youtube")));
 });

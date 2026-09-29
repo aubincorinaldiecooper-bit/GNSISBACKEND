@@ -165,16 +165,17 @@ test("browser: with no browser open, it says so instead of launching one", async
 });
 
 /** A browser with tabs, driven the way the tool drives it: by the scripts it sends. */
-function fakeBrowser(app: "Google Chrome" | "Safari", opts: { ignoreNewTab?: boolean; windows?: boolean } = {}) {
+function fakeBrowser(app: "Google Chrome" | "Safari", opts: { ignoreNewTab?: boolean; windows?: boolean; inFront?: boolean; unreadable?: boolean } = {}) {
   let windows = opts.windows ?? true;
   const tabs: Array<{ title: string; url: string }> = windows ? [{ title: "Mail", url: "https://mail.example/" }] : [];
   let active = tabs.length;
   const scripts: string[] = [];
   const shell = fakeShell((file, args) => {
     if (file === "/usr/bin/lsappinfo" && args[0] === "front") return { stdout: "ASN:0x0-0x1234" };
-    if (file === "/usr/bin/lsappinfo") return { stdout: `"LSDisplayName"="${app}"` };
+    if (file === "/usr/bin/lsappinfo") return { stdout: `"LSDisplayName"="${opts.inFront === false ? "GNSIS" : app}"` };
     const source = args[args.length - 1];
     scripts.push(source);
+    if (source.includes(".running()")) return { stdout: source.includes(app) ? "true" : "false" };
     if (source.includes("tabs.push") || source.includes("make()")) {
       if (opts.ignoreNewTab) return { stdout: "" };
       const url = /url: "([^"]+)"/.exec(source)?.[1] ?? (app === "Safari" ? "" : "chrome://newtab/");
@@ -184,7 +185,8 @@ function fakeBrowser(app: "Google Chrome" | "Safari", opts: { ignoreNewTab?: boo
       return { stdout: "" };
     }
     if (source.includes("JSON.stringify(w.tabs()")) {
-      if (!windows) return { code: 1, stderr: "Can't get object." };
+      if (!windows) return { code: 1, stderr: "execution error: Error: Invalid index. (-1719)" };
+      if (opts.unreadable && tabs.length > 1) return { code: 1, stderr: "Connection is invalid. (-609)" };
       return { stdout: JSON.stringify(tabs.map((t, i) => ({ n: i + 1, title: t.title, url: t.url, active: i + 1 === active }))) };
     }
     return undefined;
@@ -233,4 +235,41 @@ test("browser: with no window open, new_tab makes one; a browser that opens noth
   const stuck = fakeBrowser("Google Chrome", { ignoreNewTab: true });
   const prepared = await new BrowserTool(stuck.shell, async () => {}, noWait).prepare({ action: "new_tab" });
   await assert.rejects(prepared.run(), (err: unknown) => err instanceof ActionProblem && err.status === "failed" && /did not open a new tab/.test(err.message));
+});
+
+test("browser: a browser running in the background with no window is not woken up by new_tab", async () => {
+  const b = fakeBrowser("Google Chrome", { windows: false, inFront: false });
+  const prepared = await new BrowserTool(b.shell, async () => {}, noWait).prepare({ action: "new_tab", url: "youtube.com" });
+  await assert.rejects(prepared.run(), (err: unknown) => err instanceof ActionProblem && /no window open/.test(err.message));
+  assert.equal(b.tabs.length, 0, "no window was made");
+  assert.ok(!b.scripts.some((src) => src.includes("make()")), "the window-making script never ran");
+});
+
+test("browser: a new tab that could not be checked is said so, never reported as not done", async () => {
+  const b = fakeBrowser("Google Chrome", { unreadable: true });
+  const done = await (await new BrowserTool(b.shell, async () => {}, noWait).prepare({ action: "new_tab" })).run();
+  assert.equal(b.tabs.length, 2, "the tab was opened");
+  assert.equal(done.verified, "screen");
+  assert.match(done.message, /could not be checked/);
+});
+
+test("browser: every action the shared catalog offers is one the tool can do", async () => {
+  const { hostToolSchema } = await import("./catalog.js");
+  const offered = hostToolSchema("browser")?.parameters.properties?.action.enum as string[];
+  assert.ok(offered.includes("new_tab"));
+  const b = fakeBrowser("Google Chrome");
+  const tool = new BrowserTool(b.shell, async () => {}, noWait);
+  for (const action of offered) {
+    const prepared = await tool.prepare({ action, tab: 1, url: "youtube.com" });
+    assert.equal(prepared.action, action, `${action} is handled`);
+  }
+  await assert.rejects(tool.prepare({ action: "teleport" }), (err: unknown) => err instanceof ActionProblem && err.status === "unsupported");
+});
+
+test("a web address may carry a search, spaces and all", () => {
+  assert.equal(asWebAddress("youtube.com/results?search_query=Andrew Tate")?.toString(), "https://youtube.com/results?search_query=Andrew%20Tate");
+  assert.equal(asWebAddress("youtube.com?q=x")?.toString(), "https://youtube.com/?q=x");
+  assert.equal(asWebAddress("report.pdf?x=1"), null, "still a file, not a website");
+  assert.equal(asWebAddress("youtube.com now"), null);
+  assert.equal(asWebAddress("Andrew Tate"), null);
 });

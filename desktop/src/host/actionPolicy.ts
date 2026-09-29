@@ -85,27 +85,41 @@ export function judge(action: PreparedAction, turn: TrustedTurn | null, nowMs: n
 
 /**
  * Is this name in what the person said? Loose about case, punctuation, a file
- * extension and spacing ("Q3 report" matches "q3-report.pdf"), strict about
- * the words themselves.
+ * extension and spacing ("Q3 report" matches "q3-report.pdf", "git hub"
+ * matches github.com), strict about the words themselves: the name has to be
+ * one of their words, or several of them in a row, never a piece of one.
+ * "Open YouTube and search Andrew Tate" names youtube.com, not ubeand.com or
+ * you.com.
  */
 export function saidIn(name: string, words: string): boolean {
-  const said = normalize(words);
   const whole = normalize(name);
   if (!whole) return false;
-  if (said.includes(whole)) return true;
   const stem = normalize(name.replace(/\.[a-z0-9]{1,6}$/i, ""));
-  if (stem && said.includes(stem)) return true;
   // A host like github.com is said as "github".
   const host = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(name) ? normalize(name.split(".").slice(-2, -1)[0] ?? "") : "";
-  return host.length >= 3 && said.includes(host);
+  const wanted = new Set([whole, stem, host.length >= 3 ? host : ""].filter(Boolean));
+  const longest = Math.max(...[...wanted].map((w) => w.length));
+  const said = wordsOf(words);
+  for (let i = 0; i < said.length; i += 1) {
+    let run = "";
+    for (let j = i; j < said.length && run.length < longest; j += 1) {
+      run += said[j];
+      if (wanted.has(run)) return true;
+    }
+  }
+  return false;
+}
+
+function fold(text: string): string {
+  return text.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
 
 function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "");
+  return fold(text).replace(/[^a-z0-9]+/g, "");
+}
+
+function wordsOf(text: string): string[] {
+  return fold(text).split(/[^a-z0-9]+/).filter(Boolean);
 }
 
 /** The same reason, said to the person in the confirmation. */

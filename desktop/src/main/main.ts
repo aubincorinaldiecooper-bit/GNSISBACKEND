@@ -167,6 +167,7 @@ const host = new HostSession({
     }
     sendToRenderer("duplex:control", c);
   },
+  onOpen: () => hostLog("transport", "runtime connected (duplex open)"),
   onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
   onClosed: (code) => {
     duplexClosed = true;
@@ -213,7 +214,9 @@ const broker = new ActionBroker({
  */
 async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<boolean> {
   const previous = request.typesIntoFrontApp ? await frontAppName() : null;
-  hostLog("execution", `asking the person: ${request.summary} (${request.reason})`);
+  // The summary can quote what is typed, or name a file or site: it is shown
+  // to the person, not written to the log; the broker has logged the call.
+  hostLog("execution", `call ${request.callId}: asking the person (${request.reason})`);
   app.focus({ steal: true });
   const options = {
     type: "question" as const,
@@ -228,7 +231,7 @@ async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<
   };
   const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const allowed = result.response === 0 && !signal.aborted;
-  hostLog("execution", `the person ${allowed ? "allowed" : "did not allow"}: ${request.summary}`);
+  hostLog("execution", `call ${request.callId}: the person ${allowed ? "allowed" : "did not allow"} it`);
   if (allowed && previous && previous !== app.getName()) {
     // Activating a running app needs no permission; the action then types
     // into the app the person was using, not into GNSIS.
