@@ -430,9 +430,11 @@ class OcrTextJudge:
         expected = request.expected_state
         if expected is None or not (expected.visible_text or expected.absent_text):
             return {"status": "ambiguous", "reason": "No on-screen text was named for this result."}
+        before_boxes = list(self.reader.read(request.before.image))
         boxes = list(self.reader.read(request.after[-1].image))
         found = {cue: self._find(cue, boxes) for cue in expected.visible_text}
         contrary = {cue: self._find(cue, boxes) for cue in expected.absent_text}
+        contrary_before = {cue: self._find(cue, before_boxes) for cue in expected.absent_text}
         missing = [cue for cue, box in found.items() if box is None]
         shown_contrary = [cue for cue, box in contrary.items() if box is not None]
         evidence: dict[str, Any] = {
@@ -443,14 +445,31 @@ class OcrTextJudge:
         }
         if not missing and not shown_contrary:
             if expected.visible_text:
-                before = list(self.reader.read(request.before.image))
-                evidence["already_visible_before"] = all(self._find(cue, before) for cue in expected.visible_text)
+                evidence["already_visible_before"] = all(self._find(cue, before_boxes) for cue in expected.visible_text)
                 confidence = min(float(getattr(box, "score", 0.0)) for box in found.values())
                 shown = ", ".join(f'"{cue}"' for cue in expected.visible_text)
                 note = " (it was already visible before the action)" if evidence["already_visible_before"] else ""
                 return {"status": "success", "reason": f"Now visible: {shown}{note}.", "confidence": confidence, "evidence": evidence}
+            previously_visible = [cue for cue, box in contrary_before.items() if box is not None]
+            evidence["contrary_visible_before"] = previously_visible
+            # OCR failing to read a cue after the action is not proof that the
+            # cue disappeared. For absence-only expectations, require that the
+            # same contrary text was actually readable before the action.
+            if set(previously_visible) != set(expected.absent_text):
+                absent = ", ".join(f'"{cue}"' for cue in expected.absent_text)
+                return {
+                    "status": "ambiguous",
+                    "reason": f"Could not prove that {absent} disappeared because it was not reliably readable before the action.",
+                    "evidence": evidence,
+                }
             absent = ", ".join(f'"{cue}"' for cue in expected.absent_text)
-            return {"status": "success", "reason": f"No longer visible: {absent}.", "confidence": self.ABSENCE_CONFIDENCE, "evidence": evidence}
+            confidence = min(float(getattr(contrary_before[cue], "score", 0.0)) for cue in expected.absent_text)
+            return {
+                "status": "success",
+                "reason": f"No longer visible: {absent}.",
+                "confidence": min(self.ABSENCE_CONFIDENCE, confidence),
+                "evidence": evidence,
+            }
         if shown_contrary and (missing or not expected.visible_text):
             confidence = max(float(getattr(contrary[cue], "score", 0.0)) for cue in shown_contrary)
             still = ", ".join(f'"{cue}"' for cue in shown_contrary)
