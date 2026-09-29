@@ -28,6 +28,19 @@ test = [
 qr = [
   "segno>=1.6",
 ]
+# Optional System-1 visual decision engine. Keep these dependencies out of the
+# lightweight realtime runtime unless local visual inference/grounding is enabled.
+visual = [
+  "torch==2.13.0",
+  "torchvision==0.28.0",
+  "transformers==5.16.1",
+  "accelerate==1.14.0",
+  "huggingface_hub==1.33.0",
+  "numpy==2.5.2",
+  "rapidocr==3.9.2",
+  "onnxruntime==1.30.0",
+  "opencv-python==5.0.0.93",
+]
 
 [project.scripts]
 gnsis-serve = "gnsis_runtime.cli:main"
