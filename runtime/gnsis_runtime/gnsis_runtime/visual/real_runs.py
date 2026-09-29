@@ -451,6 +451,7 @@ def collect_post_action_frames(
     *,
     before_frame_id: str,
     acted_at_ms: int | None = None,
+    newer_than_frame_id: str | None = None,
     min_frames: int = 2,
     max_frames: int = 6,
     settle_frames: int = DEFAULT_SETTLE_FRAMES,
@@ -485,6 +486,15 @@ def collect_post_action_frames(
                 for frame in newer
                 if frame.captured_at_ms is None or frame.captured_at_ms >= acted_at_ms
             ]
+        if newer_than_frame_id is not None:
+            marker = next(
+                (index for index, frame in enumerate(newer) if frame.frame_id == newer_than_frame_id),
+                None,
+            )
+            # A re-verification is only meaningful with evidence that did not
+            # exist during the previous judgement. If the marker fell out of
+            # history, do not guess that older retained frames are new.
+            newer = newer[marker + 1 :] if marker is not None else []
         frames = tuple(newer[-max_frames:])
         tail = frames[-settle_frames:]
         measure = unsettled_motion != float("inf") and len(tail) >= 2
@@ -560,6 +570,7 @@ class RealRunCoordinator:
         action_detail: Mapping[str, Any] | None = None,
         acted_at_ms: int | None = None,
         window: Mapping[str, Any] | None = None,
+        newer_than_frame_id: str | None = None,
     ) -> tuple[VerificationResult, PostActionWindow | None]:
         """Collect the post-action window from shared history and judge it."""
 
@@ -570,6 +581,7 @@ class RealRunCoordinator:
             screen_frames,
             before_frame_id=frame_id,
             acted_at_ms=acted_at_ms,
+            newer_than_frame_id=newer_than_frame_id,
             **dict(window or {}),
         )
         evidence = {"post_frame_ids": list(collected.frame_ids), "motion": collected.motion, "settled": collected.settled}
