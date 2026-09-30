@@ -46,6 +46,14 @@ export interface MenuBarOptions {
   log(line: string): void;
   /** How long the page has to tuck away before the window hides regardless. */
   hideAfterMs?: number;
+  /** GNSIS's window was closed while the icon stayed: open it again. */
+  reopen?(): void;
+  /**
+   * The page did not tuck away in time, so it did not end the call either:
+   * end it from here before the window hides, so nothing keeps listening
+   * behind a hidden GNSIS.
+   */
+  endCall?(): void;
   setTimeout?: (fn: () => void, ms: number) => unknown;
   clearTimeout?: (handle: unknown) => void;
 }
@@ -97,10 +105,11 @@ export class MenuBar {
   /** The icon was clicked: tuck away if GNSIS is out, come back if it is tucked away or on its way. */
   click(): void {
     const w = this.o.window();
-    if (!w || w.isDestroyed()) return;
+    if (!w || w.isDestroyed()) return this.reopen();
     if (w.isVisible() && this.hiding === null) {
       this.hiding = this.setT(() => {
-        this.o.log("menu bar: the page did not tuck away in time; hiding anyway");
+        this.o.log("menu bar: the page did not tuck away in time; ending any call and hiding anyway");
+        this.o.endCall?.();
         this.hideNow();
       }, this.o.hideAfterMs ?? 1_000);
       this.o.send({ want: "hide", at: this.iconAt() ?? undefined });
@@ -118,7 +127,7 @@ export class MenuBar {
   show(): void {
     this.stopHiding();
     const w = this.o.window();
-    if (!w || w.isDestroyed()) return;
+    if (!w || w.isDestroyed()) return this.reopen();
     if (!w.isVisible()) w.showInactive();
     this.o.send({ want: "show", at: this.iconAt() ?? undefined });
   }
@@ -133,6 +142,12 @@ export class MenuBar {
     this.stopHiding();
     this.tray?.destroy();
     this.tray = null;
+  }
+
+  private reopen(): void {
+    this.stopHiding();
+    this.o.log("menu bar: GNSIS's window was closed; opening it again");
+    this.o.reopen?.();
   }
 
   private hideNow(): void {

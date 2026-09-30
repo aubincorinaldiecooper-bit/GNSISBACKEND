@@ -9,8 +9,9 @@ import { MenuBar, type MenuBarMessage } from "./menuBar.js";
 
 const FACE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAk";
 
-function setUp() {
+function setUp(opts: { closed?: boolean } = {}) {
   const sent: MenuBarMessage[] = [];
+  const calls: string[] = [];
   const logs: string[] = [];
   const timers: Array<{ fn: () => void; ms: number; live: boolean }> = [];
   const trays: Array<{ images: unknown[]; tip: string; click?: () => void; destroyed: boolean }> = [];
@@ -42,7 +43,9 @@ function setUp() {
       return t;
     },
     image: (png) => `image of ${png.length} chars`,
-    window: () => win,
+    window: () => (opts.closed ? null : win),
+    reopen: () => void calls.push("reopen"),
+    endCall: () => void calls.push("endCall"),
     send: (m) => void sent.push(m),
     zoom: 0.8,
     log: (l) => void logs.push(l),
@@ -53,7 +56,7 @@ function setUp() {
     },
     clearTimeout: (h) => void ((h as { live: boolean }).live = false),
   });
-  return { bar, sent, logs, timers, trays, win };
+  return { bar, sent, logs, timers, trays, win, calls };
 }
 
 // The icon's centre (1112, 12) in page pixels from the window's top left, at the page's 80%.
@@ -91,14 +94,25 @@ test("clicking the icon asks the page to tuck GNSIS away; the window hides once 
   assert.equal(bar.tucked, true);
 });
 
-test("if the page never answers, the window hides anyway", () => {
-  const { bar, logs, timers, trays, win } = setUp();
+test("if the page never answers, the call is ended from here and the window hides anyway", () => {
+  const { bar, calls, logs, timers, trays, win } = setUp();
   bar.setFace(FACE);
   trays[0].click!();
   assert.equal(timers[0].ms, 1_000);
+  assert.deepEqual(calls, []);
   timers[0].fn();
+  assert.deepEqual(calls, ["endCall"], "nothing keeps listening behind a hidden GNSIS");
   assert.equal(win.visible, false);
   assert.ok(logs.some((l) => l.includes("did not tuck away in time")));
+});
+
+test("if GNSIS's window was closed, the icon opens it again", () => {
+  const { bar, calls, trays } = setUp({ closed: true });
+  bar.setFace(FACE);
+  trays[0].click!();
+  assert.deepEqual(calls, ["reopen"]);
+  bar.show();
+  assert.deepEqual(calls, ["reopen", "reopen"], "and so does the Dock icon");
 });
 
 test("clicking the icon again brings GNSIS back; so does the Dock icon after the ≡ menu hid it", () => {

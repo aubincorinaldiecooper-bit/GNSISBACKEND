@@ -324,8 +324,19 @@ const menuBar = OVERLAY
       send: (message) => sendToRenderer("menubar", message),
       zoom: UI_SCALE,
       log: (line) => hostLog("host", line),
+      reopen: () => createWindow(),
+      endCall: () => {
+        if (!callOpen) return;
+        callOpen = false;
+        hostLog("host", "call ended reason=tucked_away (the page did not end it)");
+        host.endCall("tucked_away", { stop: false });
+      },
     })
   : null;
+/** A call is open on the timeline (the page's call:start without its call:end yet). */
+let callOpen = false;
+/** Microphone frames that arrived while GNSIS was tucked into the menu bar, and were not sent. */
+let tuckedFrames = 0;
 
 function createWindow(): void {
   const webPreferences = {
@@ -493,11 +504,13 @@ app.whenReady().then(async () => {
   let callFrames = 0;
   let droppedFrames = 0;
   ipcMain.on("call:start", () => {
+    callOpen = true;
     callFrames = 0;
     hostLog("host", "call started");
     host.startCall();
   });
   ipcMain.on("call:end", (_e, reason) => {
+    callOpen = false;
     const why = typeof reason === "string" && reason ? reason : "renderer";
     hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
     host.endCall(why, { stop: false });
@@ -507,6 +520,11 @@ app.whenReady().then(async () => {
     if (!header || !(pcm instanceof Uint8Array)) {
       // Once, then every 500th: a steady stream of bad frames would bury the log.
       if (droppedFrames++ % 500 === 0) hostLog("audio", `a microphone frame was not well formed; dropped (${droppedFrames} so far)`);
+      return;
+    }
+    // Tucked into the menu bar, GNSIS is not listening: nothing from the microphone leaves this Mac.
+    if (menuBar?.tucked) {
+      if (tuckedFrames++ % 500 === 0) hostLog("audio", `GNSIS is tucked into the menu bar; microphone frames are not sent (${tuckedFrames} so far)`);
       return;
     }
     const audio = Buffer.from(pcm);
