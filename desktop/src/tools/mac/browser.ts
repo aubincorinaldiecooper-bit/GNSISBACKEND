@@ -102,7 +102,7 @@ export class BrowserTool implements ActionTool {
           action,
           effect: url ? "open_remote" : "open_local",
           summary: host ? `Open ${host} in a new tab in ${browser.app}` : `Open a new tab in ${browser.app}`,
-          scope: host ? [{ value: host, source: "named" }] : [],
+          scope: host ? [{ value: host, source: "named", kind: "site" }] : [],
           run: async () => {
             // A browser the person is using, in front with no window open,
             // gets one. One running in the background with no window is not
@@ -157,7 +157,7 @@ export class BrowserTool implements ActionTool {
           action,
           effect: "open_remote",
           summary: `Go to ${host} in ${browser.app}`,
-          scope: [{ value: host, source: "named" }],
+          scope: [{ value: host, source: "named", kind: "site" }],
           run: async () => {
             await this.script(browser, browser.family === "chromium"
               ? `Application(${literal(browser.app)}).windows[0].activeTab.url = ${literal(url.toString())}`

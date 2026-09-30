@@ -33,6 +33,11 @@ export interface ScopeTarget {
    * it: a shortcut by what it does ("copy" for cmd+c), not only by its key.
    */
   also?: string[];
+  /**
+   * A web address's host. It counts as named only if it is the real address
+   * of a site the person named, or they spelled it out (host/sites.ts).
+   */
+  kind?: "site";
 }
 
 export interface PreparedAction {

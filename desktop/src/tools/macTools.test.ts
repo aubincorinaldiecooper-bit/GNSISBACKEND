@@ -49,7 +49,7 @@ test("open: a web address, a file, a folder and an app are told apart", async ()
 
   const url = await open.prepare({ target: "https://github.com/anthropics" });
   assert.equal(url.effect, "open_remote");
-  assert.deepEqual(url.scope, [{ value: "github.com", source: "named" }]);
+  assert.deepEqual(url.scope, [{ value: "github.com", source: "named", kind: "site" }]);
 
   const file = await open.prepare({ target: "report.pdf" });
   assert.equal(file.effect, "open_local");
@@ -217,7 +217,7 @@ test("browser: new_tab at an address is judged like going there, and waits for t
   const tool = new BrowserTool(b.shell, async () => {}, noWait);
   const prepared = await tool.prepare({ action: "new_tab", url: "youtube.com" });
   assert.equal(prepared.effect, "open_remote");
-  assert.deepEqual(prepared.scope, [{ value: "youtube.com", source: "named" }]);
+  assert.deepEqual(prepared.scope, [{ value: "youtube.com", source: "named", kind: "site" }]);
   assert.equal(prepared.summary, "Open youtube.com in a new tab in Safari");
   const done = await prepared.run();
   assert.equal(done.verified, "browser");

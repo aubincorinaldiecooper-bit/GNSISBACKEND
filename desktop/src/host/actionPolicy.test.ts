@@ -56,10 +56,21 @@ test("looking and opening local things run whoever asked: nothing changes, nothi
 });
 
 test("a web address the person did not say is asked about — it could carry what is on screen away", () => {
-  const remote = action({ effect: "open_remote", scope: [{ value: "evil.example", source: "named" }] });
+  const remote = action({ effect: "open_remote", scope: [{ value: "evil.example", source: "named", kind: "site" }] });
   assert.equal(judge(remote, said("open github for me"), NOW).decision, "confirm");
-  const asked = action({ effect: "open_remote", scope: [{ value: "github.com", source: "named" }] });
+  const asked = action({ effect: "open_remote", scope: [{ value: "github.com", source: "named", kind: "site" }] });
   assert.equal(judge(asked, said("open github for me"), NOW).decision, "allow");
+});
+
+test("a site's name opens only its real address; any other address with that name in it is asked about", () => {
+  const site = (host: string) => action({ effect: "open_remote", scope: [{ value: host, source: "named", kind: "site" }] });
+  const words = said("Search Andrew Tate on YouTube");
+  assert.equal(judge(site("youtube.com"), words, NOW).decision, "allow");
+  for (const host of ["youtube.lol", "andrew.lol", "attacker.andrew.io", "youtube.com.evil.io"]) {
+    assert.equal(judge(site(host), words, NOW).decision, "confirm", host);
+  }
+  // Spelled out, the same address is the person's own request.
+  assert.equal(judge(site("youtube.lol"), said("open youtube dot lol"), NOW).decision, "allow");
 });
 
 test("quit, trash, send and buy are always asked about, even when requested", () => {
@@ -72,11 +83,10 @@ test("quit, trash, send and buy are always asked about, even when requested", ()
 test("names match the way people say them", () => {
   assert.ok(saidIn("Projects", "put it in my projects folder"));
   assert.ok(saidIn("q3-report.pdf", "rename the Q3 report"));
-  assert.ok(saidIn("github.com", "open GitHub"));
   assert.ok(!saidIn("Projects", "put it in my documents"));
   assert.ok(!saidIn("", "anything"));
-  assert.ok(saidIn("github.com", "open git hub"), "words in a row still make a name");
-  assert.ok(saidIn("youtube.com", "Open YouTube and search Andrew Tate"));
+  assert.ok(saidIn("Stack Overflow", "search stackoverflow"), "words in a row still make a name, and one word many");
+  assert.ok(saidIn("GitHub", "open git hub"));
 });
 
 test("a name has to be the person's words, not a piece of them", () => {
@@ -87,7 +97,7 @@ test("a name has to be the person's words, not a piece of them", () => {
   }
   assert.ok(!saidIn("port.txt", "open the report"), "nor is a file whose name is inside another word");
   // An injected address to one of those hosts is asked about, not run.
-  const injected = action({ effect: "open_remote", scope: [{ value: "ubeand.com", source: "named" }] });
+  const injected = action({ effect: "open_remote", scope: [{ value: "ubeand.com", source: "named", kind: "site" }] });
   assert.equal(judge(injected, said(words), NOW).decision, "confirm");
 });
 

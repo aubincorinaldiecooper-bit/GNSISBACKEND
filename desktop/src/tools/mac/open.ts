@@ -72,7 +72,7 @@ export class OpenTool implements ActionTool {
       action: "url",
       effect: "open_remote",
       summary: `Open ${host} in your browser`,
-      scope: [{ value: host, source: "named" }],
+      scope: [{ value: host, source: "named", kind: "site" }],
       run: async () => {
         const result = await this.shell.run("/usr/bin/open", [url.toString()]);
         if (result.code !== 0) throw new ActionProblem("failed", `The browser did not open ${host}.`);
