@@ -1,15 +1,23 @@
 import type { CSSProperties } from "react";
 import { Blobatar } from "@blobatar/react";
+import { traits } from "blobatar";
 import { happy, thinking } from "blobatar/expression";
 import type { Presence } from "../store/store";
 
+/** blobatar's character on the app icon, and GNSIS's face before a person has their own. */
+export const GNSIS_ICON_NAME = "gnsis-h";
+
+const icon = traits(GNSIS_ICON_NAME);
+
 /**
- * GNSIS's look. The face is generated from the device's public ID, so every user's
- * GNSIS is their own; the sun silhouette and colour are pinned to match the brand.
- * blobatar's hue is OKLCH, so hue 118 + tone 0.8 gives the lime of the setup mockups
- * (hue 78 in blobatar renders amber).
+ * GNSIS's look: the mint cloud (the owner's pick, 30 September). Every face
+ * has the icon character's colour and cloud silhouette, read from blobatar
+ * rather than copied (the hue is drawn exactly as blobatar draws it, from 0 to
+ * 360; the tone is the icon's 0.8). Everything else (eyes, puffs, size, tilt)
+ * comes from the device's public ID, so every person's GNSIS is their own mint
+ * cloud.
  */
-export const GNSIS_FACE = { hue: 118, tone: 0.8, traits: { shape: 0.95 } } as const;
+export const GNSIS_FACE = { hue: icon.num("hue", 0, 360), tone: 0.8, traits: { shape: icon("shape") } } as const;
 
 /** blobatar leaves margin inside its 100×100 box; draw a little larger so faces fill their slot. */
 const FILL = 1.3;

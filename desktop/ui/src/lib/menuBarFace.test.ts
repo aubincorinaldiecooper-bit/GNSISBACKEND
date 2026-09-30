@@ -13,7 +13,8 @@ test("the menu bar icon is this GNSIS's own face, in one colour, with the eyes c
   assert.deepEqual(circles(svg), circles(face), "the same outline as the face the dock shows");
   assert.ok(circles(svg).length > 0);
   assert.match(svg, /<g fill="#000" mask="url\(#eyes\)">/, "black, which macOS tints to match the menu bar");
-  assert.doesNotMatch(svg, /#cbe25c/, "none of the face's own colour");
+  const colour = face.match(/<g fill="([^"]+)">/)?.[1] ?? "";
+  assert.ok(colour && !svg.includes(colour), "none of the face's own colour");
   const mask = svg.match(/<mask[\s\S]*?<\/mask>/)?.[0] ?? "";
   assert.equal((mask.match(/<path /g) ?? []).length, 2, "two eyes, cut out");
   assert.match(mask, /scale\(1\.4\)/, "drawn larger, so they read at 18 points");

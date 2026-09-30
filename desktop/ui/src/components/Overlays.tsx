@@ -1,5 +1,5 @@
 import { actions, filteredCommands, getState, setState, useStore } from "../store/store";
-import { AgentFace, Face } from "../lib/face";
+import { AgentFace, Face, GNSIS_ICON_NAME } from "../lib/face";
 import { rankedAgents } from "./Shell";
 import * as I from "./Icons";
 
@@ -101,7 +101,7 @@ export function Toast({ left }: { left?: number }) {
   if (!c) return null;
   return (
     <div data-hit role="status" className={"toast popover" + (left === undefined ? " above-chat" : "")} style={left === undefined ? undefined : { left }}>
-      {c.id === "gnsis" ? <Face name={s.identity?.publicId ?? "GNSIS"} gnsis size={32} /> : <AgentFace name={c.title} size={32} />}
+      {c.id === "gnsis" ? <Face name={s.identity?.publicId ?? GNSIS_ICON_NAME} gnsis size={32} /> : <AgentFace name={c.title} size={32} />}
       <span className="grow"><strong>{c.title}</strong><span className="muted ellipsis">{toast.text}</span></span>
       <button type="button" className="btn-dark" onClick={() => { const id = getState().toast?.id; if (id) actions.openAgent(id); setState({ toast: null }); }}>Open</button>
       <button type="button" className="icon-btn" aria-label="Dismiss" onClick={() => setState({ toast: null })}><I.Close size={16} /></button>

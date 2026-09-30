@@ -319,7 +319,6 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .setup-card .spaced { margin-top: 34px; font-size: 18px; }
 .setup-face { height: 176px; display: grid; place-items: center; }
 .setup-face.ready { position: relative; height: 210px; }
-.rays { position: absolute; width: 196px; height: 196px; fill: none; stroke: #c3de58; stroke-width: 1.3; stroke-linecap: round; animation: rise 500ms 150ms var(--spring) both; }
 .big-btn { margin-top: 26px; height: 74px; border: 0; border-radius: 22px; background: var(--ink); color: #fff; font-size: 22px; font-weight: 600; }
 .setup-id { margin-top: 30px; display: flex; flex-direction: column; gap: 10px; text-align: left; }
 .setup-id label { font-size: 17px; font-weight: 600; }
