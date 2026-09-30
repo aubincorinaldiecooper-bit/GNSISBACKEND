@@ -8,6 +8,13 @@ import type { ScreenFrameMetadata } from "./shared/protocol.js";
 contextBridge.exposeInMainWorld("gnsis", {
   /** GNSIS floats over the desktop in a see-through window (set by main at launch). */
   overlay: process.argv.includes("--gnsis-overlay=1"),
+  /** GNSIS has an icon in the Mac menu bar to tuck into (set by main at launch). */
+  menuBar: process.argv.includes("--gnsis-menubar=1"),
+  /** GNSIS's face for the menu bar icon, as a PNG data URL. */
+  setMenuBarFace: (png: string) => ipcRenderer.send("menubar:face", png),
+  /** GNSIS has tucked itself away: hide the window until the icon is clicked. */
+  hideToMenuBar: () => ipcRenderer.send("menubar:hide"),
+  onMenuBar: (fn: (message: unknown) => void) => ipcRenderer.on("menubar", (_e, m) => fn(m)),
   /** Where the page's cards are, so the floating window lets clicks elsewhere through. */
   reportHitRects: (rects: unknown) => ipcRenderer.send("hit:rects", rects),
   confirm: (message: string, confirmLabel: string) => ipcRenderer.invoke("dialog:confirm", message, confirmLabel),

@@ -104,6 +104,8 @@ export class ElectronLiveHost implements LiveHost {
   private settling: Promise<void> = Promise.resolve();
   /** The runtime said, in its `ready`, that it answers typed turns. */
   private typedTurns = false;
+  /** Where the menu bar icon is, as main last said, so GNSIS shrinks toward it. */
+  private iconAt: { x: number; y: number } | null = null;
   private readonly threshold: number;
   private readonly hangoverMs: number;
   private readonly levelIntervalMs: number;
@@ -146,6 +148,7 @@ export class ElectronLiveHost implements LiveHost {
       this.log(`action ${update.callId} ${update.state}`);
       this.emit({ type: "action", state: update.state, text: update.text });
     });
+    this.bridge.onMenuBar?.((m) => this.onMenuBar(m));
 
     playback.onSpeaking = (speaking) => {
       this.emit({ type: "agent.speaking", speaking });
@@ -202,11 +205,57 @@ export class ElectronLiveHost implements LiveHost {
     // a typed turn it merely records would look like Enter doing nothing.
     // transcript: the runtime sends no speech-to-text of the person back.
     // overlay: whether main opened the see-through window over the desktop.
-    return { voice: true, text: this.typedTurns, screen: true, camera: true, transcript: false, overlay: this.bridge.overlay === true };
+    // menuBar: whether main has an icon in the Mac menu bar to tuck into.
+    return {
+      voice: true,
+      text: this.typedTurns,
+      screen: true,
+      camera: true,
+      transcript: false,
+      overlay: this.bridge.overlay === true,
+      menuBar: this.bridge.menuBar === true,
+    };
   }
 
   reportHitRects(rects: Array<[number, number, number, number]>): void {
     this.bridge.reportHitRects?.(rects);
+  }
+
+  hideToMenuBar(): void {
+    this.log("menu bar: tucked away");
+    this.bridge.hideToMenuBar?.();
+  }
+
+  menuBarIcon(): { x: number; y: number } | null {
+    return this.iconAt;
+  }
+
+  /** The face arrives as SVG; the menu bar takes a picture, drawn here at twice the icon's 18-point size. */
+  menuBarFace(svg: string): void {
+    if (!this.bridge.setMenuBarFace || typeof Image === "undefined" || typeof document === "undefined") return;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 36;
+      const g = canvas.getContext("2d");
+      if (!g) return;
+      g.drawImage(img, 0, 0, 36, 36);
+      this.bridge.setMenuBarFace?.(canvas.toDataURL("image/png"));
+    };
+    img.onerror = () => this.log("menu bar: the face could not be drawn");
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  }
+
+  /** From main: the icon was clicked (tuck away, or come back), or it moved. */
+  private onMenuBar(message: unknown): void {
+    const m = message as { want?: unknown; at?: { x?: unknown; y?: unknown } } | null;
+    const x = m?.at?.x;
+    const y = m?.at?.y;
+    if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y)) this.iconAt = { x, y };
+    if (m?.want === "hide" || m?.want === "show") {
+      this.log(`menu bar: ${m.want === "hide" ? "tuck away" : "come back"}`);
+      this.emit({ type: "menubar", want: m.want });
+    }
   }
 
   async confirm(message: string, confirmLabel: string): Promise<boolean> {

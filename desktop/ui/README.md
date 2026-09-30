@@ -45,8 +45,9 @@ A host implements `LiveHost`:
 | `endLive()` | closes the microphone and stops any reply still playing |
 | `setMuted(bool)` | releases or reacquires the microphone only — the session stays alive |
 | `startVision(source)` / `stopVision()` | points the one persistent visual sense at the screen or the camera, or off |
-| `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay` — the UI hides what a host cannot do |
+| `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay`, `menuBar` — the UI hides what a host cannot do |
 | `visionStream()` (optional) | the picture being shared right now, for the "Shared with GNSIS" card; `null` when nothing is |
+| `menuBarFace(svg)`, `menuBarIcon()`, `hideToMenuBar()` (optional) | on a host with a menu bar icon (`menuBar`): GNSIS's face in one colour for the icon; where the icon is, so GNSIS shrinks toward it; hide GNSIS once it has tucked itself away |
 | `reportHitRects(rects)` (optional) | on an overlay host: where the cards are, so clicks elsewhere fall through; while the person drags GNSIS, one rect covers the whole window so the pointer stays with GNSIS until the drag ends |
 | `subscribe(fn)` | events below |
 
@@ -62,6 +63,7 @@ And it reports only what it actually observed:
 | `user.words` | the person's words as text, only when the host can transcribe |
 | `action` | a step GNSIS takes on the computer: `working` as it starts, `waiting` for the person's OK, then `done`, `failed`, `declined` or `needs_permission` |
 | `mic`, `vision` | device state, with a plain-English `detail` when refused |
+| `menubar` | the menu bar icon was clicked: tuck GNSIS away (`hide`) or bring it back (`show`) |
 
 Because of this, the UI cannot show a reply that was never spoken, a
 microphone that is not on, or words the person did not say: a spoken turn

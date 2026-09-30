@@ -11,9 +11,11 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
+  nativeImage,
   screen as displays,
   session,
   systemPreferences,
+  Tray,
 } from "electron";
 import os from "node:os";
 import path from "node:path";
@@ -44,6 +46,7 @@ import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
+import { MenuBar } from "./menuBar.js";
 import { applyWindowRules } from "./windowRules.js";
 import { PersonApp, appToRestore } from "./personApp.js";
 
@@ -303,6 +306,27 @@ const UI_SCALE = (() => {
   return Number.isFinite(asked) && asked >= 0.6 && asked <= 1.25 ? asked : 0.8;
 })();
 
+/**
+ * GNSIS's icon in the Mac menu bar, for tucking the floating window away and
+ * bringing it back (see menuBar.ts). Only where GNSIS floats: in an ordinary
+ * window, the window's own buttons do this.
+ */
+const menuBar = OVERLAY
+  ? new MenuBar({
+      makeTray: (image) => new Tray(image as Electron.NativeImage),
+      image: (png) => {
+        const image = nativeImage.createEmpty();
+        image.addRepresentation({ scaleFactor: 2, dataURL: png });
+        image.setTemplateImage(true);
+        return image;
+      },
+      window: () => win,
+      send: (message) => sendToRenderer("menubar", message),
+      zoom: UI_SCALE,
+      log: (line) => hostLog("host", line),
+    })
+  : null;
+
 function createWindow(): void {
   const webPreferences = {
     preload: path.join(__dirname, "preload.mjs"),
@@ -311,7 +335,7 @@ function createWindow(): void {
     nodeIntegration: false,
     zoomFactor: UI_SCALE,
     // The page learns from its preload whether it floats, before it first draws.
-    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`],
+    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`, `--gnsis-menubar=${menuBar ? "1" : "0"}`],
   };
   if (OVERLAY) {
     win = new BrowserWindow({
@@ -365,6 +389,9 @@ function createWindow(): void {
 function fitOverlay(): void {
   if (!OVERLAY || !win || win.isDestroyed()) return;
   win.setBounds(displays.getPrimaryDisplay().workArea);
+  // The menu bar icon is where GNSIS tucks into; tell the page where it now is.
+  const at = menuBar?.iconAt();
+  if (at) sendToRenderer("menubar", { at });
 }
 
 // One HostSession per machine: a second GNSIS.app instance would open a
@@ -523,6 +550,9 @@ app.whenReady().then(async () => {
   displays.on("display-metrics-changed", fitOverlay);
   displays.on("display-added", fitOverlay);
   displays.on("display-removed", fitOverlay);
+  // The menu bar icon: the page's drawing of the face, and "tucked away, hide the window now".
+  ipcMain.on("menubar:face", (_e, png: unknown) => menuBar?.setFace(png));
+  ipcMain.on("menubar:hide", () => menuBar?.pageTuckedAway());
   ipcMain.on("host:log", (_e, line) => {
     if (typeof line === "string") hostLog("renderer", line);
   });
@@ -540,6 +570,7 @@ app.whenReady().then(async () => {
 
 app.on("will-quit", () => {
   hostLog("host", "will-quit");
+  menuBar?.destroy();
   shortcuts.unregisterAll();
   host.disconnect("app_quit");
 });
@@ -554,11 +585,14 @@ app.on("activate", () => {
   // usable window back rather than leaving a windowless Host.
   hostLog("host", "activate");
   if (win === null) createWindow();
+  // Tucked into the menu bar: the Dock icon brings GNSIS back too.
+  else if (menuBar?.tucked) menuBar.show();
 });
 
 app.on("second-instance", () => {
   hostLog("host", "second-instance");
   if (win !== null) {
+    if (menuBar?.tucked) menuBar.show();
     if (win.isMinimized()) win.restore();
     win.focus();
   } else {

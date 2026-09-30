@@ -5,7 +5,7 @@ import type { Identity, IdentityStore, LiveEvent, LiveHost } from "../host";
 import { dockGeometry, rankedAgents } from "../components/Shell";
 import {
   CLOSED_BEFORE_ANSWER, NO_ANSWER_YET, REPLY_TIMEOUT_MS, TYPING_LINK_DOWN, TYPING_WHILE_CONNECTING, TYPING_WHILE_LIVE, TYPING_WHILE_MUTED,
-  actions, activity, configure, enterDesktop, eraseIdentity, filteredCommands, getState, presence, resetStore, setState, tick,
+  TUCK_MS, actions, activity, configure, enterDesktop, eraseIdentity, filteredCommands, getState, presence, resetStore, setState, tick,
 } from "./store";
 import { TYPING_NOT_CONNECTED } from "../demo/data";
 
@@ -26,7 +26,7 @@ class RecordingHost implements LiveHost {
   text = false;
   private listeners = new Set<(e: LiveEvent) => void>();
   capabilities() {
-    return { voice: true, text: this.text, screen: true, camera: false, transcript: false, overlay: false };
+    return { voice: true, text: this.text, screen: true, camera: false, transcript: false, overlay: false, menuBar: false };
   }
   subscribe(fn: (e: LiveEvent) => void) {
     this.listeners.add(fn);
@@ -679,4 +679,77 @@ test("while a typed message waits for GNSIS, the clock keeps running so Thinking
   tick();
   assert.ok(getState().now >= since, "the clock moved on to now");
   assert.ok(getState().awaiting, "and the message is still waiting");
+});
+
+/** A host with a menu bar icon, like the Mac app's floating window. */
+class MenuBarHost extends RecordingHost {
+  faces: string[] = [];
+  hidden = 0;
+  capabilities() {
+    return { ...super.capabilities(), menuBar: true };
+  }
+  menuBarIcon() {
+    return { x: 1390, y: -16 };
+  }
+  menuBarFace(svg: string) {
+    this.faces.push(svg);
+  }
+  hideToMenuBar() {
+    this.hidden++;
+  }
+}
+
+test("GNSIS tucks into its menu bar icon: a call ends, it shrinks toward the icon, then the host hides it", async () => {
+  resetStore();
+  const host = new MenuBarHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  assert.equal(host.faces.length, 1, "the icon is sent this GNSIS's face");
+  assert.match(host.faces[0], /mask="url\(#eyes\)"/);
+  actions.startLive("gnsis");
+  await sleep(0);
+  host.push({ type: "mic", state: "on" });
+  assert.ok(getState().live);
+  actions.tuckAway();
+  let s = getState();
+  assert.equal(s.tucked, true);
+  assert.deepEqual(s.tuckAt, { x: 1390, y: -16 }, "it shrinks toward the icon");
+  assert.equal(s.live, null, "the call ends (the owner's choice)");
+  assert.equal(host.calls.at(-1), "endLive");
+  assert.equal(host.hidden, 0, "not until it has shrunk away");
+  await sleep(TUCK_MS + 30);
+  assert.equal(host.hidden, 1);
+  actions.comeBack();
+  s = getState();
+  assert.equal(s.tucked, false);
+});
+
+test("coming back before GNSIS has finished tucking away never hides it", async () => {
+  resetStore();
+  const host = new MenuBarHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.tuckAway();
+  actions.comeBack();
+  await sleep(TUCK_MS + 30);
+  assert.equal(host.hidden, 0);
+  assert.equal(getState().tucked, false);
+});
+
+test("the menu bar icon's clicks arrive from the host; without an icon there is no face to send", () => {
+  resetStore();
+  const host = new MenuBarHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  host.push({ type: "menubar", want: "hide" });
+  assert.equal(getState().tucked, true);
+  host.push({ type: "menubar", want: "show" });
+  assert.equal(getState().tucked, false);
+
+  resetStore();
+  const plain = new MenuBarHost();
+  plain.capabilities = () => ({ ...RecordingHost.prototype.capabilities.call(plain) });
+  configure(plain, identityStore);
+  enterDesktop(identity, false);
+  assert.equal(plain.faces.length, 0);
 });
