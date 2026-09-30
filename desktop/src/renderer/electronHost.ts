@@ -11,12 +11,14 @@
  * Telemetry parity with the old debug page is deliberate: every daemon
  * control still goes to the host log (minus the two ACK echoes), and the mic,
  * capture and screen-channel lines are unchanged, so a real-Mac acceptance run
- * can still be read from <userData>/logs/gnsis-host.log.
+ * can still be read from <userData>/logs/gnsis-host.log. The log is meant to
+ * be shared, so a control goes in without its credentials and without words:
+ * see forLog.
  */
 
 import type { HostCapabilities, LinkState, LiveEvent, LiveHost, VisionSource } from "@gnsis/ui";
 import type { ScreenChannelConfig } from "../shared/protocol.js";
-import type { GnsisBridge, ScreenUpdate } from "./bridge.js";
+import type { GnsisBridge, ScreenUpdate, TurnResult } from "./bridge.js";
 import type { Log } from "./devices.js";
 
 export interface MicLike {
@@ -37,6 +39,8 @@ export interface PlaybackLike {
 export interface VisionLike {
   readonly active: boolean;
   readonly current: VisionSource | null;
+  /** The picture being shared, for the person's own view of it. */
+  readonly stream?: MediaStream | null;
   onAccepted?: (source: VisionSource) => void;
   onEnded?: () => void;
   applyChannel(channel: ScreenChannelConfig): void;
@@ -94,6 +98,12 @@ export class ElectronLiveHost implements LiveHost {
   private staleGeneration = -1;
   /** A live start waiting for the runtime; resolved by `ready`, End, or the timeout. */
   private waiting: ((ok: boolean) => void) | null = null;
+  /** Bumped by every start and every End: an attempt that no longer matches was cancelled. */
+  private attempt = 0;
+  /** Resolves once the last start attempt has finished or unwound, so two never hold the microphone. */
+  private settling: Promise<void> = Promise.resolve();
+  /** The runtime said, in its `ready`, that it answers typed turns. */
+  private typedTurns = false;
   private readonly threshold: number;
   private readonly hangoverMs: number;
   private readonly levelIntervalMs: number;
@@ -170,8 +180,10 @@ export class ElectronLiveHost implements LiveHost {
       .linkState()
       .then((s) => {
         if (!s || this.link !== "connecting") return;
-        if (s.ready && s.connected) this.setLink("ready");
-        else if (s.closed) this.setLink("closed", "The connection to GNSIS closed.");
+        if (s.ready && s.connected) {
+          this.typedTurns = answersTypedTurns(s.ready);
+          this.setLink("ready");
+        } else if (s.closed) this.setLink("closed", "The connection to GNSIS closed.");
       })
       .catch(() => {});
 
@@ -186,9 +198,37 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   capabilities(): HostCapabilities {
-    // text: the runtime has no typed input yet; transcript: it sends no
-    // speech-to-text of the person; overlay: an ordinary window for now.
-    return { voice: true, text: false, screen: true, camera: true, transcript: false, overlay: false };
+    // text: only when the connected runtime says it answers typed turns —
+    // a typed turn it merely records would look like Enter doing nothing.
+    // transcript: the runtime sends no speech-to-text of the person back.
+    // overlay: whether main opened the see-through window over the desktop.
+    return { voice: true, text: this.typedTurns, screen: true, camera: true, transcript: false, overlay: this.bridge.overlay === true };
+  }
+
+  reportHitRects(rects: Array<[number, number, number, number]>): void {
+    this.bridge.reportHitRects?.(rects);
+  }
+
+  async confirm(message: string, confirmLabel: string): Promise<boolean> {
+    if (!this.bridge.confirm) return window.confirm(message);
+    return (await this.bridge.confirm(message, confirmLabel)) === true;
+  }
+
+  async sendText(text: string): Promise<void> {
+    const words = text.trim();
+    if (!words) throw new Error("There is nothing to send.");
+    if (!this.typedTurns) throw new Error("Typing isn’t connected to GNSIS yet.");
+    this.log(`typed turn requested (${words.length} chars)`);
+    const result: TurnResult = await this.bridge.sendTurn(words).catch((e: unknown) => ({
+      ok: false as const,
+      reason: e instanceof Error && e.message ? e.message : "The message could not reach GNSIS.",
+    }));
+    if (!result.ok) {
+      this.log(`typed turn failed: ${result.reason}`);
+      // The UI says "not sent" only for a message that never went out.
+      throw Object.assign(new Error(result.reason), { unconfirmed: result.unconfirmed === true });
+    }
+    this.log(`typed turn ${result.turnId} accepted`);
   }
 
   subscribe(listener: Listener): () => void {
@@ -203,6 +243,22 @@ export class ElectronLiveHost implements LiveHost {
 
   async startLive(): Promise<void> {
     if (this.live || this.waiting) return;
+    const attempt = ++this.attempt;
+    this.log("live requested");
+    // An earlier attempt may still be opening the microphone after End was
+    // pressed: let it close again first, so two attempts never share it.
+    await this.settling;
+    if (attempt !== this.attempt) return;
+    let settled!: () => void;
+    this.settling = new Promise((resolve) => (settled = resolve));
+    try {
+      await this.open(attempt);
+    } finally {
+      settled();
+    }
+  }
+
+  private async open(attempt: number): Promise<void> {
     // The microphone opens only once the runtime is ready to hear it: frames
     // sent into a connecting socket would queue up and arrive as one stale
     // burst, and a dead socket would leave the UI "listening" to nothing.
@@ -212,8 +268,12 @@ export class ElectronLiveHost implements LiveHost {
         this.setLink("connecting", "Reconnecting to GNSIS.");
         this.bridge.reconnect();
       }
+      this.log("live: waiting for the runtime to be ready");
       const outcome = await this.waitForReady();
-      if (outcome === "aborted") return;
+      if (outcome === "aborted" || attempt !== this.attempt) {
+        this.log("live: cancelled while connecting");
+        return;
+      }
       if (outcome === "timeout") {
         this.log("live: the runtime did not become ready in time");
         throw new Error("GNSIS could not be reached.");
@@ -227,8 +287,16 @@ export class ElectronLiveHost implements LiveHost {
       this.log(`mic failed: ${String(e)}`);
       // The call was opened on the timeline; close it, or its epoch stays open.
       this.bridge.endCall("mic_failed");
+      if (attempt !== this.attempt) return;
       this.emit({ type: "mic", state: isDenied(e) ? "denied" : "error", detail });
       throw new Error(detail);
+    }
+    if (attempt !== this.attempt) {
+      // End was pressed while the microphone was opening: it never goes live.
+      this.devices.mic.stop();
+      this.bridge.endCall("cancelled_while_starting");
+      this.log("live: cancelled while the microphone was opening; it is closed again");
+      return;
     }
     this.live = true;
     this.muted = false;
@@ -237,7 +305,9 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   async endLive(): Promise<void> {
-    // End while still connecting: the attempt is abandoned, nothing to close.
+    // End while still connecting or opening the microphone: that attempt is
+    // abandoned, and it closes whatever it had opened on its own.
+    this.attempt += 1;
     this.waiting?.(false);
     if (!this.live) return;
     this.live = false;
@@ -263,9 +333,20 @@ export class ElectronLiveHost implements LiveHost {
       return;
     }
     if (!this.live) return;
+    // Muted again, or ended, while the microphone was opening: the stop that
+    // came then had nothing to release yet, so it is released as soon as it
+    // opens. The whole of that joins `settling`, so a new live start waits
+    // for it before opening the microphone itself — and is never the one
+    // released by it.
+    const opened = this.devices.mic.start().then(() => {
+      if (!this.muted && this.live) return true;
+      this.devices.mic.stop();
+      this.log("unmute abandoned: muted or ended while the microphone opened");
+      return false;
+    });
+    this.settling = this.settling.then(() => opened.then(() => {}, () => {}));
     try {
-      await this.devices.mic.start();
-      this.log("unmuted");
+      if (await opened) this.log("unmuted");
     } catch (e) {
       const detail = micProblem(e);
       this.emit({ type: "mic", state: isDenied(e) ? "denied" : "error", detail });
@@ -287,6 +368,10 @@ export class ElectronLiveHost implements LiveHost {
     }
   }
 
+  visionStream(): MediaStream | null {
+    return this.devices.vision.stream ?? null;
+  }
+
   async stopVision(): Promise<void> {
     this.devices.vision.stop();
     this.visionAccepted = false;
@@ -299,12 +384,13 @@ export class ElectronLiveHost implements LiveHost {
     const c = control as { type?: string; [k: string]: unknown } | null;
     const type = c?.type;
     if (type === "playback.ack.done" || type === "host.event.done") return;
-    this.log(`<- ${type ?? "?"} ${JSON.stringify(control).slice(0, 160)}`);
+    this.log(`<- ${type ?? "?"} ${forLog(control).slice(0, 160)}`);
     switch (type) {
       case "runtime.status":
         if (c?.status === "loading") this.setLink("connecting", "GNSIS is loading itself onto a machine.");
         break;
       case "ready":
+        this.typedTurns = answersTypedTurns(c);
         this.setLink("ready");
         break;
       case "session.done":
@@ -384,6 +470,9 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   private setLink(state: LinkState, detail?: string): void {
+    // Typing is only as good as the `ready` that offered it: once that link
+    // is gone, it waits for the next one to say so again.
+    if (state !== "ready") this.typedTurns = false;
     this.link = state;
     this.linkDetail = detail;
     this.emit({ type: "link", state, detail });
@@ -440,6 +529,34 @@ export class ElectronLiveHost implements LiveHost {
 }
 
 const isDenied = (e: unknown) => (e as { name?: string } | null)?.name === "NotAllowedError";
+
+/**
+ * Does this runtime answer typed turns? It says so in its `ready`. A runtime
+ * that only records a typed turn (for the action policy and background tasks)
+ * never replies to it, so typing stays off rather than seem to do nothing.
+ */
+/** Fields that carry what someone said, typed or asked for: logged as their length only. */
+const WORDS = new Set(["text", "arguments", "content", "transcript", "final_asr"]);
+
+/**
+ * A runtime control as the host log keeps it: its shape, ids and flags, with
+ * every credential (a resume token, the screen token) removed and every field
+ * of words reduced to its length. The log is shared after a test run; it must
+ * not hand over the session or repeat what the person said.
+ */
+export function forLog(control: unknown): string {
+  return JSON.stringify(control, (key, value) => {
+    if (/token|secret|password/i.test(key)) return "<redacted>";
+    if (WORDS.has(key) && value !== null && value !== undefined) {
+      const size = typeof value === "string" ? value.length : JSON.stringify(value).length;
+      return `<${size} chars>`;
+    }
+    return value;
+  }) ?? String(control);
+}
+
+const answersTypedTurns = (ready: unknown): boolean =>
+  (ready as { typed_turns?: unknown } | null)?.typed_turns === true;
 
 const toGeneration = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;

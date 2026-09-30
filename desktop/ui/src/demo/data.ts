@@ -5,6 +5,9 @@
 
 export type Role = "user" | "agent" | "system";
 
+/** How a step GNSIS took on the computer ended. */
+export type StepState = "done" | "failed" | "waiting" | "declined" | "needs_permission";
+
 export interface Turn {
   role: Role;
   text: string;
@@ -16,6 +19,10 @@ export interface Turn {
   stream?: number;
   /** live-voice turn still being spoken */
   speaking?: boolean;
+  /** GNSIS's opening line: on its own it is not yet a conversation */
+  greeting?: boolean;
+  /** A step GNSIS took on the computer: how it ended, and when it started and ended (ms since epoch). */
+  step?: { state: StepState; startedAt?: number; endedAt: number };
 }
 
 export type PanelKind = "browser" | "list" | "email" | "watch" | "agents";
@@ -118,10 +125,10 @@ export const planList = (title: string): ListSpec => ({
 const MORNING_SHORT = "Short version: water and daylight first, then one focused block before email.";
 
 export const GREETING =
-  "Hi, I’m your GNSIS. Press the voice button to talk with me live, or type below. When a job needs its own helper, I’ll start an agent for it.";
+  "Hi, I’m your GNSIS. Press the voice button to talk with me live, or type below.";
 /** The same welcome when typed messages cannot reach GNSIS yet. */
 export const GREETING_VOICE_ONLY =
-  "Hi, I’m your GNSIS. Press the voice button to talk with me live. When a job needs its own helper, I’ll start an agent for it.";
+  "Hi, I’m your GNSIS. Press the voice button to talk with me live.";
 /** What typing gets when the host cannot deliver it. Honest, not a made-up reply. */
 export const TYPING_NOT_CONNECTED =
   "Typing isn’t connected to GNSIS yet. Press the voice button to talk.";
@@ -145,7 +152,7 @@ export function homeConv(publicId: string, demo: boolean, text = true): Conv {
           { role: "user", text: "Also find a cacio e pepe recipe for two" },
           { role: "agent", text: "Recipe finder is on it. I’ll let you know when it’s done.", stream: 999 },
         ]
-      : [{ role: "agent", text: text ? GREETING : GREETING_VOICE_ONLY, stream: 999 }],
+      : [{ role: "agent", text: text ? GREETING : GREETING_VOICE_ONLY, stream: 999, greeting: true }],
   };
 }
 
@@ -242,13 +249,10 @@ export function demoAgents(): Record<string, Conv> {
   };
 }
 
-export interface LiveSegment {
-  who: "agent" | "user";
-  a: number;
-  b: number;
-  cut?: number;
-  text: string;
-}
+export type LiveSegment =
+  | { who: "agent" | "user"; a: number; b: number; cut?: number; text: string }
+  /** Something GNSIS does on the computer, reported the way the real host reports it. */
+  | { who: "action"; a: number; state: "working" | "waiting" | "done" | "failed"; text: string };
 
 /**
  * A scripted live conversation, in tenths of a second, for the simulated host
@@ -264,11 +268,22 @@ export function liveScript(conv: Conv | null): LiveSegment[] {
       { who: "agent", a: 200, b: 250, text: "Sure, starting with the first part." },
     ];
   }
+  // A task in the person's own browser, worded the way the real host words
+  // it: what it does, what came of it, and the step it asks about first
+  // (pressing a key the person never said). Then a reply cut off by the person.
   return [
-    { who: "agent", a: 12, b: 52, text: "Hi! I’m here. What’s on your mind?" },
-    { who: "user", a: 58, b: 112, text: "I’m meeting the roofer tomorrow, and I’m a little nervous about it." },
-    { who: "agent", a: 118, b: 200, cut: 176, text: "That makes sense. Want me to walk you through the three questions from Roofer prep, one at a time?" },
-    { who: "user", a: 170, b: 194, text: "Yes, let’s do that." },
-    { who: "agent", a: 200, b: 292, text: "First one: ask what the price includes, and what could change once the old roof is off." },
+    { who: "agent", a: 12, b: 44, text: "Hi! I’m here. What’s on your mind?" },
+    { who: "user", a: 50, b: 92, text: "Open YouTube and search for pasta recipes." },
+    { who: "agent", a: 113, b: 139, text: "Sure, opening YouTube in Chrome." },
+    { who: "action", a: 141, state: "working", text: "Open youtube.com in a new tab in Google Chrome" },
+    { who: "action", a: 161, state: "done", text: "Google Chrome opened a new tab at youtube.com; it now has 2 tabs." },
+    { who: "action", a: 165, state: "working", text: "Type “pasta recipes” into the app in front" },
+    { who: "action", a: 181, state: "done", text: "Typed it. Look at the screen to check it went where it should." },
+    { who: "action", a: 185, state: "waiting", text: "Waiting for your OK: Press enter" },
+    { who: "action", a: 245, state: "working", text: "Press enter" },
+    { who: "action", a: 251, state: "done", text: "Pressed enter. Look at the screen to see what it did." },
+    { who: "agent", a: 257, b: 345, cut: 315, text: "Done. The pasta recipes are on screen. Want me to open the first one for you?" },
+    { who: "user", a: 309, b: 331, text: "No thanks, that’s all." },
+    { who: "agent", a: 352, b: 376, text: "Okay. I’m here if you need me." },
   ];
 }

@@ -211,7 +211,7 @@ def desktop_app(monkeypatch, tmp_path):
     return _build
 
 
-DESKTOP = "/ws/duplex?session_id=desk1&host_tools=files,open&host_tools_version=desktop-v1"
+DESKTOP = "/ws/duplex?session_id=desk1&host_tools=files,open&host_tools_version=desktop-v2"
 
 
 def _timeline(coordinator) -> list[tuple[str, str | None]]:
@@ -228,13 +228,13 @@ def _timeline(coordinator) -> list[tuple[str, str | None]]:
 def test_the_shipped_catalog_is_what_the_desktop_speaks():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
     assert catalog is not None
-    assert catalog.version == "desktop-v1"
+    assert catalog.version == "desktop-v2"
     assert catalog.names() == ("open", "files", "browser", "input")
 
 
 def test_a_desktop_is_shown_only_the_tools_it_offered():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
-    agreed = host_tools_module.negotiate(catalog, "files,open,teleport", "desktop-v1")
+    agreed = host_tools_module.negotiate(catalog, "files,open,teleport", "desktop-v2")
     # Catalog order, not the order offered; an unknown name is refused.
     assert agreed.accepted == ("open", "files")
     assert agreed.rejected == ("teleport",)
@@ -243,7 +243,9 @@ def test_a_desktop_is_shown_only_the_tools_it_offered():
 
 def test_a_desktop_built_against_another_catalog_gets_no_tools():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
-    agreed = host_tools_module.negotiate(catalog, "files", "desktop-v0")
+    # desktop-v1 is the catalog before browser gained new_tab: a desktop built
+    # against it would refuse the new action, so it is shown none.
+    agreed = host_tools_module.negotiate(catalog, "files", "desktop-v1")
     assert agreed.accepted == ()
     assert agreed.reason == "version_mismatch"
 
@@ -251,7 +253,7 @@ def test_a_desktop_built_against_another_catalog_gets_no_tools():
 def test_a_web_page_that_offers_nothing_changes_nothing():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
     assert host_tools_module.negotiate(catalog, None, None) is host_tools_module.NO_HOST_TOOLS
-    assert host_tools_module.negotiate(None, "files", "desktop-v1").reason == "no_catalog"
+    assert host_tools_module.negotiate(None, "files", "desktop-v2").reason == "no_catalog"
 
 
 def test_malformed_names_never_reach_the_prompt():

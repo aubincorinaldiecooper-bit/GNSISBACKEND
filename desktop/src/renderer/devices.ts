@@ -186,6 +186,12 @@ export function pcmLevel(pcm: Uint8Array): number {
 
 const FRAME_FALLBACK_HZ = 1;
 
+/** A running capture and the picture it shares. */
+interface SharedCapture {
+  stop(): void;
+  stream: MediaStream;
+}
+
 export class Vision {
   private channel: ScreenChannelConfig | null = null;
   private readonly capture = new CaptureManager();
@@ -206,6 +212,15 @@ export class Vision {
 
   get current(): "screen" | "camera" | null {
     return this.capture.active ? this.source : null;
+  }
+
+  /**
+   * The picture being shared, so the person can see it too; null when
+   * nothing is. It belongs to the running session, so a capture that was
+   * called off while its picker was still open can never replace it.
+   */
+  get stream(): MediaStream | null {
+    return (this.capture.session as SharedCapture | null)?.stream ?? null;
   }
 
   applyChannel(channel: ScreenChannelConfig): void {
@@ -266,7 +281,7 @@ export class Vision {
           }
         }
       };
-      const sessionHandle = { stop };
+      const sessionHandle: SharedCapture = { stop, stream };
       // OS-ended capture is a real capture-ending event; a stale onended after
       // a switch must not tear down the newer session.
       track.onended = () => {
@@ -327,10 +342,11 @@ export class Vision {
     });
   }
 
+  /** Stop sharing — including a share still waiting on the picker or a permission prompt. */
   stop(): void {
-    if (!this.capture.active) return;
+    const was = this.capture.active;
     this.capture.stop();
-    this.log(`${this.source ?? "capture"} off`);
+    if (was) this.log(`${this.source ?? "capture"} off`);
     this.source = null;
   }
 }

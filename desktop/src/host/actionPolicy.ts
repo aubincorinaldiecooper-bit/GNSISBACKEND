@@ -9,6 +9,8 @@
  * those words. A match alone is not trusted; it must be a match with a turn.
  *
  *   direct_user         a fresh turn, and every named target is in its words
+ *                       (a web address only if it is the real address of a
+ *                       site they named, or they spelled it out: sites.ts)
  *   mixed               a fresh turn, but a target came from somewhere else
  *                       (usually the screen)
  *   unknown             no fresh turn to tie it to
@@ -27,6 +29,10 @@
  *   consequential       always ask (quit, trash, send, buy, …)
  */
 import type { PreparedAction } from "../tools/actions.js";
+import { siteSaidIn } from "./sites.js";
+import { saidIn } from "./words.js";
+
+export { saidIn } from "./words.js";
 
 export type Provenance = "direct_user" | "mixed" | "unknown";
 export type Decision = "allow" | "confirm";
@@ -46,6 +52,15 @@ export interface PolicyVerdict {
   turnId: string | null;
 }
 
+/**
+ * A reason as the host log keeps it: anything quoted (a button's label, a
+ * file's name) becomes “…”. The person sees the full reason; the log, which
+ * is shared after a test run, keeps only its shape.
+ */
+export function reasonForLog(reason: string): string {
+  return reason.replace(/“[^”]*”/g, "“…”");
+}
+
 /** How long after the person stops speaking their words still cover an action. */
 export const TURN_FRESH_MS = 90_000;
 
@@ -53,7 +68,13 @@ export function judge(action: PreparedAction, turn: TrustedTurn | null, nowMs: n
   const fresh = turn != null && nowMs - turn.endedAtMs <= TURN_FRESH_MS && nowMs >= turn.endedAtMs - 5_000;
   const provenance: Provenance = !fresh
     ? "unknown"
-    : action.scope.every((target) => target.source === "selection" || saidIn(target.value, turn!.text))
+    : action.scope.every(
+          (target) =>
+            target.source === "selection" ||
+            (target.kind === "site"
+              ? siteSaidIn(target.value, turn!.text)
+              : saidIn(target.value, turn!.text) || (target.also ?? []).some((name) => saidIn(name, turn!.text))),
+        )
       ? "direct_user"
       : "mixed";
   const turnId = fresh ? turn!.turnId : null;
@@ -81,31 +102,6 @@ export function judge(action: PreparedAction, turn: TrustedTurn | null, nowMs: n
         turnId,
       };
   }
-}
-
-/**
- * Is this name in what the person said? Loose about case, punctuation, a file
- * extension and spacing ("Q3 report" matches "q3-report.pdf"), strict about
- * the words themselves.
- */
-export function saidIn(name: string, words: string): boolean {
-  const said = normalize(words);
-  const whole = normalize(name);
-  if (!whole) return false;
-  if (said.includes(whole)) return true;
-  const stem = normalize(name.replace(/\.[a-z0-9]{1,6}$/i, ""));
-  if (stem && said.includes(stem)) return true;
-  // A host like github.com is said as "github".
-  const host = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(name) ? normalize(name.split(".").slice(-2, -1)[0] ?? "") : "";
-  return host.length >= 3 && said.includes(host);
-}
-
-function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "");
 }
 
 /** The same reason, said to the person in the confirmation. */

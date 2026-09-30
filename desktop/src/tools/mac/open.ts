@@ -72,7 +72,7 @@ export class OpenTool implements ActionTool {
       action: "url",
       effect: "open_remote",
       summary: `Open ${host} in your browser`,
-      scope: [{ value: host, source: "named" }],
+      scope: [{ value: host, source: "named", kind: "site" }],
       run: async () => {
         const result = await this.shell.run("/usr/bin/open", [url.toString()]);
         if (result.code !== 0) throw new ActionProblem("failed", `The browser did not open ${host}.`);
@@ -151,7 +151,9 @@ export function asWebAddress(target: string): URL | null {
       return null;
     }
   }
-  const bare = /^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)*\.([a-z]{2,})(\/\S*)?$/i.exec(text);
+  // A path, query or fragment may follow the domain, spaces and all
+  // ("youtube.com/results?search_query=Andrew Tate"); URL encodes them.
+  const bare = /^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)*\.([a-z]{2,})([/?#].*)?$/i.exec(text);
   // "report.pdf" is a file someone could not find, not a website.
   if (bare && !FILE_ENDINGS.has(bare[3].toLowerCase())) {
     try {

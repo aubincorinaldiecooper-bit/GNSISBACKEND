@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { AGENT_TOTAL, ROOF_DRAFT, STEP_TICKS, type Conv } from "../demo/data";
-import { actions, isWorking, presence, setState, useStore, type State } from "../store/store";
-import { AgentFace, Face, ThinkingDots } from "../lib/face";
+import { actions, isWorking, presence, setState, useStore } from "../store/store";
+import { AgentFace, ThinkingDots } from "../lib/face";
 import { copyText } from "../lib/platform";
-import { rankedAgents } from "./Shell";
+import { ScreenCard } from "./ScreenView";
 import * as I from "./Icons";
 
 export function AgentPanel({ left, width, height }: { left: number; width: number; height: number }) {
@@ -13,14 +13,18 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
   const home = c.id === "gnsis";
   const p = presence(c, s);
   const liveHere = !!s.live && s.live.to === c.id;
-  const status = liveHere ? "Live" : home ? "Your assistant" : p.status;
+  const status = liveHere ? (s.live?.phase === "connecting" ? "Connecting…" : "Live") : home ? "Your assistant" : p.status;
   return (
     <aside data-hit className="panel glass" style={{ left, width, height }} aria-label={`${c.title} panel`}>
       <header className="panel-head">
-        <div className="panel-who">
-          {home ? <Face name={s.identity?.publicId ?? "GNSIS"} gnsis size={36} /> : <AgentFace name={c.title} size={36} p={p} />}
-          <span className="panel-names"><strong>{c.title}</strong><span className="muted small">{status}</span></span>
-        </div>
+        {home ? (
+          <span className="grow" />
+        ) : (
+          <div className="panel-who">
+            <AgentFace name={c.title} size={36} p={p} />
+            <span className="panel-names"><strong>{c.title}</strong><span className="muted small">{status}</span></span>
+          </div>
+        )}
         {c.panel === "browser" && (
           <>
             <button type="button" className="icon-btn" aria-label="Previous screen"><I.ChevronLeft /></button>
@@ -31,11 +35,11 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
         <button type="button" className="icon-btn" aria-label="Hide panel" onClick={() => setState({ panelHidden: true, menuOpen: false })}><I.Close /></button>
       </header>
       <div className="panel-body">
+        {home && (s.caps.screen || s.caps.camera) && <ScreenCard />}
         {c.panel === "browser" && <BrowserCard c={c} />}
         {c.panel === "list" && c.list && <ListCard c={c} />}
         {c.panel === "email" && <EmailCard c={c} />}
         {c.panel === "watch" && <WatchCard c={c} />}
-        {c.panel === "agents" && <AgentsCard s={s} />}
         {s.menuOpen && (
           <div className="popover panel-menu">
             <button type="button" onClick={() => setState({ menuOpen: false })}><I.Hand size={18} /> Take over</button>
@@ -49,15 +53,16 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
 
 function BrowserCard({ c }: { c: Conv }) {
   const done = Math.min(4, Math.floor((c.agentT ?? 0) / STEP_TICKS));
-  const spots = [[60, 10], [150, 30], [140, 62], [70, 130], [360, 180]];
-  const [x, y] = spots[Math.min(done, spots.length - 1)];
+  // Where it was at the panel's design width (552 px of page), as fractions of the page.
+  const spots = [[0.11, 10], [0.27, 30], [0.25, 62], [0.13, 130], [0.65, 180]];
+  const [fx, y] = spots[Math.min(done, spots.length - 1)];
   const loading = done === 0 && (c.agentT ?? 0) < AGENT_TOTAL;
   return (
     <>
       <div className="browser">
         <div className="browser-chrome">
           <span className="dot" /><span className="dot" /><span className="dot" />
-          <div className="browser-url"><I.Lock size={12} /> recipes.example/cacio-e-pepe</div>
+          <div className="browser-url"><I.Lock size={12} /><span>recipes.example/cacio-e-pepe</span></div>
           <span style={{ width: 47 }} />
         </div>
         <div className="browser-page">
@@ -68,7 +73,7 @@ function BrowserCard({ c }: { c: Conv }) {
             <div><h2>Ingredients</h2><ul><li>200 g spaghetti</li><li>100 g Pecorino Romano, finely grated</li><li>2 tsp black peppercorns, cracked</li><li>Salt for the pasta water</li></ul></div>
             <div><h2>Method</h2><ol><li>Toast the pepper in a dry pan until fragrant.</li><li>Cook the pasta and save a mug of its water.</li><li>Off the heat, toss pasta, pepper and cheese with splashes of water until glossy.</li></ol></div>
           </div>
-          <svg className="agent-cursor" style={{ left: x, top: y }} width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+          <svg className="agent-cursor" style={{ left: `calc(${fx * 100}% - 11px)`, top: y }} width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 3l15 7.5-6.5 1.8L9.7 19z" fill="#141821" stroke="#ffffff" strokeWidth="1.5" strokeLinejoin="round" />
           </svg>
         </div>
@@ -120,23 +125,6 @@ function WatchCard({ c }: { c: Conv }) {
       <div className="card-title">Watching your inbox</div>
       <div className="list-row shown"><I.Mail /> <span className="grow">The roofer’s reply about the estimate</span><span className="chip">{c.forever ? "Waiting" : "Stopped"}</span></div>
       {c.forever && <button type="button" className="btn-secondary start" onClick={actions.stopWatching}>Stop watching</button>}
-    </div>
-  );
-}
-
-function AgentsCard({ s }: { s: State }) {
-  const rows = rankedAgents(s);
-  return (
-    <div className="card">
-      <div className="card-title">Your agents</div>
-      {rows.length === 0 && <p className="muted">No agents yet. When a job needs its own helper, I’ll start one and it shows up here.</p>}
-      {rows.map((r) => (
-        <button key={r.id} type="button" className="agent-row" aria-label={`Open ${r.c.title}, ${r.p.status.toLowerCase()}`} onClick={() => actions.openAgent(r.id)}>
-          <AgentFace name={r.c.title} size={32} p={r.p} />
-          <span className="grow"><strong>{r.c.title}</strong><span className="muted small">{r.p.status}</span></span>
-          <I.ChevronRight size={16} />
-        </button>
-      ))}
     </div>
   );
 }

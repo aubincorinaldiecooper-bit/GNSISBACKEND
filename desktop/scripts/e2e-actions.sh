@@ -6,6 +6,7 @@
 #   desktop/scripts/e2e-actions.sh files-move
 #   desktop/scripts/e2e-actions.sh files-move-asked
 #   desktop/scripts/e2e-actions.sh files-move-spoken
+#   desktop/scripts/e2e-actions.sh files-move-typed
 #   desktop/scripts/e2e-actions.sh open-app '{"name":"open","arguments":{"target":"TextEdit"}}'
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

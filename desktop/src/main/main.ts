@@ -21,8 +21,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
+import { reasonForLog } from "../host/actionPolicy.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
+import { TypedTurns } from "../host/typedTurns.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
 import { hostLog } from "./hostLog.js";
@@ -32,7 +34,7 @@ import {
   ElectronShortcuts,
 } from "../host/electronMain.js";
 import type { HostEvent } from "../host/protocol.js";
-import type { AudioFrameHeader, ClientControl, ScreenFrameMetadata } from "../shared/protocol.js";
+import { audioFrameHeader, type ClientControl, type ScreenFrameMetadata } from "../shared/protocol.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { HOST_TOOL_SCHEMAS, HOST_TOOLS_VERSION } from "../tools/catalog.js";
 import { FilesTool } from "../tools/files.js";
@@ -41,6 +43,9 @@ import { OpenTool } from "../tools/mac/open.js";
 import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
+import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
+import { applyWindowRules } from "./windowRules.js";
+import { PersonApp, appToRestore } from "./personApp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -124,6 +129,14 @@ const utterances =
         log: hostLog,
       })
     : null;
+// What the person types, sent as their own turn on this connection and kept
+// in the same TurnLog once the runtime accepts it. See host/typedTurns.ts.
+const typedTurns = new TypedTurns({
+  send: (control) => host.sendControl(control as unknown as ClientControl),
+  turns,
+  ready: () => host.connected && lastReady !== null && !duplexClosed,
+  log: hostLog,
+});
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
@@ -144,6 +157,7 @@ const host = new HostSession({
   onControl: (c) => {
     broker.handleControl(c as Record<string, unknown>);
     utterances?.handleControl(c as Record<string, unknown>);
+    typedTurns.handleControl(c as Record<string, unknown>);
     const type = (c as { type?: string })?.type;
     if (type === "ready") {
       lastReady = c;
@@ -157,10 +171,12 @@ const host = new HostSession({
     }
     sendToRenderer("duplex:control", c);
   },
+  onOpen: () => hostLog("transport", "runtime connected (duplex open)"),
   onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
   onClosed: (code) => {
     duplexClosed = true;
     hostLog("transport", `duplex closed code=${code}`);
+    typedTurns.abandonAll();
     sendToRenderer("duplex:closed", code, "");
   },
   onScreen: (update) => {
@@ -192,17 +208,47 @@ const broker = new ActionBroker({
   log: hostLog,
   notify: (update) => sendToRenderer("action:update", update),
   lookAfter: (sinceMs) => screenWatch.lookAfter(sinceMs),
+  aroundInput: asTheirInput,
 });
 
+/** The app the person was last using, noted each time an app comes to the front (macOS). */
+const personApp = new PersonApp(app.getName(), frontAppName);
+
 /**
- * Ask the person before an action runs. A native alert, because the GNSIS
- * window may be behind the app GNSIS is about to act on; GNSIS comes forward
- * for it, and when the action types or clicks into another app, that app is
- * put back in front before it runs.
+ * Keys, typing and clicks GNSIS sends go to the app the person is using, not
+ * to GNSIS. When GNSIS is in front (the person just clicked one of its cards,
+ * or answered its Allow box), their app is put back in front first. While the
+ * action runs, the floating window lets every click through, so a click GNSIS
+ * sends reaches the app underneath even where a card is.
+ */
+async function asTheirInput<T>(run: () => Promise<T>): Promise<T> {
+  clickThrough?.suspend();
+  try {
+    const back = appToRestore(await frontAppName(), app.getName(), personApp.name);
+    if (back) {
+      // Activating a running app needs no permission.
+      await systemShell.run("/usr/bin/open", ["-a", back]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      hostLog("execution", "put the person's app back in front before typing or clicking");
+    }
+    return await run();
+  } finally {
+    clickThrough?.resume();
+  }
+}
+
+/**
+ * Ask the person before an action runs. A native alert that GNSIS comes
+ * forward for, so it is seen whatever app the person is in; an action that
+ * types or clicks then puts their app back in front before it runs
+ * (asTheirInput). Floating, it is a free-standing alert in the middle of the
+ * screen: a sheet would hang from the top edge of the see-through window,
+ * where nothing else of GNSIS is.
  */
 async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<boolean> {
-  const previous = request.typesIntoFrontApp ? await frontAppName() : null;
-  hostLog("execution", `asking the person: ${request.summary} (${request.reason})`);
+  // The summary can quote what is typed, or name a file or site: it is shown
+  // to the person, not written to the log; the broker has logged the call.
+  hostLog("execution", `call ${request.callId}: asking the person (${reasonForLog(request.reason)})`);
   app.focus({ steal: true });
   const options = {
     type: "question" as const,
@@ -215,15 +261,9 @@ async function askPerson(request: ConfirmRequest, signal: AbortSignal): Promise<
     detail: request.why,
     signal,
   };
-  const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+  const result = win && !OVERLAY ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
   const allowed = result.response === 0 && !signal.aborted;
-  hostLog("execution", `the person ${allowed ? "allowed" : "did not allow"}: ${request.summary}`);
-  if (allowed && previous && previous !== app.getName()) {
-    // Activating a running app needs no permission; the action then types
-    // into the app the person was using, not into GNSIS.
-    await systemShell.run("/usr/bin/open", ["-a", previous]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
+  hostLog("execution", `call ${request.callId}: the person ${allowed ? "allowed" : "did not allow"} it`);
   return allowed;
 }
 
@@ -239,30 +279,92 @@ function lowerFirst(text: string): string {
   return text ? text[0].toLowerCase() + text.slice(1) : text;
 }
 
+/**
+ * How GNSIS appears. On macOS it floats: one see-through window over the
+ * main display's usable area (all but the menu bar and the Dock), kept above
+ * other windows, where only GNSIS's own cards take clicks and everything
+ * else falls through to the apps underneath. There is no backdrop of its own.
+ * GNSIS_WINDOW=standard puts it back in an ordinary window with a drawn
+ * backdrop. Other systems always get the ordinary window: on Linux the
+ * pointer stops being reported once a window lets clicks through, so GNSIS
+ * would stop taking clicks for good.
+ */
+const WINDOW_ASKED = process.env.GNSIS_WINDOW ?? (process.platform === "darwin" ? "overlay" : "standard");
+const OVERLAY = WINDOW_ASKED === "overlay" && process.platform === "darwin";
+let clickThrough: ClickThrough | null = null;
+/**
+ * How large GNSIS draws itself; 1 is the size it was designed at. 0.8 is the
+ * owner's pick after comparing 100%, 90% and 80% on a 13-inch screen: close
+ * to the text size of ordinary Mac apps, and the chat is centred there.
+ * GNSIS_SCALE (0.6 to 1.25) tries another size without a rebuild.
+ */
+const UI_SCALE = (() => {
+  const asked = Number(process.env.GNSIS_SCALE);
+  return Number.isFinite(asked) && asked >= 0.6 && asked <= 1.25 ? asked : 0.8;
+})();
+
 function createWindow(): void {
-  // The product UI lays out a chat beside an agent panel; below ~1100 px the
-  // two overlap, so the window opens at a comfortable desktop size.
-  win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1100,
-    minHeight: 700,
-    title: "GNSIS",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
-      contextIsolation: true,
-      sandbox: false,
-      nodeIntegration: false,
-    },
-  });
+  const webPreferences = {
+    preload: path.join(__dirname, "preload.mjs"),
+    contextIsolation: true,
+    sandbox: false,
+    nodeIntegration: false,
+    zoomFactor: UI_SCALE,
+    // The page learns from its preload whether it floats, before it first draws.
+    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`],
+  };
+  if (OVERLAY) {
+    win = new BrowserWindow({
+      ...displays.getPrimaryDisplay().workArea,
+      title: "GNSIS",
+      transparent: true,
+      backgroundColor: "#00000000",
+      frame: false,
+      hasShadow: false,
+      resizable: false,
+      movable: false,
+      maximizable: false,
+      fullscreenable: false,
+      // A click on a card works the first time, even while another app is in
+      // front (which, floating, is nearly always).
+      acceptFirstMouse: true,
+      webPreferences,
+    });
+    // Above ordinary windows, so clicking an app underneath does not bury GNSIS.
+    win.setAlwaysOnTop(true, "floating");
+    clickThrough = new ClickThrough(win, () => displays.getCursorScreenPoint());
+    clickThrough.start();
+  } else {
+    // The product UI keeps room for the Activity drawer beside the chat; at
+    // 1100 px the chat narrows a little to keep that room, so that is the floor.
+    win = new BrowserWindow({
+      width: 1440,
+      height: 900,
+      minWidth: 1100,
+      minHeight: 700,
+      title: "GNSIS",
+      webPreferences,
+    });
+  }
+  const ruled = applyWindowRules(win, OVERLAY);
+  if (WINDOW_ASKED === "overlay" && !OVERLAY) hostLog("host", `window: floating is macOS only; ordinary window on ${process.platform}`);
+  hostLog("host", `window: ${OVERLAY ? "floating over the desktop" : "ordinary window"} at ${Math.round(UI_SCALE * 100)}%; ${ruled.join("; ")}`);
   // GNSIS_DEMO=1 fills the dock with the sample agents so every state of the
   // interface can be reviewed in the packaged app, where there is no URL to
   // add ?demo to.
   const query = process.env.GNSIS_DEMO ? { demo: "1" } : undefined;
   win.loadFile(path.join(__dirname, "../renderer/index.html"), query ? { query } : undefined);
   win.on("closed", () => {
+    clickThrough?.stop();
+    clickThrough = null;
     win = null;
   });
+}
+
+/** The floating window follows the screen it covers when displays change. */
+function fitOverlay(): void {
+  if (!OVERLAY || !win || win.isDestroyed()) return;
+  win.setBounds(displays.getPrimaryDisplay().workArea);
 }
 
 // One HostSession per machine: a second GNSIS.app instance would open a
@@ -288,10 +390,12 @@ app.whenReady().then(async () => {
   // Chromium refuses it. The whole primary display, so the visual sense sees
   // what the person sees; on macOS 15+ the system picker is offered instead,
   // and the OS asks for Screen Recording permission on first use either way.
+  // GNSIS takes no screenshots: listing the screens asks for no thumbnails,
+  // which Electron would otherwise make of each one (desktop/AGENTS.md).
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
       try {
-        const sources = await desktopCapturer.getSources({ types: ["screen"] });
+        const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
         if (sources.length === 0) {
           hostLog("permissions", "screen: no display source available");
           callback({});
@@ -341,6 +445,7 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
+  ipcMain.handle("turn:text", (_e, text: unknown) => typedTurns.send(text));
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
@@ -356,15 +461,31 @@ app.whenReady().then(async () => {
     host.connect(SESSION_ID);
     host.ready();
   });
-  ipcMain.on("call:start", () => host.startCall());
+  // How much microphone audio a call really sent: the first frame, and the
+  // total when it ends, so "the mic was on but nothing arrived" shows in the log.
+  let callFrames = 0;
+  let droppedFrames = 0;
+  ipcMain.on("call:start", () => {
+    callFrames = 0;
+    hostLog("host", "call started");
+    host.startCall();
+  });
   ipcMain.on("call:end", (_e, reason) => {
     const why = typeof reason === "string" && reason ? reason : "renderer";
-    hostLog("host", `call ended reason=${why}`);
+    hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
     host.endCall(why, { stop: false });
   });
-  ipcMain.on("duplex:audioFrame", (_e, header: AudioFrameHeader, pcm: Uint8Array) => {
+  ipcMain.on("duplex:audioFrame", (_e, raw: unknown, pcm: unknown) => {
+    const header = audioFrameHeader(raw);
+    if (!header || !(pcm instanceof Uint8Array)) {
+      // Once, then every 500th: a steady stream of bad frames would bury the log.
+      if (droppedFrames++ % 500 === 0) hostLog("audio", `a microphone frame was not well formed; dropped (${droppedFrames} so far)`);
+      return;
+    }
     const audio = Buffer.from(pcm);
     host.sendAudioFrame(header, audio);
+    callFrames += 1;
+    if (callFrames === 1) hostLog("audio", `first microphone frame sent (${audio.byteLength} bytes)`);
     utterances?.feed(header, audio);
   });
   if (utterances) setInterval(() => utterances.idle(Date.now()), 1_000);
@@ -373,6 +494,35 @@ app.whenReady().then(async () => {
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
     }
   });
+  // A yes/no question from the page, such as "Erase your GNSIS?", asked the
+  // same way as the Allow box: free-standing when GNSIS floats.
+  ipcMain.handle("dialog:confirm", async (_e, message: unknown, confirmLabel: unknown) => {
+    if (typeof message !== "string" || !message.trim() || message.length > 300) return false;
+    const yes = typeof confirmLabel === "string" && confirmLabel.trim() && confirmLabel.length <= 40 ? confirmLabel : "OK";
+    const options = { type: "warning" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, noLink: true, title: "GNSIS", message };
+    const result = win && !OVERLAY ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+    return result.response === 0;
+  });
+  // Where the floating window's cards are, so clicks elsewhere fall through.
+  let reported = false;
+  ipcMain.on("hit:rects", (_e, rects: unknown) => {
+    if (!clickThrough) return;
+    clickThrough.setRects(rects);
+    // Once: proof the page is telling main where its cards are. Without it,
+    // every click would fall through and GNSIS could not be used.
+    const cards = hitRectsFrom(rects).length;
+    if (reported || cards === 0) return;
+    reported = true;
+    hostLog("host", `floating window: the page reported ${cards} card(s) that take clicks`);
+  });
+  if (process.platform === "darwin") {
+    // Each time an app comes to the front, note it if it is not GNSIS.
+    systemPreferences.subscribeWorkspaceNotification("NSWorkspaceDidActivateApplicationNotification", () => void personApp.noteFront());
+    void personApp.noteFront();
+  }
+  displays.on("display-metrics-changed", fitOverlay);
+  displays.on("display-added", fitOverlay);
+  displays.on("display-removed", fitOverlay);
   ipcMain.on("host:log", (_e, line) => {
     if (typeof line === "string") hostLog("renderer", line);
   });

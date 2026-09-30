@@ -1,5 +1,5 @@
 {
-  "version": "desktop-v1",
+  "version": "desktop-v2",
   "tools": [
     {
       "name": "open",
@@ -78,6 +78,7 @@
             "enum": [
               "tabs",
               "switch",
+              "new_tab",
               "go",
               "back",
               "forward",
@@ -87,7 +88,7 @@
           "url": {
             "type": "string",
             "maxLength": 2048,
-            "description": "For go, the address to load in the current tab."
+            "description": "For go, the address to load in the current tab; for new_tab, an optional address."
           },
           "tab": {
             "type": "integer",

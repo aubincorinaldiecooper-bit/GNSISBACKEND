@@ -44,10 +44,13 @@ export function Shell({ g }: { g: Geometry }) {
 
 function DockLayer({ s, hidden }: { s: State; hidden: boolean }) {
   const { shown, more } = dockGeometry(s);
+  const news = !!s.convs.gnsis?.unread;
   return (
     <div className="dock-layer" aria-hidden={hidden} style={{ opacity: hidden ? 0 : 1, pointerEvents: hidden ? "none" : "auto" }}>
-      <button type="button" className="dock-sun" aria-label="Open your chat with GNSIS" onClick={() => actions.openAgent("gnsis")}>
+      <button type="button" className="dock-sun" aria-label={news ? "Open your chat with GNSIS, new result" : "Open your chat with GNSIS"} onClick={() => actions.openAgent("gnsis")}>
         <Face name={s.identity?.publicId ?? "GNSIS"} size={50} gnsis />
+        {/* Something landed in GNSIS's chat while it was closed. */}
+        {news && <span className="mark-badge dock-news" aria-hidden="true">1</span>}
       </button>
       <span className="divider" aria-hidden="true" />
       {shown.map((r) => (
@@ -88,9 +91,19 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
   const live = liveInfoFor(s);
   const liveHere = live.on && s.live?.to === s.active;
   const words = phrase(s).split(" ");
-  const placeholder = live.on ? "" : conv && !isHome ? `Message ${conv.title}…` : "Talk or type, / for commands";
+  // While live the field stays empty: the voice button shows what is happening.
+  const placeholder = live.on
+    ? ""
+    : !s.caps.text && !s.demo
+      ? "Press the voice button to talk, / for commands"
+      : conv && !isHome ? `Message ${conv.title}…` : "Talk or type, / for commands";
   const canSee = s.caps.screen || s.caps.camera;
   const seeing = s.vision.state === "on" || s.vision.state === "starting";
+  const trouble = (s.vision.state === "denied" || s.vision.state === "error") && !!s.vision.detail;
+  // The face collapses the chat to the dock, which also ends live voice.
+  const closeLabel = s.live
+    ? `Close the chat and end live voice with ${s.convs[s.live.to]?.title ?? "GNSIS"}`
+    : s.agentIds.length ? "Close the chat and show all agents" : "Close the chat";
 
   const faceStyle = liveHere
     ? { transform: `scale(${1 + (live.agentNow ? 0.08 * live.amp : 0)}) translateY(${live.userNow ? 1.5 : 0}px)` }
@@ -105,19 +118,29 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
 
   return (
     <div className="bar-layer" aria-hidden={hidden} style={{ width, opacity: hidden ? 0 : 1, pointerEvents: hidden ? "none" : "auto" }}>
-      <button type="button" className="addr-face" aria-label={`Talking to ${addressee.title}. Show all agents`} onClick={actions.toDock}>
+      <button type="button" className="addr-face" aria-label={closeLabel} title={closeLabel} onClick={actions.toDock}>
         <Face name={isHome ? s.identity?.publicId ?? "GNSIS" : addressee.title} gnsis={isHome} size={34} style={faceStyle} pop={!!addressee.bornT && s.t - addressee.bornT < 8} />
       </button>
       {canSee ? (
         <button
           type="button"
-          className={"icon-btn round" + (seeing ? " is-seeing" : "")}
-          aria-label={seeing ? `GNSIS is looking at your ${s.vision.source}. Change what it sees` : "Let GNSIS see your screen or camera"}
+          className="icon-btn round"
+          aria-label={
+            s.vision.state === "starting"
+              ? `Starting to share your ${s.vision.source}. Change what GNSIS sees`
+              : seeing && s.link !== "ready"
+                ? `Your ${s.vision.source} is shared, but GNSIS isn’t connected, so it isn’t getting it. Change what GNSIS sees`
+              : seeing
+              ? `GNSIS is looking at your ${s.vision.source}. Change what it sees`
+              : trouble
+                ? `Let GNSIS see your screen or camera. It didn’t start: ${s.vision.detail}`
+                : "Let GNSIS see your screen or camera"
+          }
           aria-expanded={s.visionMenu}
           aria-pressed={seeing}
           onClick={() => setState({ visionMenu: !s.visionMenu })}
         >
-          {seeing ? <I.Eye size={22} /> : <I.Plus size={22} />}
+          <I.Plus size={22} />
         </button>
       ) : (
         <button type="button" className="icon-btn round" aria-label="Attach" disabled>
@@ -141,8 +164,8 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
             />
             {!hasText && placeholder && <span className="bar-placeholder" aria-hidden="true">{placeholder}</span>}
           </div>
-          <button type="button" className="model-btn">Auto <I.ChevronDown size={16} /></button>
-          {live.on ? (
+          <button type="button" className="model-btn" disabled title="Choosing a model isn’t in this build yet">Auto <I.ChevronDown size={16} /></button>
+          {live.on && !live.connecting ? (
             <button type="button" className={"icon-btn round mute" + (live.muted ? " is-muted" : "")} aria-label={live.muted ? "Unmute" : "Mute"} aria-pressed={live.muted} onClick={actions.toggleMute}>
               {live.muted ? <I.MicOff size={21} /> : <I.Mic size={21} />}
             </button>
@@ -151,8 +174,13 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
               <I.Mic size={21} />
             </button>
           ) : null}
-          {hasText ? (
+          {/* While live, Cancel or End stays put whatever is typed; Enter still sends. */}
+          {hasText && !live.on ? (
             <button type="button" className="primary-btn" aria-label="Send" onClick={actions.send}><I.ArrowUp size={22} /></button>
+          ) : live.on && live.connecting ? (
+            <button type="button" className="primary-btn connecting" aria-label={`Cancel. ${live.status}`} onClick={actions.endLive}>
+              <span className="spin" aria-hidden="true" />
+            </button>
           ) : live.on ? (
             <button type="button" className="primary-btn armed" aria-label={`End live voice with ${live.name}. ${live.status}`} aria-pressed="true" onClick={actions.endLive}>
               {barHeights(live.amp, live.agentNow || live.userNow, s.t).map((h, i) => <span key={i} style={{ height: h }} />)}

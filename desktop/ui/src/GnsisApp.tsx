@@ -32,8 +32,10 @@ export function GnsisApp({ host, identity, demo = false }: GnsisAppProps) {
   }, [host, identity, demo]);
 
   // In an ordinary window nothing shows through the glass, so draw a desktop.
+  // Floating over the real one, draw nothing: the desktop is the backdrop.
   useEffect(() => {
     document.body.classList.toggle("gnsis-backdrop", !overlay);
+    document.body.classList.toggle("gnsis-overlay", overlay);
   }, [overlay]);
 
   useHitRects(host);

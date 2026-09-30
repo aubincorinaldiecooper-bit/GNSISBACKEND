@@ -27,6 +27,8 @@ export interface HostSessionOptions {
   /** The actions this Host can run, offered to the runtime on connect. */
   hostTools?: { names: readonly string[]; version: string };
   onControl?: (control: unknown) => void;
+  /** The duplex socket is open (first connect and every reconnect). */
+  onOpen?: () => void;
   onAudio?: (pcm: Buffer) => void;
   onClosed?: (code: number) => void;
   /** Daemon screen-channel config / screen-socket controls, for the UI. */
@@ -98,6 +100,7 @@ export class HostSession {
     this.screen.on("reconnect_scheduled", (info) =>
       this.opts.onScreen?.({ control: { type: "screen.reconnect", ...(info as object) } }),
     );
+    this.duplex.on("open", () => this.opts.onOpen?.());
     this.duplex.on("audio", (pcm) => this.opts.onAudio?.(pcm as Buffer));
     this.duplex.on("close", (code) => {
       this.opts.onClosed?.(code);

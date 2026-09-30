@@ -39,6 +39,8 @@ function setup(opts: { turn?: TrustedTurn; confirm?: (r: ConfirmRequest, s: Abor
   const events: ActionEvent[] = [];
   const asked: ConfirmRequest[] = [];
   const prompts: boolean[] = [];
+  const updates: string[] = [];
+  const logs: string[] = [];
   const deps: ActionBrokerDeps = {
     registry,
     send: (c) => sent.push(c),
@@ -53,12 +55,13 @@ function setup(opts: { turn?: TrustedTurn; confirm?: (r: ConfirmRequest, s: Abor
     },
     latestTurn: opts.latestTurn ?? (() => opts.turn ?? null),
     waitForWords: opts.waitForWords,
-    log: () => {},
+    log: (area, line) => logs.push(`${area}: ${line}`),
+    notify: (u) => updates.push(u.state),
     lookAfter: opts.look ? async () => opts.look! : undefined,
   };
   const broker = new ActionBroker(deps);
   broker.handleControl({ type: "ready", host_tools: { accepted: ["files"] } });
-  return { broker, files, sent, events, asked, prompts };
+  return { broker, files, sent, events, asked, prompts, updates, logs };
 }
 
 const call = (callId: string, args: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
@@ -233,4 +236,88 @@ test("an action that arrives before the person's words are transcribed waits for
   assert.equal((response.content as { status: string }).status, "done");
   assert.equal(asked.length, 0);
   assert.equal(files.runs, 1);
+});
+
+test("the person is kept up to date on every call: asked, working, then how it went", async () => {
+  // Asked for in their own words: straight to work.
+  const direct = setup({ turn: { turnId: "t1", text: "move the report into Projects", endedAtMs: Date.now() } });
+  direct.broker.handleControl(call("c1", move));
+  await answer(direct.sent, "c1");
+  assert.deepEqual(direct.updates, ["working", "done"]);
+  // Not asked for: the person is asked first.
+  const asked = setup();
+  asked.broker.handleControl(call("c2", move));
+  await answer(asked.sent, "c2");
+  assert.deepEqual(asked.updates, ["waiting", "working", "done"]);
+  // A failure says so, and the log says why without saying what.
+  const failed = setup({ turn: { turnId: "t1", text: "move it to Nowhere", endedAtMs: Date.now() } });
+  failed.broker.handleControl(call("c3", { ...move, to: "Nowhere" }));
+  await answer(failed.sent, "c3");
+  assert.deepEqual(failed.updates, ["failed"]);
+  assert.ok(failed.logs.some((l) => /call c3 files → not_found \[not_found\]/.test(l)));
+});
+
+test("the log tells a call that never matched the tool from one that failed while running", async () => {
+  const { broker, sent, logs } = setup();
+  broker.handleControl(call("c4", { action: "move", path: 42 }));
+  await answer(sent, "c4");
+  assert.ok(logs.some((l) => /call c4 files → failed \[arguments_rejected\]/.test(l)), logs.join("\n"));
+});
+
+test("an allowed action that types or clicks runs through the host's input hook; others do not", async () => {
+  const registry = new ToolRegistry({ runtimeUrl: "http://127.0.0.1:1" });
+  const ran: string[] = [];
+  const tool = (name: string, effect: "input" | "change"): ActionTool => ({
+    name,
+    platforms: [process.platform],
+    async prepare(args) {
+      return {
+        tool: name,
+        action: String(args.action),
+        effect,
+        summary: `${name} ${String(args.action)}`,
+        scope: [{ value: "x", source: "named" }],
+        needs: [],
+        run: async () => {
+          ran.push(`${name}:run`);
+          return { verified: "none", message: "Done." };
+        },
+      };
+    },
+  });
+  registry.registerAction(tool("input", "input"));
+  registry.registerAction(tool("files", "change"));
+  const sent: Array<Record<string, unknown>> = [];
+  const broker = new ActionBroker({
+    registry,
+    send: (c) => sent.push(c),
+    event: () => {},
+    confirm: async () => true,
+    accessibility: () => true,
+    latestTurn: () => null,
+    log: () => {},
+    aroundInput: async (run) => {
+      ran.push("hook:before");
+      try {
+        return await run();
+      } finally {
+        ran.push("hook:after");
+      }
+    },
+  });
+  broker.handleControl({ type: "ready", host_tools: { accepted: ["input", "files"] } });
+  const request = (callId: string, name: string) => ({
+    type: "tool.call",
+    call_id: callId,
+    dispatch: "client",
+    tool_calls: [{ name, arguments: name === "input" ? { action: "keys", keys: "cmd+v" } : move }],
+    tool_response_expected: true,
+  });
+  broker.handleControl(request("c1", "input"));
+  const response = await answer(sent, "c1");
+  assert.deepEqual(ran, ["hook:before", "input:run", "hook:after"], JSON.stringify(response));
+  ran.length = 0;
+  broker.handleControl(request("c2", "files"));
+  await answer(sent, "c2");
+  assert.deepEqual(ran, ["files:run"], "a file move does not touch the front app");
 });

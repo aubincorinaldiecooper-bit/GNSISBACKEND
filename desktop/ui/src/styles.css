@@ -33,6 +33,16 @@ body.gnsis-backdrop {
     linear-gradient(165deg, #2c5ca6 0%, #5d91ce 42%, #a8c6e6 74%, #dde8f4 100%);
 }
 
+/*
+ * Floating over the real desktop. A see-through window cannot blur what is
+ * behind it, so the glass is made more solid to keep words readable over
+ * whatever is on screen.
+ */
+body.gnsis-overlay { --glass: rgba(255, 255, 255, 0.9); --glass-strong: rgba(255, 255, 255, 0.94); }
+body.gnsis-overlay .glass, body.gnsis-overlay .popover, body.gnsis-overlay .setup-card { -webkit-backdrop-filter: none; backdrop-filter: none; }
+body.gnsis-overlay .window, body.gnsis-overlay .panel, body.gnsis-overlay .settings { background: rgba(255, 255, 255, 0.93); }
+body.gnsis-overlay .setup-card { background: linear-gradient(160deg, rgba(234, 242, 253, 0.97) 0%, rgba(214, 231, 252, 0.95) 52%, rgba(242, 247, 254, 0.97) 100%); }
+
 .glass {
   background: var(--glass);
   -webkit-backdrop-filter: blur(30px) saturate(170%);
@@ -86,11 +96,24 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .icon-btn.round { border-radius: 22px; }
 .icon-btn.mute { background: rgba(20, 24, 33, 0.06); color: var(--ink); }
 .icon-btn.mute.is-muted { background: rgba(201, 54, 54, 0.12); color: var(--red); }
-.icon-btn.is-seeing { background: rgba(46, 84, 230, 0.12); color: var(--accent); }
 .primary-btn { width: 48px; height: 48px; border: 0; border-radius: 24px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0; flex-shrink: 0; }
 .primary-btn.armed { background: var(--accent); animation: ring 1.6s infinite ease-in-out; }
-.primary-btn.armed span { width: 3px; border-radius: 2px; background: #fff; transition: height 90ms linear; }
+.primary-btn.armed span { width: 3px; border-radius: 999px; background: #fff; transition: height 90ms linear; }
 .primary-btn.listening { background: var(--accent); }
+/* Pressed, but the microphone is not capturing yet: a spinner, never the level bars. */
+.primary-btn.connecting { background: var(--accent); }
+.primary-btn .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* The Activity drawer's button: marks borrow the agent faces' own dots. */
+.activity-btn { position: relative; }
+.activity-btn.is-open { background: rgba(20, 24, 33, 0.07); color: var(--ink); }
+.activity-btn.needs { color: var(--orange); }
+.activity-btn .mark-needs { right: 4px; top: 4px; }
+.activity-btn .mark-dot { right: 7px; top: 7px; }
+.activity-btn .mark-badge { right: 2px; bottom: 4px; }
+.activity-working { animation: blink 1.2s infinite ease-in-out; }
+/* What fills the wait after a typed message: sending, then working. */
+.pending-line { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font-size: 14px; min-height: 22px; }
 @keyframes ring { 0%, 100% { box-shadow: 0 0 0 3px rgba(46, 84, 230, 0.2); } 50% { box-shadow: 0 0 0 6px rgba(46, 84, 230, 0.2); } }
 .stop-square { width: 13px; height: 13px; border-radius: 3px; background: #fff; }
 .voice-btn { width: 52px; height: 52px; border: 0; border-radius: 26px; background: var(--ink); color: #fff; display: grid; place-items: center; flex-shrink: 0; }
@@ -107,6 +130,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .ghost-btn { height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 14px; border: 1px solid rgba(20, 24, 33, 0.1); background: rgba(255, 255, 255, 0.6); font-size: 15px; font-weight: 500; }
 .chip { height: 30px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 15px; background: rgba(20, 24, 33, 0.07); font-size: 14px; font-weight: 500; color: var(--ink-2); flex-shrink: 0; }
 .chip.green { background: var(--green-tint); color: var(--green-ink); }
+.chip.orange { background: rgba(232, 134, 26, 0.16); color: #8a4a06; }
 
 /* ---------- desktop layout ---------- */
 .desktop { position: fixed; inset: 0; }
@@ -119,7 +143,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .dock-layer { padding: 0 14px; }
 .bar-layer { padding: 0 12px 0 10px; }
 .divider { width: 1px; height: 34px; margin: 0 10px; flex-shrink: 0; background: rgba(20, 24, 33, 0.16); }
-.dock-sun { width: 64px; height: 64px; border: 0; border-radius: 32px; background: transparent; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
+.dock-sun { position: relative; width: 64px; height: 64px; border: 0; border-radius: 32px; background: transparent; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
+.dock-sun .dock-news { right: 2px; bottom: 4px; }
 .dock-agent { position: relative; width: 64px; height: 68px; border: 0; background: transparent; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
 .dock-dots { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); display: flex; }
 .dock-more { width: 52px; height: 44px; flex-shrink: 0; border: 0; border-radius: 22px; background: rgba(20, 24, 33, 0.07); font-size: 15px; font-weight: 600; color: var(--ink-2); }
@@ -131,7 +156,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .waveform span { width: 3px; flex-shrink: 0; border-radius: 2px; background: var(--accent); transition: height 90ms linear; }
 
 /* ---------- chat window ---------- */
-.window { border-radius: 28px; display: flex; flex-direction: column; max-height: 560px; overflow: hidden; background: rgba(255, 255, 255, 0.8); }
+/* The chat leaves room above it for a notice (74 px), so on short screens one never pushes off the top. */
+.window { border-radius: 28px; display: flex; flex-direction: column; max-height: min(560px, calc(100vh - 236px)); overflow: hidden; background: rgba(255, 255, 255, 0.8); animation: card-in 280ms var(--spring) both; }
 .tabs { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--line); }
 .tabs-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; overflow: hidden; }
 .tab.on { flex-shrink: 0; max-width: 240px; display: flex; align-items: center; border-radius: 14px; background: rgba(255, 255, 255, 0.75); }
@@ -143,24 +169,23 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .thread-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column-reverse; overflow-y: auto; }
 .thread { padding: 20px 28px 28px; display: flex; flex-direction: column; gap: 16px; }
 .user-msg { align-self: flex-end; max-width: 78%; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.spoken { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
 .bubble { background: rgba(255, 255, 255, 0.72); border-radius: 20px; padding: 11px 16px; font-size: 15.5px; line-height: 1.45; }
 .bubble.pending { background: rgba(255, 255, 255, 0.45); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.9); min-width: 60px; }
-/* a spoken turn whose words the host could not give us: how long, never what */
-.bubble.spoken-only { display: flex; align-items: center; gap: 10px; padding: 10px 14px; min-height: 40px; }
-.spoken-bars { display: inline-flex; align-items: center; gap: 3px; height: 18px; }
-.spoken-bars span { width: 3px; height: 8px; border-radius: 2px; background: var(--ink-3); }
-.spoken-bars span:nth-child(2), .spoken-bars span:nth-child(4) { height: 14px; }
-.spoken-bars span:nth-child(3) { height: 18px; }
-.bubble.pending .spoken-bars span { background: var(--accent); animation: talk 900ms infinite ease-in-out; }
-.bubble.pending .spoken-bars span:nth-child(2) { animation-delay: 120ms; }
-.bubble.pending .spoken-bars span:nth-child(3) { animation-delay: 240ms; }
-.bubble.pending .spoken-bars span:nth-child(4) { animation-delay: 360ms; }
-.bubble.pending .spoken-bars span:nth-child(5) { animation-delay: 480ms; }
-@keyframes talk { 0%, 100% { transform: scaleY(0.5); } 50% { transform: scaleY(1.2); } }
 .answer { font-size: 16px; line-height: 1.62; white-space: pre-line; max-width: 600px; }
 .caret { display: inline-block; width: 9px; height: 18px; border-radius: 3px; background: var(--accent); vertical-align: -3px; margin-left: 3px; }
-.system-line { align-self: center; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); text-align: center; }
+.system-line { align-self: flex-start; font-size: 14px; color: var(--ink-2); }
+/* GNSIS working: "Thinking" and the step running now shimmer, the way AI chats show work in progress. */
+.shimmer { background: linear-gradient(90deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.thinking-row { align-self: flex-start; font-size: 15px; font-weight: 500; }
+.steps-block { align-self: flex-start; display: flex; flex-direction: column; gap: 6px; }
+.step-row { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+.step-mark { flex: none; width: 16px; height: 20px; display: grid; place-items: center; color: var(--ink-3); }
+.step-row.is-waiting .step-mark { color: var(--orange); }
+.step-row.is-failed .step-mark, .step-row.is-declined .step-mark { color: var(--red); }
+.step-spin { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid rgba(20, 24, 33, 0.15); border-top-color: var(--ink-2); animation: spin 0.8s linear infinite; }
+.steps-summary { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 2px 0; font: inherit; font-size: 14px; font-weight: 500; color: var(--ink-2); cursor: pointer; }
+.steps-summary:hover { color: var(--ink); }
 .answered { align-self: flex-end; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 5px; border-radius: 15px; background: var(--green-tint); font-size: 14px; font-weight: 500; color: var(--green-ink); }
 .answered-check { width: 21px; height: 21px; border-radius: 50%; background: #1b7a45; color: #fff; display: grid; place-items: center; }
 .steps-toggle { align-self: flex-start; height: 44px; display: flex; align-items: center; gap: 10px; padding: 0; border: 0; background: transparent; font-size: 16px; font-weight: 500; }
@@ -186,10 +211,13 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .approval-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 14px 14px; }
 
 /* ---------- agent panel ---------- */
-.panel { position: absolute; bottom: 32px; border-radius: 28px; display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.8); transition: left 360ms var(--spring); }
+.panel { position: absolute; bottom: 32px; border-radius: 28px; display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.8); animation: drawer-in 260ms var(--spring); }
+/* The Activity drawer comes in from the right; the chat beside it stays where it is. */
+@keyframes drawer-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
 .panel-head { height: 72px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 10px 0 20px; border-bottom: 1px solid var(--line); }
 .panel-who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
-.panel-names { display: flex; flex-direction: column; gap: 1px; }
+.panel-names { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.panel-names strong, .panel-names span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-names strong { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .panel-body { position: relative; flex: 1; min-height: 0; padding: 24px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
 .panel-menu { position: absolute; top: 4px; right: 16px; width: 240px; padding: 6px; display: flex; flex-direction: column; }
@@ -208,10 +236,11 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .card-actions { display: flex; justify-content: flex-end; gap: 10px; transition: opacity 300ms; }
 .agent-row { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 8px; border: 0; border-radius: 12px; background: transparent; text-align: left; }
 .agent-row strong { font-size: 15.5px; font-weight: 500; }
-.browser { border-radius: 18px; overflow: hidden; background: #fff; box-shadow: 0 12px 32px rgba(18, 32, 64, 0.18); }
+.browser { flex-shrink: 0; border-radius: 18px; overflow: hidden; background: #fff; box-shadow: 0 12px 32px rgba(18, 32, 64, 0.18); }
 .browser-chrome { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: #eef1f5; }
 .browser-chrome .dot { width: 9px; height: 9px; border-radius: 50%; background: #cfd3db; }
-.browser-url { flex: 1; height: 26px; border-radius: 13px; background: #fff; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.browser-url { flex: 1; min-width: 0; height: 26px; padding: 0 10px; border-radius: 13px; background: #fff; display: flex; align-items: center; justify-content: safe center; gap: 6px; font-size: 12px; color: var(--ink-2); overflow: hidden; }
+.browser-url span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .browser-page { position: relative; padding: 22px 26px 26px; display: flex; flex-direction: column; gap: 10px; }
 .browser-page h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
 .browser-page h2 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
@@ -220,6 +249,33 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .loadbar { position: absolute; left: 0; top: 0; height: 3px; background: var(--accent); transition: width 120ms linear; }
 .agent-cursor { position: absolute; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3)); transition: left 700ms cubic-bezier(0.3, 0.7, 0.2, 1), top 700ms cubic-bezier(0.3, 0.7, 0.2, 1); }
 .caption { font-size: 17px; font-weight: 500; padding-left: 4px; }
+
+/* ---------- what GNSIS sees ---------- */
+.screen-card { gap: 10px; }
+.screen-card .card-title { margin-bottom: 0; }
+/* One fixed shape for every state, so nothing jumps when sharing starts or stops. */
+.screen-frame { position: relative; width: 100%; aspect-ratio: 16 / 10; flex-shrink: 0; border: 0; border-radius: 14px; overflow: hidden; padding: 0 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; font-size: 14.5px; line-height: 1.45; }
+.screen-frame.is-empty { background: rgba(20, 24, 33, 0.05); color: var(--ink-2); }
+.screen-frame.is-dark { background: #0b0d12; color: rgba(255, 255, 255, 0.78); }
+.screen-frame.is-live { padding: 0; background: #0b0d12; cursor: zoom-in; animation: fade-in 320ms var(--spring) both; }
+.screen-frame.is-live::after { content: ""; position: absolute; inset: 0; background: rgba(11, 13, 18, 0); transition: background-color 180ms; }
+.screen-frame.is-live:hover::after, .screen-frame.is-live:focus-visible::after { background: rgba(11, 13, 18, 0.2); }
+.screen-video { display: block; width: 100%; height: 100%; object-fit: contain; background: #0b0d12; }
+.screen-open { position: absolute; z-index: 1; left: 50%; top: 50%; height: 36px; padding: 0 16px; border-radius: 18px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 8px 24px rgba(46, 84, 230, 0.35); pointer-events: none; opacity: 0; transform: translate(-50%, -50%) scale(0.92); transition: opacity 180ms var(--spring), transform 180ms var(--spring); }
+.screen-frame.is-live:hover .screen-open, .screen-frame.is-live:focus-visible .screen-open { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.screen-spin { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; animation: spin 0.9s linear infinite; }
+.screen-foot { min-height: 40px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 10px; }
+.screen-foot .grow { flex: 1 1 150px; }
+.live-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(31, 164, 99, 0.18); }
+.live-dot.is-paused { background: var(--orange); box-shadow: 0 0 0 3px rgba(232, 134, 26, 0.18); }
+.btn-secondary.compact, .btn-dark.compact { height: 36px; padding: 0 14px; border-radius: 11px; font-size: 14px; gap: 6px; }
+.screen-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(11, 13, 18, 0.32); animation: fade-in 200ms var(--spring) both; }
+.screen-viewer { width: min(960px, 90vw); display: flex; flex-direction: column; border-radius: 22px; overflow: hidden; background: #0b0d12; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45); animation: viewer-in 280ms var(--spring) both; }
+.screen-bar { height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 18px; background: rgba(255, 255, 255, 0.96); }
+.screen-bar .grow { flex-direction: row; align-items: baseline; gap: 10px; }
+.screen-viewer .screen-video { height: auto; max-height: calc(100vh - 150px); }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes viewer-in { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
 
 /* ---------- pop-overs ---------- */
 .commands { padding: 8px; display: flex; flex-direction: column; border-radius: 26px; }
@@ -235,11 +291,13 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .greeting-tail { position: absolute; left: 33px; bottom: -7px; width: 14px; height: 14px; background: rgba(255, 255, 255, 0.94); transform: rotate(45deg); border-radius: 3px; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .toast { position: absolute; bottom: 114px; width: 380px; padding: 10px 8px 10px 14px; display: flex; align-items: center; gap: 12px; animation: rise 360ms var(--spring) both; }
+.toast.above-chat { left: auto; right: 0; bottom: calc(100% + 14px); }
 .toast strong { font-size: 14.5px; }
 .toast .btn-dark { height: 40px; padding: 0 16px; border-radius: 12px; }
 
 /* ---------- setup ---------- */
-.setup-stage { position: fixed; inset: 0; display: grid; place-items: center; }
+/* Scrolls on screens too short for the card, so its button is never out of reach. */
+.setup-stage { position: fixed; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 24px 0; }
 .setup-card { width: 600px; border-radius: 44px; padding: 64px 54px 56px; display: flex; flex-direction: column; align-items: stretch; text-align: center;
   background: linear-gradient(160deg, rgba(224, 236, 252, 0.9) 0%, rgba(201, 223, 250, 0.82) 52%, rgba(238, 244, 253, 0.92) 100%);
   -webkit-backdrop-filter: blur(30px) saturate(160%); backdrop-filter: blur(30px) saturate(160%);
@@ -262,7 +320,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 
 /* ---------- settings ---------- */
 .settings-scrim { position: fixed; inset: 0; display: grid; place-items: center; }
-.settings { width: 1000px; max-width: calc(100vw - 48px); height: 700px; max-height: calc(100vh - 48px); border-radius: 32px; display: grid; grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; background: rgba(255, 255, 255, 0.8); }
+.settings { animation: card-in 280ms var(--spring) both; width: 1000px; max-width: calc(100vw - 48px); height: 700px; max-height: calc(100vh - 48px); border-radius: 32px; display: grid; grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; background: rgba(255, 255, 255, 0.8); }
 .settings-nav { padding: 22px 16px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line); background: rgba(255, 255, 255, 0.3); }
 .settings-brand { display: flex; align-items: center; gap: 12px; padding: 4px 10px 18px; font-size: 20px; font-weight: 600; }
 .settings-nav button { height: 46px; padding: 0 14px; border: 0; border-radius: 12px; background: transparent; font-size: 15.5px; text-align: left; }
@@ -275,6 +333,7 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .row-card h2 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
 .row-card p { margin: 0; }
 .group-title { font-size: 14px; font-weight: 600; color: var(--ink-2); margin: 4px 4px 8px; }
+.group-note { margin: 0 4px 10px; }
 .card.rows { padding: 0; gap: 0; }
 .row { min-height: 68px; display: flex; align-items: center; gap: 20px; padding: 12px 18px; border-top: 1px solid rgba(20, 24, 33, 0.07); }
 .rows > .row:first-child, .rows > .field-block:first-child { border-top: 0; }
@@ -288,11 +347,24 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .switch.on { background: var(--accent); }
 .switch.on span { transform: translateX(20px); }
 .select { height: 42px; min-width: 190px; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(20, 24, 33, 0.14); background: #fff; font-size: 15px; }
+.select:disabled, input[type="range"]:disabled { opacity: 0.5; cursor: not-allowed; }
 .segmented { display: flex; gap: 4px; padding: 4px; border-radius: 14px; background: rgba(20, 24, 33, 0.06); }
 .segmented button { height: 36px; padding: 0 16px; border: 0; border-radius: 10px; background: transparent; font-size: 15px; font-weight: 500; }
 .segmented button.on { background: #fff; }
 input[type='range'] { width: 200px; accent-color: var(--accent); }
 
+/* ---------- small movements ---------- */
+@keyframes card-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } to { opacity: 1; transform: none; } }
+.dock-menu, .vision-menu, .commands { animation: pop-in 180ms var(--spring) both; transform-origin: bottom center; }
+.panel-menu { animation: pop-in 180ms var(--spring) both; transform-origin: top right; }
+.icon-btn, .btn-secondary, .btn-dark, .btn-accent, .btn-danger, .ghost-btn, .pill, .primary-btn, .voice-btn, .tab.off, .agent-row, .menu-item, .panel-menu button, .commands button, .settings-nav button {
+  transition: background-color 150ms, box-shadow 150ms, transform 140ms var(--spring);
+}
+.icon-btn:active, .btn-secondary:active, .btn-dark:active, .btn-accent:active, .btn-danger:active, .ghost-btn:active, .pill:active, .primary-btn:active, .voice-btn:active { transform: scale(0.96); }
+button:disabled:active { transform: none; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  button:active { transform: none !important; }
 }

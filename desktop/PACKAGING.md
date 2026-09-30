@@ -54,6 +54,30 @@ runtime's address is refused.
 state can be reviewed in the packaged app (Settings → Developer → Load demo
 agents does the same at run time).
 
+## The window
+
+On macOS GNSIS has no ordinary window. It opens one transparent, frameless
+window over the main display's usable area, kept above other windows, and
+only its cards take clicks: everywhere else, clicks fall through to the apps
+underneath. The page reports where its cards are and the main process
+switches mouse input on and off as the pointer crosses them. The host log
+records the mode (`window: floating over the desktop at 80%; …`) and the first
+report of the cards' positions.
+
+Every GNSIS window is left out of screenshots, screen recordings and screen
+sharing, and the floating window appears on every desktop (Space) and over
+full-screen apps. The same host log line says so (`hidden from screen
+capture; on every desktop and over full-screen apps`). Neither has been tried
+on a Mac yet.
+
+- `GNSIS_WINDOW=standard` opens an ordinary window with a drawn backdrop
+  instead (the default on other systems); `GNSIS_WINDOW=overlay` forces the
+  floating window.
+- `GNSIS_SCALE` (0.6–1.25, default 0.8) draws the interface larger or smaller.
+
+To pass one to the installed app, run its executable from Terminal, e.g.
+`GNSIS_SCALE=0.8 /Applications/GNSIS.app/Contents/MacOS/GNSIS`.
+
 ## Signing / notarization
 
 - Development DMG (default): run with `CSC_IDENTITY_AUTO_DISCOVERY=false` —
@@ -144,7 +168,7 @@ really a link into a hidden, system or outside place is treated as that place.
 
 1. Deploy the runtime from this commit (`modal deploy modal/gnsis_voice.py`,
    or the worker's deploy route), then run `scripts/verify-modal-gnsis.py`:
-   `/health` lists `host_tools` with version `desktop-v1`.
+   `/health` lists `host_tools` with version `desktop-v2`.
 2. Install the DMG from this commit's `desktop-dmg` run and start it. A
    fresh install connects to `https://gnsis.studio` automatically. The host log
    (`~/Library/Application Support/GNSIS/logs/gnsis-host.log`) shows

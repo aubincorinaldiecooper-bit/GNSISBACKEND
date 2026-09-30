@@ -169,11 +169,17 @@ export class UtteranceTranscriber {
     const startMs = this.startedAtMs;
     const endMs = startMs + Math.round((pcm.length / 2 / SAMPLE_RATE) * 1000);
     this.inFlight += 1;
+    this.opts.log("turns", `utterance detected (${endMs - startMs} ms); transcribing`);
     void this.opts
       .transcribe(pcm, startMs)
       .then((text) => {
         const words = text.trim();
-        if (!words) return;
+        const took = (this.opts.now?.() ?? Date.now()) - now;
+        if (!words) {
+          this.opts.log("turns", `speech-to-text heard no words (${took} ms)`);
+          return;
+        }
+        this.opts.log("turns", `speech-to-text done (${words.length} chars, ${took} ms)`);
         this.counter += 1;
         const turnId = `desk-${startMs}-${this.counter}`;
         this.pending.set(turnId, { text: words, endedAtMs: endMs });
@@ -186,9 +192,12 @@ export class UtteranceTranscriber {
           timestamp_ms: now,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         });
+        this.opts.log("turns", `turn ${turnId} sent (${words.length} chars)`);
         // An unanswered turn does not hold actions up for long.
         setTimeout(() => {
-          if (this.pending.delete(turnId)) this.release();
+          if (!this.pending.delete(turnId)) return;
+          this.opts.log("turns", `turn ${turnId} was not confirmed by the runtime in time`);
+          this.release();
         }, 5_000);
       })
       .catch((err: unknown) => {

@@ -19,7 +19,7 @@
 import { checkArguments } from "../tools/catalog.js";
 import { ActionProblem, type PreparedAction } from "../tools/actions.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { explainToPerson, judge, type PolicyVerdict, type TrustedTurn } from "./actionPolicy.js";
+import { explainToPerson, judge, reasonForLog, type PolicyVerdict, type TrustedTurn } from "./actionPolicy.js";
 import type { ActionEvent } from "./protocol.js";
 import type { Look } from "./screenWatch.js";
 
@@ -70,6 +70,12 @@ export interface ActionBrokerDeps {
   notify?(update: ActionUpdate): void;
   /** Wait until the runtime has a view of the screen taken after `sinceMs`. */
   lookAfter?(sinceMs: number): Promise<Look>;
+  /**
+   * Runs an allowed action that presses keys, types or clicks into the app in
+   * front. The host uses it to put the person's own app back in front first,
+   * and to let every click through its own window while the action runs.
+   */
+  aroundInput?<T>(run: () => Promise<T>): Promise<T>;
   now?(): number;
 }
 
@@ -140,21 +146,28 @@ export class ActionBroker {
     const args = (call?.arguments && typeof call.arguments === "object" ? call.arguments : {}) as Record<string, unknown>;
     const started = this.now();
     const base = { call_id: callId, tool };
+    this.deps.log("execution", `call ${callId} ${tool || "?"} received${control.redelivered === true ? " (redelivered)" : ""}`);
     this.deps.event({ type: "action.requested", ...base, ts_ms: started, redelivered: control.redelivered === true, turn_id: typeof control.turn_id === "string" ? control.turn_id : null });
 
     let response: Record<string, unknown>;
+    // Why a failed call failed, in the log too: which permission is missing,
+    // or whether the call never matched the tool at all. Never the message,
+    // which can name the person's files or sites.
+    let why = "";
     try {
       response = await this.carryOut(callId, tool, args, record.abort.signal, base);
     } catch (err) {
       const problem = err instanceof ActionProblem ? err : new ActionProblem("failed", `Something went wrong: ${String((err as Error)?.message ?? err)}`);
       response = { status: problem.status, message: problem.message, ...problem.detail };
-      this.deps.event({ type: "action.failed", ...base, ts_ms: this.now(), status: problem.status, category: categoryOf(problem), latency_ms: this.now() - started });
+      const category = categoryOf(problem);
+      why = ` [${problem.detail.stage === "arguments" ? "arguments_rejected" : category}]`;
+      this.deps.event({ type: "action.failed", ...base, ts_ms: this.now(), status: problem.status, category, latency_ms: this.now() - started });
       this.deps.notify?.({ callId, state: problem.status === "needs_permission" ? "needs_permission" : "failed", text: problem.message });
     }
     record.done = true;
     record.response = fit(response);
     this.deps.send({ type: "tool.response", call_id: callId, content: record.response });
-    this.deps.log("execution", `call ${callId} ${tool} → ${String(record.response.status)} (${this.now() - started} ms)`);
+    this.deps.log("execution", `call ${callId} ${tool} → ${String(record.response.status)}${why} (${this.now() - started} ms)`);
   }
 
   private async carryOut(
@@ -168,7 +181,7 @@ export class ActionBroker {
       throw new ActionProblem("unsupported", `${tool} was not agreed for this session, so this computer will not run it.`);
     }
     const argumentProblem = checkArguments(tool, args);
-    if (argumentProblem) throw new ActionProblem("failed", `The request did not match the ${tool} tool: ${argumentProblem}.`);
+    if (argumentProblem) throw new ActionProblem("failed", `The request did not match the ${tool} tool: ${argumentProblem}.`, { stage: "arguments" });
 
     const prepared = await this.deps.registry.prepareAction(tool, args);
     // The model often answers before the person's last words are transcribed;
@@ -186,6 +199,10 @@ export class ActionBroker {
       reason: verdict.reason,
       turn_id: verdict.turnId,
     });
+    this.deps.log(
+      "execution",
+      `call ${callId} policy: ${prepared.action} effect=${prepared.effect} provenance=${verdict.provenance} → ${verdict.decision} (${reasonForLog(verdict.reason)})`,
+    );
 
     this.checkPermissions(prepared);
 
@@ -205,10 +222,12 @@ export class ActionBroker {
     const started = this.now();
     this.deps.event({ type: "action.started", ...base, ts_ms: started, action: prepared.action, effect: prepared.effect });
     this.deps.notify?.({ callId, state: "working", text: prepared.summary });
-    const done = await prepared.run();
+    const done =
+      prepared.effect === "input" && this.deps.aroundInput ? await this.deps.aroundInput(() => prepared.run()) : await prepared.run();
     // Anything that may have changed what is on screen is checked by looking:
     // hold the answer until a frame taken after the action has gone out.
     const look = prepared.effect === "read" ? undefined : await this.deps.lookAfter?.(this.now());
+    if (look !== undefined) this.deps.log("execution", `call ${callId} checked by looking: ${String(look)}`);
     this.deps.event({
       type: "action.completed",
       ...base,

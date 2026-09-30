@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LiveEvent } from "@gnsis/ui";
-import type { GnsisBridge, LinkState, ScreenUpdate } from "./bridge.js";
+import type { GnsisBridge, LinkState, ScreenUpdate, TurnResult } from "./bridge.js";
 import { ElectronLiveHost, type Devices } from "./electronHost.js";
 
 /**
@@ -24,6 +24,10 @@ class FakeBridge implements GnsisBridge {
   requestPermission = async () => "granted";
   sendControl = (c: unknown) => { this.controls.push(c); };
   sendHostEvent = (e: unknown) => { this.hostEvents.push(e); };
+  turns: string[] = [];
+  /** What the main process answers when a typed turn is sent. */
+  turnResult: TurnResult = { ok: true, turnId: "typed-1" };
+  sendTurn = async (text: string) => { this.turns.push(text); return this.turnResult; };
   hostLog = (l: string) => { this.logs.push(l); };
   linkState = async () => this.state;
   reconnect = () => { this.reconnects++; };
@@ -44,9 +48,10 @@ class FakeBridge implements GnsisBridge {
   closed(code: number) { this.handlers.closed?.(code, ""); }
   screen(u: ScreenUpdate) { this.handlers.screen?.(u); }
   interrupted() { this.handlers.interrupted?.(); }
+  action(u: import("./bridge.js").ActionUpdate) { this.handlers.action?.(u); }
 }
 
-function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
+function fakeDevices(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void> } = {}) {
   const calls: string[] = [];
   const devices: Devices & { calls: string[]; micActive: boolean; playing: boolean } = {
     calls,
@@ -55,7 +60,12 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
     mic: {
       get active() { return devices.micActive; },
       onLevel: undefined,
-      async start() { calls.push("mic.start"); if (opts.micError) throw opts.micError; devices.micActive = true; },
+      async start() {
+        calls.push("mic.start");
+        if (opts.micGate) await opts.micGate;
+        if (opts.micError) throw opts.micError;
+        devices.micActive = true;
+      },
       stop() { calls.push("mic.stop"); devices.micActive = false; },
     },
     playback: {
@@ -79,7 +89,7 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error } = {}) {
   return devices;
 }
 
-function harness(opts: { micError?: Error; visionError?: Error; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number } = {}) {
+function harness(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void>; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number } = {}) {
   const bridge = new FakeBridge();
   if (opts.ready === false) bridge.state = { ready: null, connected: false, closed: false };
   if (opts.state) bridge.state = opts.state;
@@ -314,4 +324,189 @@ test("a refused screen share is a denied state with instructions, not a crash", 
   await assert.rejects(host.startVision("screen"), /Screen recording was not allowed/);
   const last = events.at(-1);
   assert.ok(last && last.type === "vision" && last.state === "denied" && last.source === "screen");
+});
+
+test("End pressed while the microphone is still opening: it closes again and live never starts", async () => {
+  let open!: () => void;
+  const micGate = new Promise<void>((resolve) => (open = resolve));
+  const { bridge, devices, events, host } = harness({ micGate });
+  await tick();
+  const attempt = host.startLive();
+  await tick();
+  assert.deepEqual(devices.calls, ["mic.start"], "the microphone is being opened");
+  await host.endLive();
+  open();
+  await attempt;
+  assert.deepEqual(devices.calls, ["mic.start", "mic.stop"], "it is closed again as soon as it opens");
+  assert.equal(devices.micActive, false);
+  assert.deepEqual(bridge.endCalls, ["cancelled_while_starting"], "the call it opened is closed");
+  assert.ok(!events.some((e) => e.type === "mic" && e.state === "on"), "the UI is never told the microphone is on");
+  assert.ok(bridge.logs.some((l) => l.includes("cancelled while the microphone was opening")));
+});
+
+test("mute again, or End, while unmuting is still opening the microphone: it is closed as soon as it opens", async () => {
+  for (const second of ["mute", "end"] as const) {
+    const opts: { micGate?: Promise<void> } = {};
+    const { bridge, devices, events, host } = harness(opts);
+    await tick();
+    await host.startLive();
+    await host.setMuted(true);
+    assert.equal(devices.micActive, false);
+    let open!: () => void;
+    opts.micGate = new Promise<void>((resolve) => (open = resolve));
+    const unmute = host.setMuted(false);
+    await tick();
+    // The second click lands while the microphone is still opening.
+    if (second === "mute") await host.setMuted(true);
+    else await host.endLive();
+    open();
+    await unmute;
+    assert.equal(devices.micActive, false, `after ${second}, nothing is capturing`);
+    assert.equal(devices.calls.at(-1), "mic.stop");
+    assert.ok(bridge.logs.includes("unmute abandoned: muted or ended while the microphone opened"));
+    if (second === "end") assert.ok(events.some((e) => e.type === "mic" && e.state === "off"));
+  }
+});
+
+test("End while connecting, then start again: the second attempt waits for the first to unwind", async () => {
+  let open!: () => void;
+  const micGate = new Promise<void>((resolve) => (open = resolve));
+  const { bridge, devices, events, host } = harness({ micGate });
+  await tick();
+  const first = host.startLive();
+  await tick();
+  await host.endLive();
+  const second = host.startLive();
+  await tick();
+  assert.deepEqual(devices.calls, ["mic.start"], "the second attempt does not touch the microphone while the first still holds it");
+  open();
+  await first;
+  await second;
+  assert.deepEqual(devices.calls, ["mic.start", "mic.stop", "mic.start"]);
+  assert.equal(devices.micActive, true, "the second attempt ends up live");
+  assert.equal(bridge.startCalls, 2);
+  assert.deepEqual(events.filter((e) => e.type === "mic").map((e) => (e as { state: string }).state), ["on"]);
+});
+
+test("the log tells a live start apart at every stage: requested, waiting, cancelled", async () => {
+  const { bridge, host } = harness({ ready: false });
+  await tick();
+  const attempt = host.startLive();
+  await tick();
+  await host.endLive();
+  await attempt;
+  assert.ok(bridge.logs.includes("live requested"));
+  assert.ok(bridge.logs.includes("live: waiting for the runtime to be ready"));
+  assert.ok(bridge.logs.includes("live: cancelled while connecting"));
+  assert.equal(bridge.startCalls, 0);
+});
+
+test("typing is offered only when the runtime says it answers typed turns", async () => {
+  const quiet = harness();
+  await tick();
+  assert.equal(quiet.host.capabilities().text, false, "a runtime that only records typed turns does not get typing");
+  await assert.rejects(quiet.host.sendText("Open YouTube"), /Typing isn’t connected/);
+  assert.deepEqual(quiet.bridge.turns, [], "nothing is sent");
+
+  const { bridge, host, events } = harness({ ready: false });
+  await tick();
+  bridge.control({ type: "ready", session_id: "s1", typed_turns: true });
+  assert.equal(host.capabilities().text, true);
+  assert.deepEqual(events.at(-1), { type: "link", state: "ready", detail: undefined }, "the UI hears the link change, and re-reads what it can do");
+  await host.sendText("  Open YouTube and search Andrew Tate  ");
+  assert.deepEqual(bridge.turns, ["Open YouTube and search Andrew Tate"], "the words go to the main process, trimmed");
+  assert.ok(bridge.logs.some((l) => l === "typed turn typed-1 accepted"));
+
+  bridge.turnResult = { ok: false, reason: "GNSIS didn’t confirm it got your message. Try again in a moment.", unconfirmed: true };
+  await assert.rejects(host.sendText("Again"), (e: Error & { unconfirmed?: boolean }) => /didn’t confirm/.test(e.message) && e.unconfirmed === true);
+  await assert.rejects(host.sendText("   "), /nothing to send/);
+
+  // A link that ends takes typing with it, until the next ready offers it again.
+  bridge.control({ type: "session.done" });
+  assert.equal(host.capabilities().text, false, "a finished session does not keep typing on");
+  assert.deepEqual(events.at(-1), { type: "link", state: "closed", detail: "The session ended." });
+  bridge.control({ type: "ready", session_id: "s1", typed_turns: true });
+  assert.equal(host.capabilities().text, true);
+  bridge.control({ type: "transport.error" });
+  assert.equal(host.capabilities().text, false, "nor does a lost connection");
+  bridge.control({ type: "ready", session_id: "s1" });
+  assert.equal(host.capabilities().text, false, "a runtime that does not say it answers typed turns gets none");
+
+  const late = harness({ state: { ready: { type: "ready", typed_turns: true }, connected: true, closed: false } });
+  await tick();
+  assert.equal(late.host.capabilities().text, true, "a ready that went by before the page loaded counts too");
+});
+
+test("the host log keeps a control's shape, never its credentials or its words", async () => {
+  const { bridge } = harness({ ready: false });
+  await tick();
+  const token = "rt_5c1c2c7e4b6a4d0f9e8a7b6c5d4e3f2a1b0c9d8";
+  bridge.control({ type: "ready", session_id: "host-42", resume_token: token, screen: { token: "scr_secret" }, typed_turns: true });
+  bridge.control({ type: "tool.call", call_id: "call_0123456789abcdef", tool_calls: [{ name: "input", arguments: { action: "type", text: "Andrew Tate" } }] });
+  bridge.control({ type: "chunk", text: "Searching YouTube for Andrew Tate now.", generation: 3 });
+  const log = bridge.logs.join("\n");
+  assert.ok(!log.includes(token) && !log.includes("scr_secret"), "no credential reaches the log");
+  assert.ok(!log.includes("Andrew Tate"), "no words reach the log");
+  assert.ok(log.includes('"session_id":"host-42"') && log.includes('"resume_token":"<redacted>"'));
+  assert.ok(log.includes('"name":"input"') && log.includes('"arguments":"<'), "the tool's name stays; its arguments become a length");
+  assert.ok(log.includes('"text":"<38 chars>"') && log.includes('"generation":3'));
+});
+
+test("what GNSIS does on the computer reaches the UI as it happens, without its words in the log", async () => {
+  const { bridge, events } = harness();
+  await tick();
+  bridge.action({ callId: "c1", state: "working", text: "Open youtube.com in a new tab in Google Chrome" });
+  bridge.action({ callId: "c1", state: "done", text: "Google Chrome opened a new tab at youtube.com." });
+  assert.deepEqual(events.filter((e) => e.type === "action"), [
+    { type: "action", state: "working", text: "Open youtube.com in a new tab in Google Chrome" },
+    { type: "action", state: "done", text: "Google Chrome opened a new tab at youtube.com." },
+  ]);
+  assert.ok(bridge.logs.includes("action c1 working") && bridge.logs.includes("action c1 done"));
+  assert.ok(!bridge.logs.some((l) => l.includes("youtube")));
+});
+
+test("unmute, End and Talk again in quick succession: the new call keeps its microphone", async () => {
+  const opts: { micGate?: Promise<void> } = {};
+  const { devices, events, host } = harness(opts);
+  await tick();
+  await host.startLive();
+  await host.setMuted(true);
+  let open!: () => void;
+  opts.micGate = new Promise<void>((resolve) => (open = resolve));
+  const unmute = host.setMuted(false);
+  await tick();
+  await host.endLive();
+  // The voice button again, while the unmute is still opening the microphone.
+  const again = host.startLive();
+  await tick();
+  assert.equal(devices.calls.filter((c) => c === "mic.start").length, 2, "the new call waits: it has not opened the microphone yet");
+  open();
+  await unmute;
+  await again;
+  assert.equal(devices.micActive, true, "the new call is capturing");
+  assert.equal(devices.calls.at(-1), "mic.start", "nothing released it after it opened");
+  const lastMic = events.filter((e) => e.type === "mic").at(-1) as { state: string } | undefined;
+  assert.equal(lastMic?.state, "on");
+});
+
+test("the screen view gets exactly the picture being shared, and nothing once sharing stops", async () => {
+  const { devices, host } = harness();
+  assert.equal(host.visionStream(), null, "nothing shared, nothing to show");
+  const picture = { id: "shared" } as unknown as MediaStream;
+  (devices.vision as { stream?: MediaStream | null }).stream = picture;
+  assert.equal(host.visionStream(), picture);
+  (devices.vision as { stream?: MediaStream | null }).stream = null;
+  assert.equal(host.visionStream(), null);
+});
+
+test("a yes/no question goes to the Mac app's own alert, and only its confirming button counts as yes", async () => {
+  const { bridge, host } = harness();
+  const asked: string[] = [];
+  (bridge as unknown as { confirm: (m: string, l: string) => Promise<unknown> }).confirm = async (m, l) => {
+    asked.push(`${l}: ${m}`);
+    return asked.length === 1 ? true : "yes";
+  };
+  assert.equal(await host.confirm("Erase your GNSIS?", "Erase"), true);
+  assert.equal(await host.confirm("Erase your GNSIS?", "Erase"), false, "anything but true is a no");
+  assert.deepEqual(asked, ["Erase: Erase your GNSIS?", "Erase: Erase your GNSIS?"]);
 });

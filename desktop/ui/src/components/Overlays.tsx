@@ -5,7 +5,9 @@ import * as I from "./Icons";
 
 export function Commands() {
   const text = useStore((s) => s.text);
-  const list = filteredCommands(text);
+  const demo = useStore((s) => s.demo);
+  const caps = useStore((s) => s.caps);
+  const list = filteredCommands(text, { demo, caps });
   return (
     <div data-hit className="popover commands glass" role="listbox" aria-label="Commands">
       {list.map((c, i) => (
@@ -26,7 +28,7 @@ export function DockMenu({ left }: { left: number }) {
   return (
     <div data-hit className="popover dock-menu" style={{ left }}>
       <div className="menu-label">All agents</div>
-      {rows.length === 0 && <p className="muted small pad">No agents yet. Talk to GNSIS and it will start one when a job needs it.</p>}
+      {rows.length === 0 && <p className="muted small pad">No agents are running.</p>}
       {rows.map((r) => (
         <button key={r.id} type="button" className="agent-row" aria-label={`Open ${r.c.title}, ${r.p.status.toLowerCase()}`} onClick={() => actions.openAgent(r.id)}>
           <AgentFace name={r.c.title} size={30} p={r.p} />
@@ -34,7 +36,7 @@ export function DockMenu({ left }: { left: number }) {
         </button>
       ))}
       <hr />
-      <button type="button" className="menu-item" onClick={() => { actions.openAgent("gnsis"); setState({ dockMenu: false }); }}><I.Pencil size={18} /> New chat</button>
+      <button type="button" className="menu-item" onClick={() => { actions.openAgent("gnsis"); setState({ dockMenu: false }); }}><I.Pencil size={18} /> Open chat</button>
       <button type="button" className="menu-item" onClick={() => setState({ dockMenu: false, settingsOpen: true })}><I.Gear size={18} /> Settings</button>
     </div>
   );
@@ -51,6 +53,7 @@ export function VisionMenu({ left }: { left: number }) {
   const seeing = v.state === "on" || v.state === "starting";
   let status = "";
   if (v.state === "starting") status = v.source === "screen" ? "Starting to share your screen…" : "Turning the camera on…";
+  else if (v.state === "on" && s.link !== "ready") status = `Paused: GNSIS isn’t connected, so it isn’t getting your ${v.source === "camera" ? "camera" : "screen"}.`;
   else if (v.state === "on") status = v.source === "screen" ? "GNSIS can see your screen." : "GNSIS can see through the camera.";
   else if (v.state === "denied") status = v.detail || "Permission was not given.";
   else if (v.state === "error") status = v.detail || "It could not start.";
@@ -80,19 +83,20 @@ export function Greeting({ left }: { left: number }) {
     <div data-hit role="status" className="greeting" style={{ left }}>
       <span className="greeting-tail" aria-hidden="true" />
       <strong>Hi, I’m your GNSIS.</strong>
-      <span className="muted">Tap my face to open our chat, or press the voice button to talk with me live. When a job needs its own helper, I’ll start an agent and it shows up here.</span>
+      <span className="muted">Tap my face to open our chat, or press the voice button to talk with me live.</span>
     </div>
   );
 }
 
-export function Toast({ left }: { left: number }) {
+/** Beside the bar at `left`, or, with no `left`, just above the open chat it is placed in. */
+export function Toast({ left }: { left?: number }) {
   const s = useStore((x) => x);
   const toast = s.toast;
   if (!toast) return null;
   const c = s.convs[toast.id];
   if (!c) return null;
   return (
-    <div data-hit role="status" className="toast popover" style={{ left }}>
+    <div data-hit role="status" className={"toast popover" + (left === undefined ? " above-chat" : "")} style={left === undefined ? undefined : { left }}>
       {c.id === "gnsis" ? <Face name={s.identity?.publicId ?? "GNSIS"} gnsis size={32} /> : <AgentFace name={c.title} size={32} />}
       <span className="grow"><strong>{c.title}</strong><span className="muted ellipsis">{toast.text}</span></span>
       <button type="button" className="btn-dark" onClick={() => { const id = getState().toast?.id; if (id) actions.openAgent(id); setState({ toast: null }); }}>Open</button>

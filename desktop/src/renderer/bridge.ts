@@ -19,10 +19,22 @@ export interface LinkState {
 }
 
 export interface GnsisBridge {
+  /** GNSIS floats over the desktop in a see-through window. Missing means an ordinary window. */
+  readonly overlay?: boolean;
+  /** Where the page's cards are, in page pixels, so clicks elsewhere fall through. */
+  reportHitRects?(rects: Array<[number, number, number, number]>): void;
+  /** A native yes/no question; resolves true only for the confirming button. */
+  confirm?(message: string, confirmLabel: string): Promise<boolean>;
   mediaPermissions(): Promise<Record<string, unknown>>;
   requestPermission(kind: string): Promise<string>;
   sendControl(control: unknown): void;
   sendHostEvent(event: unknown): void;
+  /**
+   * What the person typed, sent by the main process as their `turn.final` on
+   * its own runtime connection, exactly as their spoken words are, and kept
+   * as a trusted turn once the runtime accepts it.
+   */
+  sendTurn(text: string): Promise<TurnResult>;
   hostLog(line: string): void;
   /** What the main process knows about the runtime link right now. */
   linkState(): Promise<LinkState>;
@@ -42,6 +54,8 @@ export interface GnsisBridge {
   /** What GNSIS is doing or did on this computer (main's ActionBroker). */
   onAction(fn: (update: ActionUpdate) => void): void;
 }
+
+export type TurnResult = { ok: true; turnId: string } | { ok: false; reason: string; unconfirmed?: boolean };
 
 export interface ActionUpdate {
   callId: string;

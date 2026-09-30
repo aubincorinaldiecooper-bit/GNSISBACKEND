@@ -92,13 +92,31 @@ export interface LiveHost {
   endLive(): Promise<void>;
   /** Mute releases the microphone only; the session stays alive for unmute. */
   setMuted(muted: boolean): Promise<void>;
+  /**
+   * Send what the person typed as their own turn. Resolves once the runtime
+   * has accepted it; rejects with a plain sentence when it could not. Hosts
+   * whose capabilities say `text: false` need not implement it.
+   */
+  sendText?(text: string): Promise<void>;
   startVision(source: VisionSource): Promise<void>;
   stopVision(): Promise<void>;
+  /**
+   * The picture the host is sharing with GNSIS right now, so the person can
+   * see it too; null when nothing is shared. Hosts that cannot show it leave
+   * it out, and the UI then shows no picture rather than a made-up one.
+   */
+  visionStream?(): MediaStream | null;
   /**
    * For an overlay host: where the interactive surfaces are, in window
    * pixels, so clicks anywhere else can fall through to the desktop.
    */
   reportHitRects?(rects: Array<[number, number, number, number]>): void;
+  /**
+   * Ask a yes/no question the way this host asks them (a native alert in the
+   * Mac app). Resolves true only for `confirmLabel`. Hosts without it leave
+   * the UI to use the browser's own confirm box.
+   */
+  confirm?(message: string, confirmLabel: string): Promise<boolean>;
 }
 
 export interface Identity {
