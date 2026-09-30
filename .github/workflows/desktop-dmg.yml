@@ -67,6 +67,8 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: GNSIS-dmg-universal
+          # What the owner downloads from the build page (30 September:
+          # "GNSIS for Mac"); GitHub serves it as "GNSIS for Mac.zip".
+          name: GNSIS for Mac
           path: desktop/release/*.dmg
           if-no-files-found: error

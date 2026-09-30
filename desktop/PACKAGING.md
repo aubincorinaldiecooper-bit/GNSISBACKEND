@@ -1,6 +1,6 @@
 # Packaging GNSIS for macOS
 
-Produces an installable `GNSIS-<version>-<arch>.dmg` from the existing Electron
+Produces an installable `GNSIS for Mac.dmg` from the existing Electron
 Host. The packaged app is the same code as `npm start` — packaging adds no
 architecture, only distribution.
 
@@ -9,11 +9,11 @@ architecture, only distribution.
 ```bash
 cd desktop
 npm ci
-npm run package:mac        # GNSIS-<version>-universal.dmg in release/
+npm run package:mac        # "GNSIS for Mac.dmg" in release/
 npm run package:mac:dir    # unpacked GNSIS.app only (faster smoke check)
 ```
 
-Artifact: `desktop/release/GNSIS-<version>-universal.dmg` — a universal app
+Artifact: `desktop/release/GNSIS for Mac.dmg` — a universal app
 that runs natively on Apple Silicon and Intel; users never pick a CPU
 architecture.
 
