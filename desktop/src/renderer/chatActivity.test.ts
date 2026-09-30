@@ -107,6 +107,9 @@ test("from the Mac app's own events: Thinking once the person stops, the step wh
   let html = app.chat();
   assert.match(html, /class="thinking-row"/);
   assert.equal(hasConversation(getState(), "gnsis"), true, "the chat window opens to show GNSIS thinking");
+  assert.match(html, /class="thinking-time" aria-hidden="true">1s ·</, "counting from when the person stopped");
+  setState({ now: getState().live!.thinkingSince! + 6_000 });
+  assert.match(app.chat(), />6s ·<\/span><span class="shimmer">Thinking some more</, "and after five seconds it says so");
 
   // GNSIS says what it will do, then the main process starts the step.
   app.runtime({ type: "chunk", text: "Sure, opening YouTube in Chrome.", end_of_turn: false, interrupted: false });

@@ -134,6 +134,11 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 
 /* ---------- desktop layout ---------- */
 .desktop { position: fixed; inset: 0; }
+/* Everything the person can drag around together; eases back on screen when the chat opens near an edge. */
+.cluster { position: absolute; inset: 0; transition: transform 280ms var(--spring); }
+.cluster.is-dragging { transition: none; user-select: none; }
+.cluster.is-dragging, .cluster.is-dragging *, .drag-shield { cursor: grabbing; }
+.drag-shield { position: fixed; inset: 0; }
 .stack { position: absolute; display: flex; flex-direction: column; gap: 14px; transition: left 360ms var(--spring), width 360ms var(--spring); }
 
 /* ---------- dock / bar (one surface) ---------- */
@@ -177,7 +182,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 /* GNSIS working: "Thinking" and the step running now shimmer, the way AI chats show work in progress. */
 .shimmer { background: linear-gradient(90deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-.thinking-row { align-self: flex-start; font-size: 15px; font-weight: 500; }
+.thinking-row { align-self: flex-start; display: flex; gap: 6px; font-size: 15px; font-weight: 500; }
+.thinking-time { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .steps-block { align-self: flex-start; display: flex; flex-direction: column; gap: 6px; }
 .step-row { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
 .step-mark { flex: none; width: 16px; height: 20px; display: grid; place-items: center; color: var(--ink-3); }
@@ -287,7 +293,9 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .menu-label { padding: 6px 10px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
 .menu-status { padding-top: 6px; }
 .greeting { position: absolute; bottom: 130px; width: 340px; padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 6px; border-radius: 22px; background: rgba(255, 255, 255, 0.94); box-shadow: 0 18px 44px rgba(18, 32, 64, 0.22); font-size: 15.5px; line-height: 1.5; animation: rise 600ms 500ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
-.greeting strong { font-size: 17px; }
+.greeting strong { font-size: 17px; padding-right: 28px; }
+.greeting-close { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); display: grid; place-items: center; padding: 0; }
+.greeting-close:hover { background: rgba(20, 24, 33, 0.06); color: var(--ink); }
 .greeting-tail { position: absolute; left: 33px; bottom: -7px; width: 14px; height: 14px; background: rgba(255, 255, 255, 0.94); transform: rotate(45deg); border-radius: 3px; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .toast { position: absolute; bottom: 114px; width: 380px; padding: 10px 8px 10px 14px; display: flex; align-items: center; gap: 12px; animation: rise 360ms var(--spring) both; }

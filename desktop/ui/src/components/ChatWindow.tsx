@@ -106,14 +106,25 @@ function Pending({ s, c }: { s: State; c: Conv }) {
       </div>
     );
   }
-  return <Thinking />;
+  return <Thinking since={s.awaiting.since} now={s.now} />;
 }
 
-const Thinking = () => (
-  <div className="thinking-row" role="status" aria-live="polite">
-    <span className="shimmer">Thinking</span>
-  </div>
-);
+/** After this long, "Thinking" becomes "Thinking some more". */
+export const SOME_MORE_MS = 5_000;
+
+/**
+ * GNSIS working out its answer: how long so far, and the words for it. The
+ * running time is for the eye only; a screen reader hears the words change.
+ */
+function Thinking({ since, now }: { since: number; now: number }) {
+  const ms = Math.max(0, now - since);
+  return (
+    <div className="thinking-row" role="status" aria-live="polite">
+      <span className="thinking-time" aria-hidden="true">{Math.max(1, Math.floor(ms / 1000))}s ·</span>
+      <span className="shimmer">{ms >= SOME_MORE_MS ? "Thinking some more" : "Thinking"}</span>
+    </div>
+  );
+}
 
 const DONE = "Done: ";
 
@@ -314,7 +325,7 @@ function Turns({ s, c }: { s: State; c: Conv }) {
         const streaming = ((tu.stream ?? 0) < tu.text.length && !c.stopped) || !!tu.speaking;
         return <div key={p.i} className="answer">{shown}{streaming && <Caret />}</div>;
       })}
-      {thinking && <Thinking />}
+      {thinking && s.live?.thinkingSince != null && <Thinking since={s.live.thinkingSince} now={s.now} />}
     </>
   );
 }

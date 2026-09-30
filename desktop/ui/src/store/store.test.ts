@@ -642,3 +642,41 @@ test("demo: GNSIS's chat never opens with an agent's drawer beside it, however i
   assert.equal(getState().active, "gnsis");
   assert.equal(getState().panelHidden, true, "the voice button from the dock opens GNSIS's chat alone");
 });
+
+test("the greeting shows on the first launch only, never in the demo, and its × closes it", () => {
+  const items = new Map<string, string>();
+  (globalThis as { localStorage?: unknown }).localStorage = {
+    getItem: (k: string) => items.get(k) ?? null,
+    setItem: (k: string, v: string) => void items.set(k, v),
+  };
+  const launch = (demo: boolean) => {
+    resetStore();
+    configure(new RecordingHost(), identityStore);
+    enterDesktop(identity, demo);
+    return getState().greet;
+  };
+  try {
+    assert.equal(launch(true), false, "the demo does not greet");
+    assert.equal(items.has("gnsis.greeted"), false, "and does not use up the first launch");
+    assert.equal(launch(false), true, "the first launch greets");
+    actions.closeGreeting();
+    assert.equal(getState().greet, false, "the × closes it");
+    assert.equal(launch(false), false, "the next launch does not greet again");
+    items.clear();
+    assert.equal(launch(false), true);
+    assert.equal(launch(false), false, "shown once is enough, closed or not");
+  } finally {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+});
+
+test("while a typed message waits for GNSIS, the clock keeps running so Thinking counts up", () => {
+  resetStore();
+  configure(new RecordingHost(), identityStore);
+  enterDesktop(identity, false);
+  const since = Date.now();
+  setState({ awaiting: { to: "gnsis", seq: 1, since, state: "accepted" }, now: since - 60_000 });
+  tick();
+  assert.ok(getState().now >= since, "the clock moved on to now");
+  assert.ok(getState().awaiting, "and the message is still waiting");
+});
