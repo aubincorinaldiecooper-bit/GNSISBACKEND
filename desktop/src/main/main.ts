@@ -44,6 +44,7 @@ import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
+import { applyWindowRules } from "./windowRules.js";
 import { PersonApp, appToRestore } from "./personApp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -345,8 +346,9 @@ function createWindow(): void {
       webPreferences,
     });
   }
+  const ruled = applyWindowRules(win, OVERLAY);
   if (WINDOW_ASKED === "overlay" && !OVERLAY) hostLog("host", `window: floating is macOS only; ordinary window on ${process.platform}`);
-  hostLog("host", `window: ${OVERLAY ? "floating over the desktop" : "ordinary window"} at ${Math.round(UI_SCALE * 100)}%`);
+  hostLog("host", `window: ${OVERLAY ? "floating over the desktop" : "ordinary window"} at ${Math.round(UI_SCALE * 100)}%; ${ruled.join("; ")}`);
   // GNSIS_DEMO=1 fills the dock with the sample agents so every state of the
   // interface can be reviewed in the packaged app, where there is no URL to
   // add ?demo to.
@@ -388,10 +390,12 @@ app.whenReady().then(async () => {
   // Chromium refuses it. The whole primary display, so the visual sense sees
   // what the person sees; on macOS 15+ the system picker is offered instead,
   // and the OS asks for Screen Recording permission on first use either way.
+  // GNSIS takes no screenshots: listing the screens asks for no thumbnails,
+  // which Electron would otherwise make of each one (desktop/AGENTS.md).
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
       try {
-        const sources = await desktopCapturer.getSources({ types: ["screen"] });
+        const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
         if (sources.length === 0) {
           hostLog("permissions", "screen: no display source available");
           callback({});

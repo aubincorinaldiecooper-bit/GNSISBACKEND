@@ -61,8 +61,14 @@ window over the main display's usable area, kept above other windows, and
 only its cards take clicks: everywhere else, clicks fall through to the apps
 underneath. The page reports where its cards are and the main process
 switches mouse input on and off as the pointer crosses them. The host log
-records the mode (`window: floating over the desktop at 80%`) and the first
+records the mode (`window: floating over the desktop at 80%; …`) and the first
 report of the cards' positions.
+
+Every GNSIS window is left out of screenshots, screen recordings and screen
+sharing, and the floating window appears on every desktop (Space) and over
+full-screen apps. The same host log line says so (`hidden from screen
+capture; on every desktop and over full-screen apps`). Neither has been tried
+on a Mac yet.
 
 - `GNSIS_WINDOW=standard` opens an ordinary window with a drawn backdrop
   instead (the default on other systems); `GNSIS_WINDOW=overlay` forces the
