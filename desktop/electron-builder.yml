@@ -15,8 +15,9 @@ files:
 
 mac:
   category: public.app-category.productivity
-  # Temporary icon — electron-builder converts the PNG to .icns at package
-  # time. Replace with a real .icns when brand assets are produced.
+  # GNSIS's app icon, generated from blobatar by `npm run icon`
+  # (scripts/app-icon.mjs); electron-builder converts the PNG to .icns at
+  # package time.
   icon: build/icon.png
   target:
     # One download for Mac: a universal app runs natively on Apple Silicon and
