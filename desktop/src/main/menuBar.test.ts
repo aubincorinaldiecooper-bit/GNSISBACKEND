@@ -9,12 +9,12 @@ import { MenuBar, type MenuBarMessage } from "./menuBar.js";
 
 const FACE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAk";
 
-function setUp(opts: { closed?: boolean } = {}) {
+function setUp(opts: { closed?: boolean; menu?: unknown } = {}) {
   const sent: MenuBarMessage[] = [];
   const calls: string[] = [];
   const logs: string[] = [];
   const timers: Array<{ fn: () => void; ms: number; live: boolean }> = [];
-  const trays: Array<{ images: unknown[]; tip: string; click?: () => void; destroyed: boolean }> = [];
+  const trays: Array<{ images: unknown[]; tip: string; click?: () => void; rightClick?: () => void; popUps: unknown[]; destroyed: boolean }> = [];
   const win = {
     visible: true,
     hides: 0,
@@ -32,11 +32,14 @@ function setUp(opts: { closed?: boolean } = {}) {
         images: [image] as unknown[],
         tip: "",
         click: undefined as (() => void) | undefined,
+        rightClick: undefined as (() => void) | undefined,
+        popUps: [] as unknown[],
         destroyed: false,
         setImage: (i: unknown) => void t.images.push(i),
         setToolTip: (s: string) => void (t.tip = s),
         getBounds: () => ({ x: 1100, y: 0, width: 24, height: 24 }),
-        on: (_e: "click", fn: () => void) => void (t.click = fn),
+        on: (e: "click" | "right-click", fn: () => void) => void (e === "click" ? (t.click = fn) : (t.rightClick = fn)),
+        popUpContextMenu: (menu?: unknown) => void t.popUps.push(menu),
         destroy: () => void (t.destroyed = true),
       };
       trays.push(t);
@@ -46,6 +49,7 @@ function setUp(opts: { closed?: boolean } = {}) {
     window: () => (opts.closed ? null : win),
     reopen: () => void calls.push("reopen"),
     endCall: () => void calls.push("endCall"),
+    rightClickMenu: opts.menu === undefined ? undefined : () => opts.menu,
     send: (m) => void sent.push(m),
     zoom: 0.8,
     log: (l) => void logs.push(l),
@@ -148,4 +152,21 @@ test("quitting removes the icon", () => {
   bar.destroy();
   assert.equal(trays[0].destroyed, true);
   assert.equal(bar.tucked, false);
+});
+
+test("a right-click on the icon opens its small menu with Quit GNSIS; a click still tucks away", () => {
+  const { bar, sent, trays } = setUp({ menu: "Quit GNSIS menu" });
+  bar.setFace(FACE);
+  trays[0].rightClick?.();
+  assert.deepEqual(trays[0].popUps, ["Quit GNSIS menu"]);
+  assert.deepEqual(sent, [{ at: ICON }], "the right-click asks nothing of the page");
+  trays[0].click?.();
+  assert.ok(sent.some((m: MenuBarMessage) => m.want === "hide"), "a normal click still asks the page to tuck away");
+});
+
+test("without a menu from main, a right-click opens nothing", () => {
+  const { bar, trays } = setUp();
+  bar.setFace(FACE);
+  trays[0].rightClick?.();
+  assert.deepEqual(trays[0].popUps, []);
 });

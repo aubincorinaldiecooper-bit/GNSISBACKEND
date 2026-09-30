@@ -44,6 +44,12 @@ export interface HostCapabilities {
    * and come back from ("Hide to menu bar").
    */
   menuBar: boolean;
+  /**
+   * The host can close GNSIS entirely ("Quit GNSIS" in the ≡ menu). The Mac
+   * app floats over full-screen apps, which leaves it without the Dock and
+   * app menu a Mac app is normally quit from, so GNSIS offers its own.
+   */
+  quit: boolean;
 }
 
 export type LinkState = "connecting" | "ready" | "closed" | "error";
@@ -134,6 +140,8 @@ export interface LiveHost {
   menuBarIcon?(): { x: number; y: number } | null;
   /** The face to show as the menu bar icon: GNSIS's own face in one colour, as SVG (see lib/menuBarFace.ts). */
   menuBarFace?(svg: string): void;
+  /** Close GNSIS entirely. Hosts whose capabilities say `quit: false` need not implement it. */
+  quit?(): void;
 }
 
 export interface Identity {

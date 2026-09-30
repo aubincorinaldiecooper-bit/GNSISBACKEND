@@ -45,9 +45,10 @@ A host implements `LiveHost`:
 | `endLive()` | closes the microphone and stops any reply still playing |
 | `setMuted(bool)` | releases or reacquires the microphone only — the session stays alive |
 | `startVision(source)` / `stopVision()` | points the one persistent visual sense at the screen or the camera, or off |
-| `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay`, `menuBar` — the UI hides what a host cannot do |
+| `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay`, `menuBar`, `quit` — the UI hides what a host cannot do |
 | `visionStream()` (optional) | the picture being shared right now, for the "Shared with GNSIS" card; `null` when nothing is |
 | `menuBarFace(svg)`, `menuBarIcon()`, `hideToMenuBar()` (optional) | on a host with a menu bar icon (`menuBar`): GNSIS's face in one colour for the icon; where the icon is, so GNSIS shrinks toward it; hide GNSIS once it has tucked itself away |
+| `quit()` (optional) | on a host that can close GNSIS (`quit`): "Quit GNSIS" in the ≡ menu, after any call has ended |
 | `reportHitRects(rects)` (optional) | on an overlay host: where the cards are, so clicks elsewhere fall through; while the person drags GNSIS, one rect covers the whole window so the pointer stays with GNSIS until the drag ends |
 | `subscribe(fn)` | events below |
 

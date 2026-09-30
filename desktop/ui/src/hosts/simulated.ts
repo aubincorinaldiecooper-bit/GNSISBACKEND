@@ -28,9 +28,12 @@ export class SimulatedLiveHost implements LiveHost {
   private readonly iconAt?: () => { x: number; y: number } | null;
   /** Whether GNSIS is out, as far as the menu bar icon is concerned. */
   private out = true;
+  /** What "Quit GNSIS" does here, when the preview is given a way to quit. */
+  private readonly onQuit?: () => void;
 
-  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; overlay?: boolean; menuBarIcon?: () => { x: number; y: number } | null; tenthMs?: number } = {}) {
+  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; overlay?: boolean; menuBarIcon?: () => { x: number; y: number } | null; quit?: () => void; tenthMs?: number } = {}) {
     this.iconAt = opts.menuBarIcon;
+    this.onQuit = opts.quit;
     this.script = opts.script ?? (() => liveScript(null));
     this.tenth = opts.tenthMs ?? 100;
     this.caps = {
@@ -41,6 +44,7 @@ export class SimulatedLiveHost implements LiveHost {
       transcript: opts.transcript ?? true,
       overlay: opts.overlay ?? false,
       menuBar: !!opts.menuBarIcon,
+      quit: !!opts.quit,
     };
   }
 
@@ -72,6 +76,10 @@ export class SimulatedLiveHost implements LiveHost {
 
   hideToMenuBar(): void {
     this.out = false;
+  }
+
+  quit(): void {
+    this.onQuit?.();
   }
 
   menuBarIcon(): { x: number; y: number } | null {

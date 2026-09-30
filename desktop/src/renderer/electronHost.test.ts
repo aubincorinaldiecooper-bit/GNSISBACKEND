@@ -47,6 +47,8 @@ class FakeBridge implements GnsisBridge {
   hides = 0;
   setMenuBarFace = (png: string) => { this.faces.push(png); };
   hideToMenuBar = () => { this.hides++; };
+  quits = 0;
+  quit?: () => void;
   onMenuBar = (fn: (m: unknown) => void) => { this.handlers.menubar = fn; };
   // the main process talking to us
   control(c: unknown) { this.handlers.control?.(c); }
@@ -96,9 +98,10 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error; micGate?: Pr
   return devices;
 }
 
-function harness(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void>; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number; menuBar?: boolean } = {}) {
+function harness(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void>; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number; menuBar?: boolean; quit?: boolean } = {}) {
   const bridge = new FakeBridge();
   bridge.menuBar = opts.menuBar === true;
+  if (opts.quit) bridge.quit = () => { bridge.quits++; };
   if (opts.ready === false) bridge.state = { ready: null, connected: false, closed: false };
   if (opts.state) bridge.state = opts.state;
   const devices = fakeDevices(opts);
@@ -539,4 +542,13 @@ test("the menu bar icon: main's clicks become tuck-away and come-back events, an
   assert.deepEqual(host.menuBarIcon(), { x: 1392, y: -16 });
   host.hideToMenuBar();
   assert.equal(bridge.hides, 1);
+});
+
+test("Quit GNSIS: offered only when main can close GNSIS, and it asks main to", () => {
+  assert.equal(harness().host.capabilities().quit, false);
+  const { bridge, host } = harness({ quit: true });
+  assert.equal(host.capabilities().quit, true);
+  host.quit();
+  assert.equal(bridge.quits, 1);
+  assert.ok(bridge.logs.some((l) => l.includes("quit")));
 });

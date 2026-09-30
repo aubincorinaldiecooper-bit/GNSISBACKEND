@@ -26,7 +26,7 @@ class RecordingHost implements LiveHost {
   text = false;
   private listeners = new Set<(e: LiveEvent) => void>();
   capabilities() {
-    return { voice: true, text: this.text, screen: true, camera: false, transcript: false, overlay: false, menuBar: false };
+    return { voice: true, text: this.text, screen: true, camera: false, transcript: false, overlay: false, menuBar: false, quit: false };
   }
   subscribe(fn: (e: LiveEvent) => void) {
     this.listeners.add(fn);
@@ -752,4 +752,41 @@ test("the menu bar icon's clicks arrive from the host; without an icon there is 
   configure(plain, identityStore);
   enterDesktop(identity, false);
   assert.equal(plain.faces.length, 0);
+});
+
+/** A host that can close GNSIS, like the Mac app. */
+class QuitHost extends RecordingHost {
+  quits = 0;
+  capabilities() {
+    return { ...super.capabilities(), quit: true };
+  }
+  quit() {
+    this.quits++;
+  }
+}
+
+test("Quit GNSIS ends a call in progress, closes the menu, then asks the host to close GNSIS", async () => {
+  resetStore();
+  const host = new QuitHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.startLive("gnsis");
+  await sleep(0);
+  host.push({ type: "mic", state: "on" });
+  setState({ dockMenu: true });
+  actions.quit();
+  assert.equal(getState().live, null, "the call ends first");
+  assert.equal(host.calls.at(-1), "endLive");
+  assert.equal(getState().dockMenu, false);
+  assert.equal(host.quits, 1);
+});
+
+test("a host that cannot close GNSIS is never asked to", () => {
+  resetStore();
+  const host = new QuitHost();
+  host.capabilities = () => ({ ...RecordingHost.prototype.capabilities.call(host) });
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.quit();
+  assert.equal(host.quits, 0);
 });

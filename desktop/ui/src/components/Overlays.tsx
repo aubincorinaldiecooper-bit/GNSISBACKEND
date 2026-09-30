@@ -39,6 +39,12 @@ export function DockMenu({ left }: { left: number }) {
       <button type="button" className="menu-item" onClick={() => { actions.openAgent("gnsis"); setState({ dockMenu: false }); }}><I.Pencil size={18} /> Open chat</button>
       <button type="button" className="menu-item" onClick={() => setState({ dockMenu: false, settingsOpen: true })}><I.Gear size={18} /> Settings</button>
       {s.caps.menuBar && <button type="button" className="menu-item" onClick={() => actions.tuckAway()}><I.ChevronUp size={18} /> Hide to menu bar</button>}
+      {s.caps.quit && (
+        <>
+          <hr />
+          <button type="button" className="menu-item" onClick={() => actions.quit()}><I.Power size={18} /> Quit GNSIS</button>
+        </>
+      )}
     </div>
   );
 }

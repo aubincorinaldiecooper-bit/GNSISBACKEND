@@ -206,6 +206,7 @@ export class ElectronLiveHost implements LiveHost {
     // transcript: the runtime sends no speech-to-text of the person back.
     // overlay: whether main opened the see-through window over the desktop.
     // menuBar: whether main has an icon in the Mac menu bar to tuck into.
+    // quit: whether main can close GNSIS ("Quit GNSIS" in the ≡ menu).
     return {
       voice: true,
       text: this.typedTurns,
@@ -214,6 +215,7 @@ export class ElectronLiveHost implements LiveHost {
       transcript: false,
       overlay: this.bridge.overlay === true,
       menuBar: this.bridge.menuBar === true,
+      quit: typeof this.bridge.quit === "function",
     };
   }
 
@@ -228,6 +230,11 @@ export class ElectronLiveHost implements LiveHost {
 
   menuBarIcon(): { x: number; y: number } | null {
     return this.iconAt;
+  }
+
+  quit(): void {
+    this.log("quit: from GNSIS's menu");
+    this.bridge.quit?.();
   }
 
   /** The face arrives as SVG; the menu bar takes a picture, drawn here at twice the icon's 18-point size. */

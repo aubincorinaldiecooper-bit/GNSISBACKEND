@@ -75,7 +75,7 @@ export interface State {
   demo: boolean;
 }
 
-const NO_CAPS: HostCapabilities = { voice: false, text: false, screen: false, camera: false, transcript: false, overlay: false, menuBar: false };
+const NO_CAPS: HostCapabilities = { voice: false, text: false, screen: false, camera: false, transcript: false, overlay: false, menuBar: false, quit: false };
 
 /** How long the visual sense may sit on "starting" before that is reported as a problem. */
 const VISION_START_TIMEOUT_MS = 20_000;
@@ -531,6 +531,14 @@ export const actions = {
     setTimeout(() => {
       if (turn === tuckTurn && getState().tucked) host?.hideToMenuBar?.();
     }, TUCK_MS);
+  },
+  /** "Quit GNSIS" (the owner's call, 30 September): a call in progress ends, then the host closes GNSIS. */
+  quit() {
+    const s = getState();
+    if (!s.caps.quit) return;
+    if (s.live) actions.endLive();
+    setState({ dockMenu: false });
+    host?.quit?.();
   },
   /** The menu bar icon was clicked again: GNSIS comes back where it was. */
   comeBack() {

@@ -11,6 +11,7 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
+  Menu,
   nativeImage,
   screen as displays,
   session,
@@ -331,12 +332,29 @@ const menuBar = OVERLAY
         hostLog("host", "call ended reason=tucked_away (the page did not end it)");
         host.endCall("tucked_away", { stop: false });
       },
+      rightClickMenu: () => Menu.buildFromTemplate([{ label: "Quit GNSIS", click: () => quitGnsis("the menu bar icon") }]),
     })
   : null;
 /** A call is open on the timeline (the page's call:start without its call:end yet). */
 let callOpen = false;
 /** Microphone frames that arrived while GNSIS was tucked into the menu bar, and were not sent. */
 let tuckedFrames = 0;
+
+/**
+ * "Quit GNSIS" (the owner's call, 30 September), from the ≡ menu or the menu
+ * bar icon. Floating over full-screen apps makes macOS treat GNSIS as a
+ * background app: no running dot in the Dock, no app menu with Quit, and not
+ * in Force Quit. So GNSIS offers its own way out. A call still open ends
+ * first; will-quit then disconnects.
+ */
+function quitGnsis(from: string): void {
+  hostLog("host", `quit: from ${from}`);
+  if (callOpen) {
+    callOpen = false;
+    host.endCall("quit");
+  }
+  app.quit();
+}
 
 function createWindow(): void {
   const webPreferences = {
@@ -571,6 +589,7 @@ app.whenReady().then(async () => {
   // The menu bar icon: the page's drawing of the face, and "tucked away, hide the window now".
   ipcMain.on("menubar:face", (_e, png: unknown) => menuBar?.setFace(png));
   ipcMain.on("menubar:hide", () => menuBar?.pageTuckedAway());
+  ipcMain.on("app:quit", () => quitGnsis("GNSIS's menu"));
   ipcMain.on("host:log", (_e, line) => {
     if (typeof line === "string") hostLog("renderer", line);
   });

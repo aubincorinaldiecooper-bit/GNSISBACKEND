@@ -11,6 +11,10 @@
  * The page does the tucking itself (ending a call, shrinking into the icon)
  * and then asks for the window to hide, so the window never vanishes
  * half-way. If the page does not answer, the window hides anyway.
+ *
+ * A right-click on the icon opens a small menu with "Quit GNSIS" (the
+ * owner's call, 30 September): floating over full-screen apps leaves GNSIS
+ * without the Dock and app menu a Mac app is normally quit from.
  */
 
 export interface TrayLike {
@@ -18,6 +22,8 @@ export interface TrayLike {
   setToolTip(text: string): void;
   getBounds(): { x: number; y: number; width: number; height: number };
   on(event: "click", listener: () => void): unknown;
+  on(event: "right-click", listener: () => void): unknown;
+  popUpContextMenu(menu?: unknown): void;
   destroy(): void;
 }
 
@@ -54,6 +60,8 @@ export interface MenuBarOptions {
    * behind a hidden GNSIS.
    */
   endCall?(): void;
+  /** The menu a right-click on the icon opens ("Quit GNSIS"). Built by main, which has Electron's Menu. */
+  rightClickMenu?(): unknown;
   setTimeout?: (fn: () => void, ms: number) => unknown;
   clearTimeout?: (handle: unknown) => void;
 }
@@ -86,6 +94,7 @@ export class MenuBar {
       this.tray = this.o.makeTray(image);
       this.tray.setToolTip("GNSIS");
       this.tray.on("click", () => this.click());
+      this.tray.on("right-click", () => this.rightClick());
       this.o.log("menu bar: icon shown");
     }
     const at = this.iconAt();
@@ -116,6 +125,12 @@ export class MenuBar {
     } else {
       this.show();
     }
+  }
+
+  /** A right-click on the icon: its small menu, with "Quit GNSIS". */
+  rightClick(): void {
+    const menu = this.o.rightClickMenu?.();
+    if (this.tray && menu) this.tray.popUpContextMenu(menu);
   }
 
   /** The page has tucked GNSIS away (after a click on the icon, or from its own menu): hide the window. */

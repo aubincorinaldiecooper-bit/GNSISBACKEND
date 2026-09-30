@@ -84,6 +84,17 @@ test("the ≡ menu offers “Hide to menu bar” only where GNSIS has a menu bar
   assert.match(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Hide to menu bar/);
 });
 
+test("the ≡ menu offers “Quit GNSIS” only where the host can close GNSIS", () => {
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);
+  enterDesktop(identity, false);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Quit GNSIS/);
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false, quit: () => {} }), ids);
+  enterDesktop(identity, false);
+  assert.match(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Quit GNSIS/);
+});
+
 test("the chat shows the person's words only: no voice tags, bars or times", () => {
   resetStore();
   configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);

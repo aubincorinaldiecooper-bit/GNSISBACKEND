@@ -31,6 +31,8 @@ export interface GnsisBridge {
   hideToMenuBar?(): void;
   /** The icon was clicked (`want`), or where it is changed (`at`, page pixels from the window's top left). */
   onMenuBar?(fn: (message: unknown) => void): void;
+  /** Close GNSIS entirely ("Quit GNSIS"). */
+  quit?(): void;
   /** A native yes/no question; resolves true only for the confirming button. */
   confirm?(message: string, confirmLabel: string): Promise<boolean>;
   mediaPermissions(): Promise<Record<string, unknown>>;

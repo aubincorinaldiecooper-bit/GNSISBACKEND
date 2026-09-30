@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("gnsis", {
   /** GNSIS has tucked itself away: hide the window until the icon is clicked. */
   hideToMenuBar: () => ipcRenderer.send("menubar:hide"),
   onMenuBar: (fn: (message: unknown) => void) => ipcRenderer.on("menubar", (_e, m) => fn(m)),
+  /** Close GNSIS entirely ("Quit GNSIS"). */
+  quit: () => ipcRenderer.send("app:quit"),
   /** Where the page's cards are, so the floating window lets clicks elsewhere through. */
   reportHitRects: (rects: unknown) => ipcRenderer.send("hit:rects", rects),
   confirm: (message: string, confirmLabel: string) => ipcRenderer.invoke("dialog:confirm", message, confirmLabel),
