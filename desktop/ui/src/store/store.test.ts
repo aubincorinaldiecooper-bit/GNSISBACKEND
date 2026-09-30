@@ -297,11 +297,17 @@ test("typing: the message shows at once, goes to GNSIS through the host, and GNS
   assert.equal(getState().awaiting?.state, "accepted");
   // GNSIS acts on the computer: the start is shown while it runs, the outcome lands as a line.
   host.push({ type: "action", state: "working", text: "Open a new tab in Google Chrome" });
-  assert.deepEqual(getState().working, { to: "gnsis", text: "Open a new tab in Google Chrome" });
+  const working = getState().working;
+  assert.deepEqual({ to: working?.to, text: working?.text }, { to: "gnsis", text: "Open a new tab in Google Chrome" });
+  assert.equal(typeof working?.since, "number", "when the step began is kept, for how long GNSIS worked");
   host.push({ type: "action", state: "done", text: "Google Chrome is on youtube.com." });
   s = getState();
   assert.equal(s.working, null);
-  assert.deepEqual(s.convs.gnsis.turns.at(-1), { role: "system", text: "Done: Google Chrome is on youtube.com." });
+  const line = s.convs.gnsis.turns.at(-1)!;
+  assert.deepEqual({ role: line.role, text: line.text }, { role: "system", text: "Done: Google Chrome is on youtube.com." });
+  assert.equal(line.step?.state, "done");
+  assert.equal(line.step?.startedAt, working?.since, "the step began when its start was reported");
+  assert.ok(line.step!.endedAt >= working!.since!);
   assert.equal(s.awaiting?.state, "accepted", "what GNSIS did is not its answer: the message stays open");
   // Its words arrive in pieces and become one reply.
   host.push({ type: "agent.text", text: "Here are the", endOfTurn: false, interrupted: false });
@@ -364,7 +370,10 @@ test("outside live voice, what GNSIS did still lands in the chat; stray words of
   // The tail of the reply they ended is not shown as a new answer.
   host.push({ type: "agent.text", text: "…and then I", endOfTurn: true, interrupted: false });
   const s = getState();
-  assert.deepEqual(s.convs.gnsis.turns.slice(before), [{ role: "system", text: "Done: Moved report.pdf into ~/Documents/Projects." }]);
+  assert.deepEqual(
+    s.convs.gnsis.turns.slice(before).map((t) => ({ role: t.role, text: t.text, step: t.step?.state })),
+    [{ role: "system", text: "Done: Moved report.pdf into ~/Documents/Projects.", step: "done" }],
+  );
   assert.equal(s.reply, null);
 });
 

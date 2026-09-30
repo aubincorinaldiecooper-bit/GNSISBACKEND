@@ -5,6 +5,9 @@
 
 export type Role = "user" | "agent" | "system";
 
+/** How a step GNSIS took on the computer ended. */
+export type StepState = "done" | "failed" | "waiting" | "declined" | "needs_permission";
+
 export interface Turn {
   role: Role;
   text: string;
@@ -16,6 +19,10 @@ export interface Turn {
   stream?: number;
   /** live-voice turn still being spoken */
   speaking?: boolean;
+  /** GNSIS's opening line: on its own it is not yet a conversation */
+  greeting?: boolean;
+  /** A step GNSIS took on the computer: how it ended, and when it started and ended (ms since epoch). */
+  step?: { state: StepState; startedAt?: number; endedAt: number };
 }
 
 export type PanelKind = "browser" | "list" | "email" | "watch" | "agents";
@@ -145,7 +152,7 @@ export function homeConv(publicId: string, demo: boolean, text = true): Conv {
           { role: "user", text: "Also find a cacio e pepe recipe for two" },
           { role: "agent", text: "Recipe finder is on it. I’ll let you know when it’s done.", stream: 999 },
         ]
-      : [{ role: "agent", text: text ? GREETING : GREETING_VOICE_ONLY, stream: 999 }],
+      : [{ role: "agent", text: text ? GREETING : GREETING_VOICE_ONLY, stream: 999, greeting: true }],
   };
 }
 
@@ -267,16 +274,16 @@ export function liveScript(conv: Conv | null): LiveSegment[] {
   return [
     { who: "agent", a: 12, b: 44, text: "Hi! I’m here. What’s on your mind?" },
     { who: "user", a: 50, b: 92, text: "Open YouTube and search for pasta recipes." },
-    { who: "agent", a: 98, b: 124, text: "Sure, opening YouTube in Chrome." },
-    { who: "action", a: 126, state: "working", text: "Open youtube.com in a new tab in Google Chrome" },
-    { who: "action", a: 146, state: "done", text: "Google Chrome opened a new tab at youtube.com; it now has 2 tabs." },
-    { who: "action", a: 150, state: "working", text: "Type “pasta recipes” into the app in front" },
-    { who: "action", a: 166, state: "done", text: "Typed it. Look at the screen to check it went where it should." },
-    { who: "action", a: 170, state: "waiting", text: "Waiting for your OK: Press enter" },
-    { who: "action", a: 230, state: "working", text: "Press enter" },
-    { who: "action", a: 236, state: "done", text: "Pressed enter. Look at the screen to see what it did." },
-    { who: "agent", a: 242, b: 330, cut: 300, text: "Done. The pasta recipes are on screen. Want me to open the first one for you?" },
-    { who: "user", a: 294, b: 316, text: "No thanks, that’s all." },
-    { who: "agent", a: 322, b: 346, text: "Okay. I’m here if you need me." },
+    { who: "agent", a: 113, b: 139, text: "Sure, opening YouTube in Chrome." },
+    { who: "action", a: 141, state: "working", text: "Open youtube.com in a new tab in Google Chrome" },
+    { who: "action", a: 161, state: "done", text: "Google Chrome opened a new tab at youtube.com; it now has 2 tabs." },
+    { who: "action", a: 165, state: "working", text: "Type “pasta recipes” into the app in front" },
+    { who: "action", a: 181, state: "done", text: "Typed it. Look at the screen to check it went where it should." },
+    { who: "action", a: 185, state: "waiting", text: "Waiting for your OK: Press enter" },
+    { who: "action", a: 245, state: "working", text: "Press enter" },
+    { who: "action", a: 251, state: "done", text: "Pressed enter. Look at the screen to see what it did." },
+    { who: "agent", a: 257, b: 345, cut: 315, text: "Done. The pasta recipes are on screen. Want me to open the first one for you?" },
+    { who: "user", a: 309, b: 331, text: "No thanks, that’s all." },
+    { who: "agent", a: 352, b: 376, text: "Okay. I’m here if you need me." },
   ];
 }

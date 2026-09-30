@@ -72,7 +72,7 @@ export function ScreenCard() {
     if (on) {
       return [
         <span key="dot" className={"live-dot" + (reaching ? "" : " is-paused")} aria-hidden="true" />,
-        <span key="text" className="grow small muted">{reaching ? `Your ${what} · GNSIS gets smaller still pictures of it` : `Paused: GNSIS isn’t connected, so it isn’t getting your ${what}`}</span>,
+        <span key="text" className="grow small muted">{reaching ? `Your ${what}` : `Paused: GNSIS isn’t connected, so it isn’t getting your ${what}`}</span>,
         <button key="primary" data-primary type="button" className="btn-secondary compact" onClick={() => use(null)}>Stop sharing</button>,
       ];
     }

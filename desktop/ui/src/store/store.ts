@@ -2,10 +2,10 @@ import { useSyncExternalStore } from "react";
 import {
   AGENT_ANSWER, AGENT_TOTAL, APPROVAL, COMMANDS, FOLLOW_PHRASE, QUESTION, ROOF_DRAFT, TYPING_NOT_CONNECTED,
   demoAgents, focusConv, homeConv, recipeConv, spawnedConv,
-  type Conv, type Turn,
+  type Conv, type StepState, type Turn,
 } from "../demo/data";
 import type { HostCapabilities, Identity, IdentityStore, LinkState, LiveEvent, LiveHost, VisionSource } from "../host";
-import { actionLine, applyLiveEvent, cutText, endLiveTurns, liveInfo, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
+import { actionLine, applyLiveEvent, cutText, endLiveTurns, liveInfo, liveThinking, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
 
 export interface Toast { id: string; text: string; ttl: number }
 
@@ -55,7 +55,7 @@ export interface State {
   /** GNSIS's reply to a typed message, while its words are still arriving (outside live voice). */
   reply: { to: string; text: string } | null;
   /** What GNSIS is doing on this computer right now, until it reports how it went. */
-  working: { to: string; text: string } | null;
+  working: { to: string; text: string; since?: number } | null;
   /** An action GNSIS is waiting for the person to allow, until it runs or is refused. */
   asking: { to: string; text: string } | null;
   /** The rest of a reply the person cut off by ending live voice: not shown when it arrives. */
@@ -172,6 +172,8 @@ function onLiveEvent(ev: LiveEvent) {
       // or a line about an action, leaves it open.
       const answered = step.commit.some((t) => t.role === "agent") && s.awaiting?.to === s.live.to ? { awaiting: null } : {};
       // News for a chat closed during the call is marked, as it is outside live.
+      // A step that ended started when its "working" did.
+      step.commit = step.commit.map((t) => (t.step && s.working ? { ...t, step: { ...t.step, startedAt: s.working.since } } : t));
       const news = step.commit.filter((t) => t.role !== "user");
       const landed = step.commit.length && c
         ? news.length && !viewing(s, c.id)
@@ -196,7 +198,7 @@ function noteAction(ev: Extract<LiveEvent, { type: "action" }>) {
   setState((s) => {
     const to = s.live?.to ?? s.awaiting?.to ?? s.reply?.to ?? "gnsis";
     const text = ev.text.trim();
-    const working = ev.state === "working" ? (text ? { to, text } : s.working) : null;
+    const working = ev.state === "working" ? (text ? { to, text, since: Date.now() } : s.working) : null;
     const asking = ev.state === "waiting" && text ? { to, text } : null;
     return working === s.working && asking === s.asking ? {} : { working, asking };
   });
@@ -262,9 +264,19 @@ function onIdleEvent(ev: LiveEvent) {
     if (ev.type === "action") {
       const line = actionLine(ev.state, ev.text);
       const to = s.awaiting?.to ?? s.reply?.to ?? s.working?.to ?? "gnsis";
-      if (!line || !s.convs[to]) return {};
+      if (!s.convs[to]) return {};
+      // A new step comes after what GNSIS has said so far: those words close
+      // first, so the step never lands above them.
+      const starts = !s.working && !s.asking;
+      const said: Turn[] = starts && s.reply?.to === to && s.reply.text.trim() ? [{ role: "agent", text: s.reply.text, stream: s.reply.text.length }] : [];
+      if (!line) return said.length ? { ...land(s, to, said, "Replied to you"), reply: null } : {};
       // GNSIS is still on it: a typed message stays open, and its wait starts over.
-      return { ...land(s, to, [{ role: "system", text: line }], line), awaiting: s.awaiting ? { ...s.awaiting, since: Date.now() } : null };
+      const step = { state: ev.state as StepState, startedAt: s.working?.since, endedAt: Date.now() };
+      return {
+        ...land(s, to, [...said, { role: "system", text: line, step }], line),
+        ...(said.length ? { reply: null } : {}),
+        awaiting: s.awaiting ? { ...s.awaiting, since: Date.now() } : null,
+      };
     }
     if (s.dropTail) return ev.endOfTurn || ev.interrupted ? { dropTail: false } : {};
     const to = s.reply?.to ?? s.awaiting?.to ?? "gnsis";
@@ -350,6 +362,26 @@ function nameFrom(text: string) {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : "New agent";
 }
 export const phrase = (s: State) => (s.listenTo && s.listenTo !== "gnsis" ? FOLLOW_PHRASE : QUESTION);
+
+/**
+ * Whether a chat has anything to show beyond GNSIS's opening line. Until it
+ * does, the bar is shown on its own, with no chat window above it. A spoken
+ * turn without words shows nothing, so on its own it does not count either.
+ */
+export function hasConversation(s: State, id: string): boolean {
+  const c = s.convs[id];
+  if (!c) return false;
+  if (c.kind !== "home") return true;
+  const shown = (t: Turn) => !t.greeting && !(t.role === "user" && t.spoken && !t.text);
+  return (
+    c.turns.some(shown) ||
+    liveTurnsFor(s, id).some(shown) ||
+    s.awaiting?.to === id ||
+    s.working?.to === id ||
+    (s.live?.to === id && liveThinking(s.live, s.now)) ||
+    (s.listening && s.listenTo === id)
+  );
+}
 
 /** The open turns for a conversation: live ones while spoken, or a typed message's reply while it arrives. */
 export const liveTurnsFor = (s: State, convId: string): Turn[] => {

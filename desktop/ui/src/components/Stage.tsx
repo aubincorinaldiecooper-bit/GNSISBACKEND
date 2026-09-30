@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useStore, viewing } from "../store/store";
+import { hasConversation, useStore, viewing } from "../store/store";
 import { AgentPanel } from "./AgentPanel";
 import { ChatWindow } from "./ChatWindow";
 import { Commands, DockMenu, Greeting, Toast, VisionMenu } from "./Overlays";
@@ -79,7 +79,8 @@ export function Stage() {
   const s = useStore((x) => x);
   const { w, h } = useViewport();
   const bar = s.mode === "bar";
-  const winOpen = bar && s.winOpen && !!s.convs[s.active];
+  // No chat window above the bar until there is a conversation to show.
+  const winOpen = bar && s.winOpen && hasConversation(s, s.active);
   const showPanel = winOpen && !s.panelHidden;
   const layout = stageLayout(w, h);
   const { chatLeft: left, chatW: stackW, drawerLeft, drawerW, drawerH } = layout;

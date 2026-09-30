@@ -91,9 +91,9 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
   const live = liveInfoFor(s);
   const liveHere = live.on && s.live?.to === s.active;
   const words = phrase(s).split(" ");
-  // While live, the bar says what is really happening: connecting, listening, speaking.
+  // While live the field stays empty: the voice button shows what is happening.
   const placeholder = live.on
-    ? live.status
+    ? ""
     : !s.caps.text && !s.demo
       ? "Press the voice button to talk, / for commands"
       : conv && !isHome ? `Message ${conv.title}…` : "Talk or type, / for commands";
@@ -124,7 +124,7 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
       {canSee ? (
         <button
           type="button"
-          className={"icon-btn round" + (seeing ? " is-seeing" : "")}
+          className="icon-btn round"
           aria-label={
             s.vision.state === "starting"
               ? `Starting to share your ${s.vision.source}. Change what GNSIS sees`
@@ -140,7 +140,7 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
           aria-pressed={seeing}
           onClick={() => setState({ visionMenu: !s.visionMenu })}
         >
-          {seeing ? <I.Eye size={22} /> : <I.Plus size={22} />}
+          <I.Plus size={22} />
         </button>
       ) : (
         <button type="button" className="icon-btn round" aria-label="Attach" disabled>

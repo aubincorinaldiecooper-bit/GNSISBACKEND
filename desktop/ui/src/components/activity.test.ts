@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Identity, IdentityStore } from "../host";
 import { SimulatedLiveHost } from "../hosts/simulated";
-import { actions, configure, enterDesktop, resetStore } from "../store/store";
+import { actions, configure, enterDesktop, getState, hasConversation, resetStore, setState } from "../store/store";
 import { ChatWindow } from "./ChatWindow";
 import { AgentPanel } from "./AgentPanel";
 
@@ -15,7 +15,7 @@ import { AgentPanel } from "./AgentPanel";
 const identity: Identity = { publicId: "gnsis:TEST-TEST-TEST", publicKey: "", storage: "local" };
 const ids: IdentityStore = { storageNote: "", load: async () => identity, create: async () => identity, erase: async () => {} };
 
-test("the chat opens alone, with an Activity button and no empty agents panel; the button opens and closes it", () => {
+test("the chat opens alone, with an Activity button; the button opens and closes the panel", () => {
   resetStore();
   configure(new SimulatedLiveHost(), ids);
   enterDesktop(identity, false);
@@ -27,8 +27,59 @@ test("the chat opens alone, with an Activity button and no empty agents panel; t
   actions.toggleActivity();
   assert.match(renderToStaticMarkup(createElement(ChatWindow, { height: "auto" })), /aria-label="Hide activity"/);
   const drawer = renderToStaticMarkup(createElement(AgentPanel, { left: 0, width: 520, height: 600 }));
-  assert.match(drawer, /Your agents/);
-  assert.match(drawer, /No agents are running\./);
+  // The owner's call (30 September): no "GNSIS · Your assistant" heading, no
+  // "GNSIS right now" card and no "Your agents" list in GNSIS's own panel.
+  assert.match(drawer, /aria-label="Hide panel"/);
+  assert.doesNotMatch(drawer, /Your assistant/);
+  assert.doesNotMatch(drawer, /GNSIS right now/);
+  assert.doesNotMatch(drawer, /Your agents/);
+  assert.doesNotMatch(drawer, /No agents are running/);
+  setState({ asking: { to: "gnsis", text: "Waiting for your OK: Press enter" } });
+  assert.doesNotMatch(renderToStaticMarkup(createElement(AgentPanel, { left: 0, width: 520, height: 600 })), /Needs you/);
+});
+
+test("before there is a conversation there is no chat window, only the bar", () => {
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  // GNSIS's opening line alone is not a conversation.
+  assert.equal(hasConversation(getState(), "gnsis"), false);
+  // Something said without words to show is not one either.
+  const g = getState().convs.gnsis;
+  setState({ convs: { ...getState().convs, gnsis: { ...g, turns: [...g.turns, { role: "user", text: "", spoken: true, spokenMs: 4000 }] } } });
+  assert.equal(hasConversation(getState(), "gnsis"), false);
+  // A typed message is.
+  setState({ text: "Can you tidy up my desktop?" });
+  actions.send();
+  assert.equal(hasConversation(getState(), "gnsis"), true);
+});
+
+test("the chat shows the person's words only: no voice tags, bars or times", () => {
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  const g = getState().convs.gnsis;
+  setState({
+    convs: {
+      ...getState().convs,
+      gnsis: {
+        ...g,
+        turns: [
+          ...g.turns,
+          { role: "user", text: "", spoken: true, spokenMs: 4000 },
+          { role: "user", text: "Open YouTube", spoken: true },
+          { role: "agent", text: "Sure, opening YouTube in Chrome.", stream: 99 },
+          { role: "system", text: "Done: Google Chrome opened a new tab at youtube.com; it now has 2 tabs." },
+        ],
+      },
+    },
+  });
+  const chat = renderToStaticMarkup(createElement(ChatWindow, { height: "auto" }));
+  assert.match(chat, />Open YouTube</);
+  assert.doesNotMatch(chat, /Spoken|Listening|0:04|spoken-bars/);
+  assert.match(chat, /<div class="system-line">Done: Google Chrome opened a new tab/, "an activity line carries no voice icon");
 });
 
 test("opening the Activity drawer never moves or resizes the chat, and the two never overlap", async () => {
@@ -71,22 +122,22 @@ test("the Activity panel shows what is shared with GNSIS: nothing made up, the r
   assert.match(starting, />Cancel</);
   assert.doesNotMatch(starting, /<video/, "no picture before GNSIS has one");
 
-  // On, and the host has the picture: it is shown, with a way to open it large,
-  // and the card does not claim GNSIS gets it at this detail.
+  // On, and the host has the picture: it is shown, with a way to open it large.
   const picture = {} as MediaStream;
   host.visionStream = () => picture;
   setState({ vision: { source: "screen", state: "on" } });
   const on = render();
   assert.match(on, /<video/);
   assert.match(on, /aria-label="Open your screen, as shared with GNSIS"/);
-  assert.match(on, /GNSIS gets smaller still pictures of it/);
+  assert.match(on, />Your screen</);
+  assert.doesNotMatch(on, /smaller still pictures/, "the owner's call (30 September)");
   assert.match(on, /Stop sharing/);
 
   // The connection drops: the picture is still shared locally, but it is not reaching GNSIS.
   setState({ link: "closed" });
   const paused = render();
   assert.match(paused, /Paused: GNSIS isn’t connected, so it isn’t getting your screen/);
-  assert.doesNotMatch(paused, /GNSIS gets smaller still pictures/);
+  assert.doesNotMatch(paused, /smaller still pictures/);
   setState({ link: "ready" });
 
   // On, but this host cannot hand over its picture: say so, never show a stand-in.

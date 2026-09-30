@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { AGENT_TOTAL, ROOF_DRAFT, STEP_TICKS, type Conv } from "../demo/data";
-import { actions, isWorking, presence, setState, useStore, type State } from "../store/store";
-import { AgentFace, Face, ThinkingDots } from "../lib/face";
+import { actions, isWorking, presence, setState, useStore } from "../store/store";
+import { AgentFace, ThinkingDots } from "../lib/face";
 import { copyText } from "../lib/platform";
-import { rankedAgents } from "./Shell";
 import { ScreenCard } from "./ScreenView";
 import * as I from "./Icons";
 
@@ -18,10 +17,14 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
   return (
     <aside data-hit className="panel glass" style={{ left, width, height }} aria-label={`${c.title} panel`}>
       <header className="panel-head">
-        <div className="panel-who">
-          {home ? <Face name={s.identity?.publicId ?? "GNSIS"} gnsis size={36} /> : <AgentFace name={c.title} size={36} p={p} />}
-          <span className="panel-names"><strong>{c.title}</strong><span className="muted small">{status}</span></span>
-        </div>
+        {home ? (
+          <span className="grow" />
+        ) : (
+          <div className="panel-who">
+            <AgentFace name={c.title} size={36} p={p} />
+            <span className="panel-names"><strong>{c.title}</strong><span className="muted small">{status}</span></span>
+          </div>
+        )}
         {c.panel === "browser" && (
           <>
             <button type="button" className="icon-btn" aria-label="Previous screen"><I.ChevronLeft /></button>
@@ -37,7 +40,6 @@ export function AgentPanel({ left, width, height }: { left: number; width: numbe
         {c.panel === "list" && c.list && <ListCard c={c} />}
         {c.panel === "email" && <EmailCard c={c} />}
         {c.panel === "watch" && <WatchCard c={c} />}
-        {c.panel === "agents" && <AgentsCard s={s} />}
         {s.menuOpen && (
           <div className="popover panel-menu">
             <button type="button" onClick={() => setState({ menuOpen: false })}><I.Hand size={18} /> Take over</button>
@@ -124,36 +126,5 @@ function WatchCard({ c }: { c: Conv }) {
       <div className="list-row shown"><I.Mail /> <span className="grow">The roofer’s reply about the estimate</span><span className="chip">{c.forever ? "Waiting" : "Stopped"}</span></div>
       {c.forever && <button type="button" className="btn-secondary start" onClick={actions.stopWatching}>Stop watching</button>}
     </div>
-  );
-}
-
-function AgentsCard({ s }: { s: State }) {
-  const rows = rankedAgents(s);
-  // What GNSIS itself is doing on this computer: what the Activity button's
-  // marks are about when no agent is.
-  const now = s.asking ? { needs: true, text: s.asking.text } : s.working ? { needs: false, text: `Working: ${s.working.text}` } : null;
-  return (
-    <>
-    {now && (
-      <div className="card">
-        <div className="card-title">GNSIS right now</div>
-        <div className="list-row shown" role="status">
-          {now.needs ? <span className="chip orange">Needs you</span> : <ThinkingDots />}
-          <span className="grow">{now.text}</span>
-        </div>
-      </div>
-    )}
-    <div className="card">
-      <div className="card-title">Your agents</div>
-      {rows.length === 0 && <p className="muted">No agents are running.</p>}
-      {rows.map((r) => (
-        <button key={r.id} type="button" className="agent-row" aria-label={`Open ${r.c.title}, ${r.p.status.toLowerCase()}`} onClick={() => actions.openAgent(r.id)}>
-          <AgentFace name={r.c.title} size={32} p={r.p} />
-          <span className="grow"><strong>{r.c.title}</strong><span className="muted small">{r.p.status}</span></span>
-          <I.ChevronRight size={16} />
-        </button>
-      ))}
-    </div>
-    </>
   );
 }

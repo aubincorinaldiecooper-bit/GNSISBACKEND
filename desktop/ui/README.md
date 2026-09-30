@@ -45,7 +45,7 @@ A host implements `LiveHost`:
 | `setMuted(bool)` | releases or reacquires the microphone only — the session stays alive |
 | `startVision(source)` / `stopVision()` | points the one persistent visual sense at the screen or the camera, or off |
 | `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay` — the UI hides what a host cannot do |
-| `visionStream()` (optional) | the picture being shared right now, for the "What GNSIS sees" card; `null` when nothing is |
+| `visionStream()` (optional) | the picture being shared right now, for the "Shared with GNSIS" card; `null` when nothing is |
 | `reportHitRects(rects)` (optional) | on an overlay host: where the cards are, so clicks elsewhere fall through |
 | `subscribe(fn)` | events below |
 
@@ -59,11 +59,21 @@ And it reports only what it actually observed:
 | `agent.cut` | playback was cancelled (the person spoke over it, or asked) |
 | `user.speech`, `user.level` | the person started/stopped talking, by microphone energy |
 | `user.words` | the person's words as text, only when the host can transcribe |
+| `action` | a step GNSIS takes on the computer: `working` as it starts, `waiting` for the person's OK, then `done`, `failed`, `declined` or `needs_permission` |
 | `mic`, `vision` | device state, with a plain-English `detail` when refused |
 
 Because of this, the UI cannot show a reply that was never spoken, a
 microphone that is not on, or words the person did not say: a spoken turn
-without a transcript is shown as a spoken marker with its length.
+without a transcript shows nothing in the chat.
+
+GNSIS at work is shown from these events only. "Thinking" is the silence after
+the person stops talking (`user.speech` end) or after a typed message is
+accepted, until GNSIS says something, starts speaking or takes a step — never
+while its voice is playing, and in live voice for at most ten seconds. Each
+`action` is a step: the running one moves, each outcome gets a mark, and once
+GNSIS answers the steps fold into one line ("Worked for 6s") that opens again,
+unless one failed, was refused or needs a permission. A step always sits below
+the words GNSIS said before it.
 
 `IdentityStore` keeps the device identity: `load`, `create`, `erase`, and one
 sentence (`storageNote`) about where the private key lives, shown in Settings.

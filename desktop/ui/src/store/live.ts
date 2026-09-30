@@ -8,7 +8,7 @@
  */
 
 import type { LinkState, LiveEvent } from "../host";
-import type { Turn } from "../demo/data";
+import type { StepState, Turn } from "../demo/data";
 import { clock } from "../lib/platform";
 
 /**
@@ -37,6 +37,22 @@ export interface LiveState {
   userSpeaking: boolean;
   agentLevel: number;
   userLevel: number;
+  /**
+   * The person has finished speaking and GNSIS has not answered yet (no words,
+   * no sound, no step): since when. Shown as "Thinking", for at most
+   * THINKING_MAX_MS, so silence is never shown as thinking for long.
+   */
+  thinkingSince: number | null;
+  /** A step GNSIS began on the computer (running, or waiting for the person's OK) has not reported how it went. */
+  stepOpen: boolean;
+}
+
+/** How long "Thinking" may show before GNSIS has said or done anything. */
+export const THINKING_MAX_MS = 10_000;
+
+/** "Thinking" is for the silence after the person speaks; never while GNSIS is audibly speaking. */
+export function liveThinking(live: LiveState | null, now: number): boolean {
+  return !!live && live.thinkingSince !== null && !live.agentSpeaking && now - live.thinkingSince < THINKING_MAX_MS;
 }
 
 export interface LiveStep {
@@ -61,6 +77,8 @@ export function startLiveState(to: string, now: number, link: LinkState): LiveSt
     userSpeaking: false,
     agentLevel: 0,
     userLevel: 0,
+    thinkingSince: null,
+    stepOpen: false,
   };
 }
 
@@ -93,7 +111,7 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
         if (text.trim()) commit.push(agentTurn(text));
         text = "";
       }
-      next = { ...live, agent: text ? { text } : null };
+      next = { ...live, agent: text ? { text } : null, thinkingSince: ev.text.trim() ? null : live.thinkingSince };
       break;
     }
     case "agent.cut": {
@@ -107,6 +125,7 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
         agentSpeaking: ev.speaking,
         agentLevel: ev.speaking ? live.agentLevel : 0,
         phase: settle(live.phase, ev.speaking),
+        thinkingSince: ev.speaking ? null : live.thinkingSince,
       };
       break;
     case "agent.level":
@@ -117,7 +136,7 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
       break;
     case "user.speech": {
       if (ev.state === "start") {
-        next = { ...live, userSpeaking: true, user: live.user ?? { startedAt: now, text: "" } };
+        next = { ...live, userSpeaking: true, user: live.user ?? { startedAt: now, text: "" }, thinkingSince: null };
       } else {
         if (live.user) {
           commit.push({
@@ -127,7 +146,10 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
             spokenMs: ev.ms ?? Math.max(0, now - live.user.startedAt),
           });
         }
-        next = { ...live, userSpeaking: false, user: null, userLevel: 0 };
+        // The person has finished: until GNSIS answers, it is thinking. Not
+        // when GNSIS is still speaking: the person only spoke over it.
+        const thinking = live.user && !live.agentSpeaking ? now : live.thinkingSince;
+        next = { ...live, userSpeaking: false, user: null, userLevel: 0, thinkingSince: thinking };
       }
       break;
     }
@@ -152,10 +174,17 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
       break;
     }
     case "action": {
+      // A new step comes after what GNSIS has said so far: those words close
+      // first, so the step never lands above them. Words that arrive while
+      // the step is under way stay open, below it.
+      const closeWords = !live.stepOpen && !!live.agent?.text.trim();
+      if (closeWords) commit.push(agentTurn(live.agent!.text));
       // What GNSIS did on the computer goes in the conversation as a plain
       // line; the moment it starts does not, only what came of it.
       const line = actionLine(ev.state, ev.text);
-      if (line) commit.push({ role: "system", text: line });
+      if (line) commit.push({ role: "system", text: line, step: { state: ev.state as StepState, endedAt: now } });
+      const stepOpen = ev.state === "working" || ev.state === "waiting";
+      next = { ...live, agent: closeWords ? null : live.agent, stepOpen, thinkingSince: null };
       break;
     }
     case "vision":
@@ -242,13 +271,19 @@ export function liveInfo(live: LiveState | null, name: string, now: number): Liv
   return { on: true, connecting, name, agentNow, userNow, amp, status, muted: live.muted };
 }
 
-/** Five bars for the armed button: real level, with a little motion so speech reads as speech. */
+/**
+ * Five bars for the armed button, in the usual voice-activity shape: short and
+ * still in silence; while someone speaks they follow the real level, tallest
+ * in the middle and shorter towards the edges, each moving a little on its own
+ * so speech never reads as one flat block.
+ */
+const BAR_SHAPE = [0.5, 0.8, 1, 0.8, 0.5];
 export function barHeights(level: number, active: boolean, t: number): number[] {
-  return [0, 1, 2, 3, 4].map((i) => {
+  return BAR_SHAPE.map((shape, i) => {
     if (!active) return i === 2 ? 8 : 5;
-    const wobble = 0.25 * Math.abs(Math.sin(t * 0.9 + i * 1.3));
-    const amp = Math.min(1, level * 1.4 + wobble);
-    return Math.round(6 + amp * 16);
+    const lift = Math.max(0.2, Math.min(1, clamp(level) * 1.6));
+    const sway = 0.65 + 0.35 * Math.abs(Math.sin(t * 0.9 + i * 1.7));
+    return Math.round(5 + 13 * shape * lift * sway);
   });
 }
 

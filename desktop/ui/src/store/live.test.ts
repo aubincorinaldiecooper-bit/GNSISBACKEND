@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyLiveEvent, barHeights, cutText, endLiveTurns, liveInfo, openTurns, startLiveState, type LiveState } from "./live";
+import type { LiveEvent } from "../host";
+import type { Turn } from "../demo/data";
+import { THINKING_MAX_MS, applyLiveEvent, barHeights, cutText, endLiveTurns, liveInfo, liveThinking, openTurns, startLiveState, type LiveState } from "./live";
 
 const T0 = 1_000_000;
 /** A session whose microphone came on at T0. */
@@ -120,12 +122,17 @@ test("the status line says what is happening, with the clock", () => {
   assert.equal(applyLiveEvent(live, { type: "user.level", level: 0.9 }, T0).live.userLevel, 0);
 });
 
-test("the armed button's bars follow the level and stay flat when nobody speaks", () => {
+test("the armed button's bars follow the level, stay short in silence, and never fill the button as one block", () => {
   assert.deepEqual(barHeights(0, false, 0), [5, 5, 8, 5, 5]);
-  const loud = barHeights(1, true, 0);
-  assert.ok(loud.every((h) => h === 22), `all bars at the top: ${loud}`);
-  const soft = barHeights(0.2, true, 3);
-  assert.ok(soft.every((h) => h >= 6 && h <= 22), `bars in range: ${soft}`);
+  for (let t = 0; t < 40; t += 1) {
+    const loud = barHeights(1, true, t);
+    assert.ok(loud.every((h) => h >= 5 && h <= 18), `bars stay well inside the button: ${loud}`);
+    assert.ok(new Set(loud).size > 1, `never one flat block: ${loud}`);
+    assert.ok(loud[2] >= loud[0] && loud[2] >= loud[4], `tallest in the middle: ${loud}`);
+  }
+  const loud = barHeights(1, true, 3);
+  const soft = barHeights(0.1, true, 3);
+  assert.ok(soft.reduce((a, b) => a + b) < loud.reduce((a, b) => a + b), `a louder voice makes taller bars: ${soft} vs ${loud}`);
 });
 
 test("what GNSIS did on the computer lands in the chat as a plain line; the start of it does not", () => {
@@ -133,15 +140,18 @@ test("what GNSIS did on the computer lands in the chat as a plain line; the star
   const said = (state: "working" | "waiting" | "done" | "failed" | "declined" | "needs_permission", text: string) =>
     applyLiveEvent(live, { type: "action", state, text }, T0).commit;
   assert.deepEqual(said("working", "Move “report.pdf” into “Projects”"), []);
+  // Each line is a step: how it ended, and when.
   assert.deepEqual(said("waiting", "Waiting for your OK: Move “report.pdf” into “Projects”"), [
-    { role: "system", text: "Waiting for your OK: Move “report.pdf” into “Projects”" },
+    { role: "system", text: "Waiting for your OK: Move “report.pdf” into “Projects”", step: { state: "waiting", endedAt: T0 } },
   ]);
   assert.deepEqual(said("done", "Moved report.pdf into ~/Documents/Projects."), [
-    { role: "system", text: "Done: Moved report.pdf into ~/Documents/Projects." },
+    { role: "system", text: "Done: Moved report.pdf into ~/Documents/Projects.", step: { state: "done", endedAt: T0 } },
   ]);
-  assert.deepEqual(said("failed", "No folder called Taxes."), [{ role: "system", text: "Couldn’t do it: No folder called Taxes." }]);
+  assert.deepEqual(said("failed", "No folder called Taxes."), [
+    { role: "system", text: "Couldn’t do it: No folder called Taxes.", step: { state: "failed", endedAt: T0 } },
+  ]);
   assert.deepEqual(said("declined", "Not done: Move “report.pdf” into “Projects”"), [
-    { role: "system", text: "Not done: Move “report.pdf” into “Projects”" },
+    { role: "system", text: "Not done: Move “report.pdf” into “Projects”", step: { state: "declined", endedAt: T0 } },
   ]);
 });
 
@@ -175,4 +185,76 @@ test("a session ended while still connecting leaves no conversation behind, only
   assert.deepEqual(endLiveTurns(live, T0 + 5000, "Live voice couldn’t start. GNSIS could not be reached."), [
     { role: "system", text: "Live voice couldn’t start. GNSIS could not be reached." },
   ]);
+});
+
+test("Thinking: from the person's last word until GNSIS says or does anything; never over GNSIS speaking; never for long", () => {
+  let live = fresh();
+  const at = (e: LiveEvent, t: number) => (live = applyLiveEvent(live, e, t).live);
+  const said = (from: number, to: number) => {
+    at({ type: "user.speech", state: "start" }, from);
+    assert.equal(liveThinking(live, from), false, "not while the person is speaking");
+    at({ type: "user.speech", state: "end", ms: to - from }, to);
+  };
+  said(T0 + 100, T0 + 1000);
+  assert.equal(liveThinking(live, T0 + 1000), true);
+  assert.equal(liveThinking(live, T0 + 1000 + THINKING_MAX_MS - 1), true);
+  assert.equal(liveThinking(live, T0 + 1000 + THINKING_MAX_MS), false, "silence is not shown as thinking for long");
+  at({ type: "agent.text", text: "", endOfTurn: true, interrupted: false }, T0 + 1200);
+  assert.equal(liveThinking(live, T0 + 1200), true, "an empty end of a reply is not an answer");
+  at({ type: "agent.text", text: "Sure.", endOfTurn: false, interrupted: false }, T0 + 1500);
+  assert.equal(liveThinking(live, T0 + 1500), false, "GNSIS's first words end it");
+  at({ type: "agent.text", text: "", endOfTurn: true, interrupted: false }, T0 + 1600);
+
+  said(T0 + 2000, T0 + 3000);
+  at({ type: "action", state: "working", text: "Open Safari" }, T0 + 3100);
+  assert.equal(liveThinking(live, T0 + 3100), false, "a step ends it");
+  at({ type: "action", state: "done", text: "Safari is open." }, T0 + 3200);
+
+  said(T0 + 4000, T0 + 5000);
+  at({ type: "agent.speaking", speaking: true }, T0 + 5100);
+  assert.equal(liveThinking(live, T0 + 5100), false, "GNSIS's voice ends it");
+
+  // The person talks while GNSIS is still speaking, and GNSIS carries on:
+  // nothing to think about, now or once the reply has finished.
+  said(T0 + 6000, T0 + 6500);
+  assert.equal(liveThinking(live, T0 + 6500), false);
+  at({ type: "agent.speaking", speaking: false }, T0 + 7000);
+  assert.equal(liveThinking(live, T0 + 7000), false);
+
+  // The person cuts GNSIS off, then finishes: GNSIS is thinking about what they said.
+  at({ type: "agent.speaking", speaking: true }, T0 + 8000);
+  at({ type: "user.speech", state: "start" }, T0 + 8100);
+  at({ type: "agent.cut", reason: "user_spoke" }, T0 + 8200);
+  at({ type: "user.speech", state: "end", ms: 900 }, T0 + 9000);
+  assert.equal(liveThinking(live, T0 + 9000), true);
+});
+
+test("a step lands below the words GNSIS said before it; words said while it runs stay below it", () => {
+  let live = fresh();
+  const turns: Turn[] = [];
+  const at = (e: LiveEvent, t = T0) => {
+    const step = applyLiveEvent(live, e, t);
+    live = step.live;
+    turns.push(...step.commit);
+  };
+  const order = () => turns.map((t) => (t.step ? `step:${t.step.state}` : t.text));
+  const openWords = () => live.agent?.text ?? null;
+  at({ type: "agent.text", text: "Sure, opening YouTube in Chrome.", endOfTurn: false, interrupted: false });
+  at({ type: "action", state: "working", text: "Open youtube.com in a new tab in Google Chrome" });
+  assert.deepEqual(order(), ["Sure, opening YouTube in Chrome."], "the words before the step close as it starts");
+  assert.equal(openWords(), null);
+  at({ type: "agent.text", text: "One moment", endOfTurn: false, interrupted: false });
+  at({ type: "action", state: "done", text: "Google Chrome opened a new tab at youtube.com." });
+  assert.equal(openWords(), "One moment", "words still arriving are not cut off by the step's end");
+  at({ type: "agent.text", text: ", it’s open.", endOfTurn: true, interrupted: false });
+  assert.deepEqual(order(), ["Sure, opening YouTube in Chrome.", "step:done", "One moment, it’s open."]);
+
+  // Asking for the person's OK and then running is one step: the words are split once, where it began.
+  at({ type: "agent.text", text: "I need your OK", endOfTurn: false, interrupted: false });
+  at({ type: "action", state: "waiting", text: "Waiting for your OK: Press enter" });
+  at({ type: "agent.text", text: " for this one.", endOfTurn: false, interrupted: false });
+  at({ type: "action", state: "working", text: "Press enter" });
+  at({ type: "action", state: "done", text: "Pressed enter." });
+  at({ type: "agent.text", text: "", endOfTurn: true, interrupted: false });
+  assert.deepEqual(order().slice(3), ["I need your OK", "step:waiting", "step:done", " for this one."]);
 });
