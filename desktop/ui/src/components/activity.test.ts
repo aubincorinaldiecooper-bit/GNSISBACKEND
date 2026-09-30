@@ -55,6 +55,23 @@ test("before there is a conversation there is no chat window, only the bar", () 
   assert.equal(hasConversation(getState(), "gnsis"), true);
 });
 
+test("Thinking counts the seconds GNSIS has been at it, and says “Thinking some more” from five", () => {
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  const g = getState().convs.gnsis;
+  setState({ convs: { ...getState().convs, gnsis: { ...g, turns: [...g.turns, { role: "user", text: "Find me a pasta recipe" }] } } });
+  const after = (ms: number) => {
+    setState({ awaiting: { to: "gnsis", seq: 1, since: 50_000, state: "accepted" }, now: 50_000 + ms });
+    return renderToStaticMarkup(createElement(ChatWindow, { height: "auto" }));
+  };
+  assert.match(after(0), /<span class="thinking-time" aria-hidden="true">1s ·<\/span><span class="shimmer">Thinking<\/span>/, "from the first second");
+  assert.match(after(4_999), />4s ·<\/span><span class="shimmer">Thinking<\/span>/);
+  assert.match(after(5_000), />5s ·<\/span><span class="shimmer">Thinking some more<\/span>/);
+  assert.match(after(83_000), />83s ·<\/span><span class="shimmer">Thinking some more<\/span>/);
+});
+
 test("the chat shows the person's words only: no voice tags, bars or times", () => {
   resetStore();
   configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);

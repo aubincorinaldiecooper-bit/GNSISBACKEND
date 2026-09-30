@@ -32,9 +32,21 @@ export function useHitRects(host: LiveHost) {
       timer = window.setTimeout(tick, 120);
     };
     tick();
-    return () => window.clearTimeout(timer);
+    // Something just moved under the pointer (GNSIS being dragged): report now, not on the next beat.
+    const now = () => {
+      window.clearTimeout(timer);
+      tick();
+    };
+    window.addEventListener(HIT_RECTS_NOW, now);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener(HIT_RECTS_NOW, now);
+    };
   }, [host]);
 }
+
+/** Ask the overlay host to take the interactive surfaces' new places at once. */
+export const HIT_RECTS_NOW = "gnsis:hit-rects-now";
 
 /**
  * The wake gesture. The hardware is not specified yet, so ⌥Space stands in

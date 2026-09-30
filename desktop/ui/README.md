@@ -14,7 +14,8 @@ ui/
 │                        AgentPanel, Overlays (menus, greeting, toast), Settings, Icons
 ├─ src/store/store.ts    one small store: conversations, tabs, presence, the live session
 ├─ src/store/live.ts     live voice as the chat sees it — pure functions, tested directly
-├─ src/lib/              faces (blobatar), the public-ID derivation, small helpers
+├─ src/lib/              faces (blobatar), the public-ID derivation, where the person moved GNSIS,
+│                        small helpers
 ├─ src/hosts/            LocalIdentityStore (WebCrypto + IndexedDB), SimulatedLiveHost (no mic,
 │                        no runtime: a scripted conversation, for review and tests)
 ├─ src/demo/data.ts      stand-in agents, panels and canned replies — see "What is stand-in"
@@ -46,7 +47,7 @@ A host implements `LiveHost`:
 | `startVision(source)` / `stopVision()` | points the one persistent visual sense at the screen or the camera, or off |
 | `capabilities()` | `voice`, `text`, `screen`, `camera`, `transcript`, `overlay` — the UI hides what a host cannot do |
 | `visionStream()` (optional) | the picture being shared right now, for the "Shared with GNSIS" card; `null` when nothing is |
-| `reportHitRects(rects)` (optional) | on an overlay host: where the cards are, so clicks elsewhere fall through |
+| `reportHitRects(rects)` (optional) | on an overlay host: where the cards are, so clicks elsewhere fall through; while the person drags GNSIS, one rect covers the whole window so the pointer stays with GNSIS until the drag ends |
 | `subscribe(fn)` | events below |
 
 And it reports only what it actually observed:
@@ -69,11 +70,19 @@ without a transcript shows nothing in the chat.
 GNSIS at work is shown from these events only. "Thinking" is the silence after
 the person stops talking (`user.speech` end) or after a typed message is
 accepted, until GNSIS says something, starts speaking or takes a step — never
-while its voice is playing, and in live voice for at most ten seconds. Each
+while its voice is playing, and in live voice for at most ten seconds. It
+counts the seconds so far, and from five seconds reads "Thinking some more". Each
 `action` is a step: the running one moves, each outcome gets a mark, and once
 GNSIS answers the steps fold into one line ("Worked for 6s") that opens again,
 unless one failed, was refused or needs a permission. A step always sits below
 the words GNSIS said before it.
+
+The person can drag GNSIS (the dock or bar, the chat and the drawer together)
+anywhere on the screen; it stays fully on screen. The UI remembers two things
+in the page's own storage (`localStorage`): where GNSIS was moved
+(`gnsis.place`) and that the first-launch greeting has been shown
+(`gnsis.greeted`). Without that storage GNSIS starts where it always does and
+greets once per launch.
 
 `IdentityStore` keeps the device identity: `load`, `create`, `erase`, and one
 sentence (`storageNote`) about where the private key lives, shown in Settings.

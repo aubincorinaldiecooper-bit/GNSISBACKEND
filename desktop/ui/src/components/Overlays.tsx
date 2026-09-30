@@ -82,6 +82,9 @@ export function Greeting({ left }: { left: number }) {
   return (
     <div data-hit role="status" className="greeting" style={{ left }}>
       <span className="greeting-tail" aria-hidden="true" />
+      <button type="button" className="greeting-close" aria-label="Close" onClick={actions.closeGreeting}>
+        <I.Close size={16} sw={2.2} />
+      </button>
       <strong>Hi, I’m your GNSIS.</strong>
       <span className="muted">Tap my face to open our chat, or press the voice button to talk with me live.</span>
     </div>

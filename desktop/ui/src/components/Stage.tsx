@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { HOME, keepOnScreen, loadPlace, savePlace, type Box, type Place } from "../lib/place";
+import { HIT_RECTS_NOW } from "../lib/platform";
 import { hasConversation, useStore, viewing } from "../store/store";
 import { AgentPanel } from "./AgentPanel";
 import { ChatWindow } from "./ChatWindow";
@@ -69,6 +71,129 @@ export function dockLeft(layout: StageLayout, dockW: number, w: number): number 
   return Math.max(EDGE, Math.min(Math.round(centre - dockW / 2), w - EDGE - dockW));
 }
 
+/** A drag starts on an empty part of the bar or dock, on either face, on the chat's top strip or the drawer's header… */
+const DRAG_FROM = ".shell, .tabs, .panel-head";
+/** …but not on their controls, except the faces, which still open or close the chat when simply clicked. */
+const NOT_FROM = "input, textarea, select, a, [contenteditable], button:not(.dock-sun):not(.addr-face)";
+/** How far the pointer moves before a press becomes a drag, so a click stays a click. */
+const DRAG_SLOP = 5;
+
+/**
+ * Where everything in the cluster sits before it is moved: the union of its
+ * parts' layout boxes. The bar grows out of the dock in an animation, so its
+ * final box is passed in (`shell`) rather than measured half-way.
+ */
+function naturalBox(el: HTMLElement, shell: Box): Box {
+  let box = shell;
+  for (const c of Array.from(el.children) as HTMLElement[]) {
+    if (c.classList.contains("shell") || !c.offsetWidth || !c.offsetHeight) continue;
+    const b = { left: c.offsetLeft, top: c.offsetTop, right: c.offsetLeft + c.offsetWidth, bottom: c.offsetTop + c.offsetHeight };
+    box = { left: Math.min(box.left, b.left), top: Math.min(box.top, b.top), right: Math.max(box.right, b.right), bottom: Math.max(box.bottom, b.bottom) };
+  }
+  return box;
+}
+
+/**
+ * The person can drag GNSIS (the dock or bar, the chat and the drawer, all
+ * together) anywhere on the screen. It stays fully on screen, also when the
+ * chat opens or grows, and the place is remembered for the next launch.
+ */
+function useMoveable(w: number, h: number, shell: Box) {
+  const ref = useRef<HTMLDivElement>(null);
+  const shellRef = useRef(shell);
+  shellRef.current = shell;
+  const [want, setWant] = useState<Place>(loadPlace);
+  const [shown, setShown] = useState<Place>(want);
+  const [dragging, setDragging] = useState(false);
+  const [, remeasure] = useState(0);
+  const drag = useRef<{ id: number; x: number; y: number; from: Place; k: number; moved: boolean; last: Place } | null>(null);
+
+  // Whatever opened, closed or grew, keep it all on screen.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || drag.current?.moved) return;
+    const next = keepOnScreen(want, naturalBox(el, shell), w, h);
+    if (next.dx !== shown.dx || next.dy !== shown.dy) setShown(next);
+  });
+
+  // A part that changed size in an animation is measured again once it has finished.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const done = (e: TransitionEvent) => {
+      if ((e.target as Element).parentElement === el && /^(left|width|height|top|bottom)$/.test(e.propertyName)) remeasure((n) => n + 1);
+    };
+    el.addEventListener("transitionend", done);
+    return () => el.removeEventListener("transitionend", done);
+  }, []);
+
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const d = drag.current;
+      const el = ref.current;
+      if (!d || !el || e.pointerId !== d.id) return;
+      const ddx = (e.clientX - d.x) / d.k;
+      const ddy = (e.clientY - d.y) / d.k;
+      if (!d.moved) {
+        if (Math.hypot(ddx, ddy) < DRAG_SLOP) return;
+        d.moved = true;
+        setDragging(true);
+      }
+      e.preventDefault();
+      const next = keepOnScreen({ dx: d.from.dx + ddx, dy: d.from.dy + ddy }, naturalBox(el, shellRef.current), w, h);
+      d.last = next;
+      setWant(next);
+      setShown(next);
+    };
+    const up = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d || e.pointerId !== d.id) return;
+      drag.current = null;
+      if (!d.moved) return;
+      setDragging(false);
+      savePlace(d.last);
+      // The press was a drag, not a click on whatever it started on.
+      const swallow = (ev: MouseEvent) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [w, h]);
+
+  // Floating over the desktop, the host must keep the pointer on GNSIS for the whole drag.
+  useEffect(() => {
+    window.dispatchEvent(new Event(HIT_RECTS_NOW));
+  }, [dragging]);
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const el = ref.current;
+    if (e.button !== 0 || drag.current || !el) return;
+    const t = e.target as Element;
+    if (!t.closest(DRAG_FROM) || t.closest(NOT_FROM)) return;
+    // The pointer moves in screen pixels; the page may be drawn scaled.
+    const k = el.getBoundingClientRect().width / (el.offsetWidth || 1) || 1;
+    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: shown, k, moved: false, last: shown };
+  };
+
+  const moved = shown.dx !== HOME.dx || shown.dy !== HOME.dy;
+  return {
+    ref,
+    dragging,
+    onPointerDown,
+    style: moved ? { transform: `translate(${shown.dx}px, ${shown.dy}px)` } : undefined,
+  };
+}
+
 /**
  * Everything floats at the bottom of the screen: the chat, the Activity
  * drawer at the right when it is open; with nothing open only the dock shows,
@@ -90,21 +215,26 @@ export function Stage() {
   const showCommands = bar && s.text.startsWith("/") && !s.text.includes(" ");
   const toast = bar && !!s.toast && !viewing(s, s.toast.id);
   const aboveChat = winOpen || showCommands;
+  const shellH = bar ? BAR_H : DOCK_H;
+  const move = useMoveable(w, h, { left: shellLeft, right: shellLeft + shellW, top: h - BOTTOM - shellH, bottom: h - BOTTOM });
 
   return (
     <div className="desktop">
-      <div className="stack" style={{ left, width: stackW, bottom: BOTTOM + BAR_H + GAP }}>
-        {/* News goes above an open chat, never over its newest lines. */}
-        {toast && aboveChat && <Toast />}
-        {winOpen && !showCommands && <ChatWindow height="auto" />}
-        {showCommands && <Commands />}
+      <div ref={move.ref} className={"cluster" + (move.dragging ? " is-dragging" : "")} style={move.style} onPointerDown={move.onPointerDown}>
+        <div className="stack" style={{ left, width: stackW, bottom: BOTTOM + BAR_H + GAP }}>
+          {/* News goes above an open chat, never over its newest lines. */}
+          {toast && aboveChat && <Toast />}
+          {winOpen && !showCommands && <ChatWindow height="auto" />}
+          {showCommands && <Commands />}
+        </div>
+        {showPanel && <AgentPanel left={drawerLeft} width={drawerW} height={drawerH} />}
+        <Shell g={{ shellLeft, shellW, shellH }} />
+        {!bar && s.dockMenu && <DockMenu left={shellLeft + shellW - 300} />}
+        {bar && s.visionMenu && <VisionMenu left={shellLeft + 52} />}
+        {!bar && s.greet && !s.dockMenu && <Greeting left={shellLeft + 7} />}
+        {toast && !aboveChat && <Toast left={shellLeft + shellW - 380} />}
       </div>
-      {showPanel && <AgentPanel left={drawerLeft} width={drawerW} height={drawerH} />}
-      <Shell g={{ shellLeft, shellW, shellH: bar ? BAR_H : DOCK_H }} />
-      {!bar && s.dockMenu && <DockMenu left={shellLeft + shellW - 300} />}
-      {bar && s.visionMenu && <VisionMenu left={shellLeft + 52} />}
-      {!bar && s.greet && !s.dockMenu && <Greeting left={shellLeft + 7} />}
-      {toast && !aboveChat && <Toast left={shellLeft + shellW - 380} />}
+      {move.dragging && <div data-hit className="drag-shield" aria-hidden="true" />}
       {s.settingsOpen && <Settings />}
     </div>
   );

@@ -6,6 +6,7 @@ import {
 } from "../demo/data";
 import type { HostCapabilities, Identity, IdentityStore, LinkState, LiveEvent, LiveHost, VisionSource } from "../host";
 import { actionLine, applyLiveEvent, cutText, endLiveTurns, liveInfo, liveThinking, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
+import { greetedBefore, markGreeted } from "../lib/place";
 
 export interface Toast { id: string; text: string; ttl: number }
 
@@ -401,6 +402,9 @@ const standIns = (s: State) => s.demo;
 
 // ---- setup ------------------------------------------------------------------
 export function enterDesktop(identity: Identity, demo: boolean) {
+  // The greeting is for the first launch on this computer only.
+  const greet = !demo && !greetedBefore();
+  if (greet) markGreeted();
   const convs: Record<string, Conv> = { gnsis: homeConv(identity.publicId, demo, demo || getState().caps.text) };
   let agentIds: string[] = [];
   let tabs = ["gnsis"];
@@ -410,7 +414,7 @@ export function enterDesktop(identity: Identity, demo: boolean) {
     tabs = ["gnsis", "roof", "recipe"];
   }
   setState({
-    phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet: !demo, t: 0,
+    phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet, t: 0,
     live: null, toast: null, awaiting: null, reply: null, working: null, asking: null, dropTail: false,
   });
 }
@@ -494,6 +498,10 @@ const plain = (e: unknown) => (e instanceof Error ? e.message : typeof e === "st
 
 // ---- actions ----------------------------------------------------------------
 export const actions = {
+  /** The person closed the first-launch greeting. */
+  closeGreeting() {
+    setState({ greet: false });
+  },
   openAgent(id: string) {
     const h = host;
     let endedLive = false;
@@ -859,12 +867,13 @@ export function isBusy(s: State): boolean {
 
 // ---- the clock --------------------------------------------------------------
 // Drives the stand-in agents (streaming answers, badges, archiving) and, while
-// live voice is on, the wall clock the status line and the bars read.
+// live voice is on or a typed message waits, the wall clock the status line,
+// the bars and "Thinking" read.
 export function tick() {
   const s = getState();
   if (s.phase !== "desktop" || !isBusy(s)) return;
   const t = s.t + 1;
-  const now = s.live ? Date.now() : s.now;
+  const now = s.live || s.awaiting ? Date.now() : s.now;
   if (s.listening) {
     const words = phrase(s).split(" ");
     const next: Partial<State> = { t, now };
