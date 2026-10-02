@@ -10,6 +10,7 @@ from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .runtime import PersistentVisualDecisionSession, VisualDecisionPolicy
 from .schema import Decision
 
+
 class VisualServiceError(RuntimeError):
     def __init__(self, code: str, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
@@ -36,10 +37,14 @@ class VisualServiceSession:
     lock: threading.RLock = field(default_factory=threading.RLock)
     last_captured_at_ms: int = -1
     frame_seq: int = 0
-    recent_duplicate_frame_ids: deque[str] = field(default_factory=lambda: deque(maxlen=128))
+    recent_duplicate_frame_ids: deque[str] = field(
+        default_factory=lambda: deque(maxlen=128)
+    )
     replay: OrderedDict[str, dict[str, Any]] = field(default_factory=OrderedDict)
     expired_requests: OrderedDict[str, None] = field(default_factory=OrderedDict)
-    outstanding: OrderedDict[str, tuple[Decision, int]] = field(default_factory=OrderedDict)
+    outstanding: OrderedDict[str, tuple[Decision, int]] = field(
+        default_factory=OrderedDict
+    )
     usage: dict[str, int] = field(
         default_factory=lambda: {
             "frames_accepted": 0,
@@ -129,11 +134,15 @@ class VisualService:
     def authenticate_planner(self, session_id: str, token: str) -> bool:
         with self._lock:
             session = self._sessions.get(session_id)
-        return session is not None and secrets.compare_digest(session.planner_token, token)
+        return session is not None and secrets.compare_digest(
+            session.planner_token, token
+        )
 
     def is_planner_token(self, token: str) -> bool:
         with self._lock:
-            planner_tokens = [session.planner_token for session in self._sessions.values()]
+            planner_tokens = [
+                session.planner_token for session in self._sessions.values()
+            ]
         matched = False
         for planner_token in planner_tokens:
             matched = secrets.compare_digest(planner_token, token) or matched
@@ -254,7 +263,9 @@ class VisualService:
                     status_code=422,
                 )
             decision = gated.decision
-            if session.frame_seq != seq or not session.decision_session.is_current(decision):
+            if session.frame_seq != seq or not session.decision_session.is_current(
+                decision
+            ):
                 raise VisualServiceError(
                     "stale_decision",
                     "the visual state changed while the decision was generated",
