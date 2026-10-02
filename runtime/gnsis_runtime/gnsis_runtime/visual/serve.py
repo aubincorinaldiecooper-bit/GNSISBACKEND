@@ -87,6 +87,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(
             "GNSIS_VISUAL_USAGE_URL and GNSIS_VISUAL_USAGE_SECRET must be supplied together"
         )
+    if grant_public_key and not usage_url:
+        parser.error(
+            "grant authentication requires GNSIS_VISUAL_USAGE_URL and "
+            "GNSIS_VISUAL_USAGE_SECRET so commercial usage is metered"
+        )
 
     import uvicorn
 

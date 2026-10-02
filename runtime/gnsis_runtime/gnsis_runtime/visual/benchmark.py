@@ -103,7 +103,11 @@ class Observation:
     def stream_motion(self) -> float:
         """Motion recorded from the live stream, else measured on the frames."""
 
-        return float(self.motion) if self.motion is not None else recent_motion(self.frames)
+        return (
+            float(self.motion)
+            if self.motion is not None
+            else recent_motion(self.frames)
+        )
 
     def legal(self) -> LegalActionSet:
         return legal_actions(self.goal, self.current.frame_id, self.viewport)
@@ -156,7 +160,11 @@ def case_from_row(row: Mapping[str, Any], base: Path, index: int) -> BenchmarkCa
     if "frames" in row:
         case_id = str(row.get("case_id") or f"case-{index}")
         frames = tuple(
-            _load_frame(base / str(item["path"]), str(item.get("frame_id") or f"{case_id}:{i}"), item.get("captured_at_ms"))
+            _load_frame(
+                base / str(item["path"]),
+                str(item.get("frame_id") or f"{case_id}:{i}"),
+                item.get("captured_at_ms"),
+            )
             for i, item in enumerate(row["frames"])
         )
         label = row["oracle"]
@@ -176,10 +184,14 @@ def case_from_row(row: Mapping[str, Any], base: Path, index: int) -> BenchmarkCa
         value=label.get("value"),
         box=_box(label.get("box")),
     )
-    return BenchmarkCase(observation=observation, oracle=oracle, family=str(row.get("family") or ""))
+    return BenchmarkCase(
+        observation=observation, oracle=oracle, family=str(row.get("family") or "")
+    )
 
 
-def load_cases(path: str | Path, frames_dir: str | Path | None = None) -> list[BenchmarkCase]:
+def load_cases(
+    path: str | Path, frames_dir: str | Path | None = None
+) -> list[BenchmarkCase]:
     source = Path(path)
     base = Path(frames_dir) if frames_dir is not None else source.parent
     cases = []
@@ -202,7 +214,13 @@ class Contestant(Protocol):
 class PolicyContestant:
     """A ``VisualDecisionPolicy`` (Smaller GNSIS: the JEV engine) as a contestant."""
 
-    def __init__(self, policy: VisualDecisionPolicy, *, cache: Any = None, name: str = SMALLER_GNSIS) -> None:
+    def __init__(
+        self,
+        policy: VisualDecisionPolicy,
+        *,
+        cache: Any = None,
+        name: str = SMALLER_GNSIS,
+    ) -> None:
         self.policy = policy
         self.cache = cache
         self.name = name
@@ -266,7 +284,9 @@ def parse_visual_state(content: str) -> PerceivedState:
 
     value = _json_object(content)
     if value is None:
-        return PerceivedState(summary=content.strip()[:2000], change="", page_stable=False)
+        return PerceivedState(
+            summary=content.strip()[:2000], change="", page_stable=False
+        )
     rows = value.get("targets")
     targets: list[PerceivedTarget] = []
     for row in rows if isinstance(rows, list) else []:
@@ -287,7 +307,9 @@ def parse_visual_state(content: str) -> PerceivedState:
                 role=_text(row.get("role"), 80, "other"),
                 x=x,
                 y=y,
-                affordances=tuple(item.upper() for item in affordances if isinstance(item, str))[:8],
+                affordances=tuple(
+                    item.upper() for item in affordances if isinstance(item, str)
+                )[:8],
             )
         )
         if len(targets) >= LAYA_MAX_TARGETS:
@@ -309,10 +331,14 @@ class LayaOption:
 
 def _target_point(target: PerceivedTarget, legal: LegalActionSet) -> Target:
     width, height = legal.viewport
-    return Target(min(width - 1, int(target.x * width)), min(height - 1, int(target.y * height)))
+    return Target(
+        min(width - 1, int(target.x * width)), min(height - 1, int(target.y * height))
+    )
 
 
-def laya_options(legal: LegalActionSet, perceived: PerceivedState) -> dict[str, LayaOption]:
+def laya_options(
+    legal: LegalActionSet, perceived: PerceivedState
+) -> dict[str, LayaOption]:
     """Laya's bounded option map, generated from the common legal set.
 
     Mirrors ``actionCandidates`` in the browser's LayaClient: per perceived
@@ -332,7 +358,11 @@ def laya_options(legal: LegalActionSet, perceived: PerceivedState) -> dict[str, 
         name = target.label or target.id
         if "click" in choices and ("CLICK" in affordances or target.role != "input"):
             options.append(
-                LayaOption(f"click:{target.id}", f'Click "{name}" ({target.role})', Decision("click", 0.0, point, frame_id=frame_id))
+                LayaOption(
+                    f"click:{target.id}",
+                    f'Click "{name}" ({target.role})',
+                    Decision("click", 0.0, point, frame_id=frame_id),
+                )
             )
         if "TYPE_TEXT" in affordances or target.role == "input":
             for index, choice in enumerate(texts):
@@ -340,7 +370,9 @@ def laya_options(legal: LegalActionSet, perceived: PerceivedState) -> dict[str, 
                     LayaOption(
                         f"type:{target.id}:{index}",
                         f'Type "{choice.text}" into "{name}"',
-                        Decision("type", 0.0, point, text=choice.text, frame_id=frame_id),
+                        Decision(
+                            "type", 0.0, point, text=choice.text, frame_id=frame_id
+                        ),
                     )
                 )
 
@@ -348,21 +380,48 @@ def laya_options(legal: LegalActionSet, perceived: PerceivedState) -> dict[str, 
         return LayaOption(
             choice.key,
             label,
-            Decision(choice.action, 0.0, text=choice.text, url=choice.url, direction=choice.direction, frame_id=frame_id),
+            Decision(
+                choice.action,
+                0.0,
+                text=choice.text,
+                url=choice.url,
+                direction=choice.direction,
+                frame_id=frame_id,
+            ),
         )
 
     for choice in legal.choices:
         if choice.action == "scroll":
-            options.append(plain(choice, f"Scroll {choice.direction} to reveal more of the current page"))
+            options.append(
+                plain(
+                    choice,
+                    f"Scroll {choice.direction} to reveal more of the current page",
+                )
+            )
         elif choice.action == "navigate":
-            options.append(plain(choice, f"Open the URL explicitly requested by the user: {choice.url}"))
+            options.append(
+                plain(
+                    choice,
+                    f"Open the URL explicitly requested by the user: {choice.url}",
+                )
+            )
     if "back" in choices:
         options.append(plain(choices["back"], "Go back to the previous page"))
     if "recover" in choices:
-        options.append(plain(choices["recover"], "Dismiss whatever is blocking the page"))
-    options.append(plain(choices["wait"], "Wait for the visible browser state to change"))
-    options.append(plain(choices["done"], "The user task is visibly complete; stop without another browser action"))
-    return {option.key: option for option in options[:LAYA_MAX_OPTIONS]}
+        options.append(
+            plain(choices["recover"], "Dismiss whatever is blocking the page")
+        )
+    tail = [
+        plain(choices["wait"], "Wait for the visible browser state to change"),
+        plain(
+            choices["done"],
+            "The user task is visibly complete; stop without another browser action",
+        ),
+    ]
+    return {
+        option.key: option
+        for option in options[: max(0, LAYA_MAX_OPTIONS - len(tail))] + tail
+    }
 
 
 class Perceiver(Protocol):
@@ -370,7 +429,9 @@ class Perceiver(Protocol):
 
 
 class Chooser(Protocol):
-    def choose(self, state: Mapping[str, Any], criteria: Mapping[str, str]) -> tuple[str, float]: ...
+    def choose(
+        self, state: Mapping[str, Any], criteria: Mapping[str, str]
+    ) -> tuple[str, float]: ...
 
 
 class LayaContractContestant:
@@ -395,7 +456,9 @@ class LayaContractContestant:
             "page_stable": perceived.page_stable,
             "tabs": [],
         }
-        key, confidence = self.chooser.choose(state, {key: option.label for key, option in options.items()})
+        key, confidence = self.chooser.choose(
+            state, {key: option.label for key, option in options.items()}
+        )
         if key not in options or _finite(confidence) is None:
             raise IllegalDecision("Laya returned an invalid bounded action")
         return replace(options[key].decision, confidence=float(confidence))
@@ -404,11 +467,15 @@ class LayaContractContestant:
 class LayaHttpChooser:
     """The Laya ``/v1/systemone`` choice endpoint, called as LayaClient does."""
 
-    def __init__(self, base_url: str = DEFAULT_LAYA_URL, *, timeout_s: float = 60.0) -> None:
+    def __init__(
+        self, base_url: str = DEFAULT_LAYA_URL, *, timeout_s: float = 60.0
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
 
-    def choose(self, state: Mapping[str, Any], criteria: Mapping[str, str]) -> tuple[str, float]:
+    def choose(
+        self, state: Mapping[str, Any], criteria: Mapping[str, str]
+    ) -> tuple[str, float]:
         body = json.dumps(
             {
                 "state": dict(state),
@@ -477,7 +544,11 @@ class PanopticStreamPerceiver:
     def perceive(self, observation: Observation) -> PerceivedState | None:
         stamps: list[int] = []
         for i, frame in enumerate(observation.frames):
-            stamp = frame.captured_at_ms if frame.captured_at_ms is not None else i * self.frame_interval_ms
+            stamp = (
+                frame.captured_at_ms
+                if frame.captured_at_ms is not None
+                else i * self.frame_interval_ms
+            )
             stamps.append(max(int(stamp), stamps[-1] + 1) if stamps else int(stamp))
         with ws_connect(self.url, max_size=None) as socket:
             socket.send(
@@ -503,18 +574,34 @@ class PanopticStreamPerceiver:
                 }
                 for frame, stamp in zip(observation.frames, stamps)
             ]
-            events = [{"time_ms": stamps[0], "content": _history_event(step)} for step in observation.history]
+            events = [
+                {"time_ms": stamps[0], "content": _history_event(step)}
+                for step in observation.history
+            ]
             last = stamps[-1]
             for round_idx in range(self.max_rounds):
-                socket.send(json.dumps({"type": "batch", "epoch": 0, "frames": batch, "events": events}))
+                socket.send(
+                    json.dumps(
+                        {"type": "batch", "epoch": 0, "frames": batch, "events": events}
+                    )
+                )
                 message = json.loads(socket.recv())
                 if message.get("type") == "error":
                     raise RuntimeError(f"Panoptic error: {message.get('reason')}")
-                if message.get("type") == "temporal_state" and message.get("state") == "response":
+                if (
+                    message.get("type") == "temporal_state"
+                    and message.get("state") == "response"
+                ):
                     socket.send(json.dumps({"type": "end"}))
                     return parse_visual_state(str(message.get("content") or ""))
                 last += self.frame_interval_ms
-                batch = [{**batch[-1], "frame_id": f"{observation.current.frame_id}:r{round_idx + 1}", "timestamp_ms": last}]
+                batch = [
+                    {
+                        **batch[-1],
+                        "frame_id": f"{observation.current.frame_id}:r{round_idx + 1}",
+                        "timestamp_ms": last,
+                    }
+                ]
                 events = []
             socket.send(json.dumps({"type": "end"}))
         return None
@@ -528,11 +615,21 @@ def matches(decision: Decision | None, oracle: Oracle) -> bool:
 
     if decision is None or decision.action != oracle.action:
         return False
-    argument = {"type": decision.text, "navigate": decision.url, "scroll": decision.direction}
-    if oracle.action in argument and oracle.value is not None and argument[oracle.action] != oracle.value:
+    argument = {
+        "type": decision.text,
+        "navigate": decision.url,
+        "scroll": decision.direction,
+    }
+    if (
+        oracle.action in argument
+        and oracle.value is not None
+        and argument[oracle.action] != oracle.value
+    ):
         return False
     if oracle.box is not None and oracle.action in _TARGETED_ORACLE:
-        return decision.target is not None and oracle.box.contains(Point(decision.target.x, decision.target.y))
+        return decision.target is not None and oracle.box.contains(
+            Point(decision.target.x, decision.target.y)
+        )
     return True
 
 
@@ -580,7 +677,9 @@ class CaseResult:
         }
 
 
-def run_case(contestant: Contestant, case: BenchmarkCase, gate: DecisionGate) -> CaseResult:
+def run_case(
+    contestant: Contestant, case: BenchmarkCase, gate: DecisionGate
+) -> CaseResult:
     observation = case.observation
     legal = observation.legal()
     started = time.perf_counter()
@@ -589,7 +688,9 @@ def run_case(contestant: Contestant, case: BenchmarkCase, gate: DecisionGate) ->
     except DecisionError as exc:
         proposed = exc
     latency_ms = (time.perf_counter() - started) * 1000.0
-    gated = gate_decision(proposed, legal, motion=observation.stream_motion(), gate=gate)
+    gated = gate_decision(
+        proposed, legal, motion=observation.stream_motion(), gate=gate
+    )
     return CaseResult(
         case_id=observation.case_id,
         family=case.family,
@@ -598,8 +699,11 @@ def run_case(contestant: Contestant, case: BenchmarkCase, gate: DecisionGate) ->
         gated=gated,
         latency_ms=latency_ms,
         correct=matches(gated.decision, case.oracle),
-        proposal_correct=gated.status != "rejected" and matches(gated.proposed, case.oracle),
-        grounded=grounded(gated.proposed if gated.status != "rejected" else None, case.oracle),
+        proposal_correct=gated.status != "rejected"
+        and matches(gated.proposed, case.oracle),
+        grounded=grounded(
+            gated.proposed if gated.status != "rejected" else None, case.oracle
+        ),
     )
 
 
@@ -615,7 +719,9 @@ def _percentile(values: Sequence[float], q: float) -> float | None:
     return ordered[index]
 
 
-def calibration(pairs: Sequence[tuple[float, bool]], bins: int = CALIBRATION_BINS) -> dict[str, Any]:
+def calibration(
+    pairs: Sequence[tuple[float, bool]], bins: int = CALIBRATION_BINS
+) -> dict[str, Any]:
     """Expected calibration error, Brier score and a risk-coverage curve."""
 
     if not pairs:
@@ -625,7 +731,12 @@ def calibration(pairs: Sequence[tuple[float, bool]], bins: int = CALIBRATION_BIN
     for confidence, ok in pairs:
         buckets[min(bins - 1, int(confidence * bins))].append((confidence, ok))
     ece = sum(
-        len(bucket) / n * abs(sum(c for c, _ in bucket) / len(bucket) - sum(ok for _, ok in bucket) / len(bucket))
+        len(bucket)
+        / n
+        * abs(
+            sum(c for c, _ in bucket) / len(bucket)
+            - sum(ok for _, ok in bucket) / len(bucket)
+        )
         for bucket in buckets
         if bucket
     )
@@ -656,15 +767,23 @@ def summarize(results: Sequence[CaseResult]) -> dict[str, Any]:
     return {
         "cases": len(results),
         "validity": _rate(len(results) - len(rejected), len(results)),
-        "rejections": [{"case_id": r.case_id, "reason": r.gated.reason} for r in rejected][:50],
-        "executed_invalid": sum(1 for r in results if not r.valid and r.executed.action != "wait"),
+        "rejections": [
+            {"case_id": r.case_id, "reason": r.gated.reason} for r in rejected
+        ][:50],
+        "executed_invalid": sum(
+            1 for r in results if not r.valid and r.executed.action != "wait"
+        ),
         "accuracy": _rate(sum(r.correct for r in results), len(results)),
-        "proposal_accuracy": _rate(sum(r.proposal_correct for r in results), len(results)),
+        "proposal_accuracy": _rate(
+            sum(r.proposal_correct for r in results), len(results)
+        ),
         "grounding": _rate(sum(grounding), len(grounding)),
         "abstention": {
-            "should_wait_recall": _rate(sum(r.executed.action == "wait" for r in should_wait), len(should_wait)),
+            "should_wait_recall": _rate(
+                sum(r.executed.action == "wait" for r in should_wait), len(should_wait)
+            ),
             "false_abstention": _rate(
-                sum(r.executed.action == "wait" and r.gated.status != "act" for r in should_act), len(should_act)
+                sum(r.executed.action == "wait" for r in should_act), len(should_act)
             ),
             "gate_abstained": sum(r.gated.status == "abstain" for r in results),
         },
@@ -684,7 +803,9 @@ def summarize(results: Sequence[CaseResult]) -> dict[str, Any]:
     }
 
 
-def paired_difference(candidate: Sequence[bool], incumbent: Sequence[bool]) -> dict[str, Any]:
+def paired_difference(
+    candidate: Sequence[bool], incumbent: Sequence[bool]
+) -> dict[str, Any]:
     """Candidate minus incumbent on the same items, with a one-sided 95% bound."""
 
     if len(candidate) != len(incumbent):
@@ -708,7 +829,17 @@ def case_digest(cases: Iterable[BenchmarkCase]) -> str:
     digest = hashlib.sha256()
     for case in cases:
         obs = case.observation
-        digest.update(json.dumps([obs.case_id, obs.goal, [f.frame_id for f in obs.frames], list(obs.history)], default=str).encode())
+        digest.update(
+            json.dumps(
+                [
+                    obs.case_id,
+                    obs.goal,
+                    [f.frame_id for f in obs.frames],
+                    list(obs.history),
+                ],
+                default=str,
+            ).encode()
+        )
     return digest.hexdigest()
 
 
@@ -718,20 +849,28 @@ def run_cases(
     gate: DecisionGate | None = None,
 ) -> dict[str, Any]:
     gate = gate if gate is not None else DecisionGate()
-    results = {contestant.name: [run_case(contestant, case, gate) for case in cases] for contestant in contestants}
+    results = {
+        contestant.name: [run_case(contestant, case, gate) for case in cases]
+        for contestant in contestants
+    }
     report: dict[str, Any] = {
         "case_digest": case_digest(cases),
         "gate": gate.to_json(),
         "contestants": {name: summarize(rows) for name, rows in results.items()},
-        "results": {name: [row.to_json() for row in rows] for name, rows in results.items()},
+        "results": {
+            name: [row.to_json() for row in rows] for name, rows in results.items()
+        },
     }
     if SMALLER_GNSIS in results and LAYA_CONTRACT in results:
         ours, theirs = results[SMALLER_GNSIS], results[LAYA_CONTRACT]
         targeted = [i for i, row in enumerate(ours) if row.grounded is not None]
         report["paired"] = {
-            "accuracy": paired_difference([r.correct for r in ours], [r.correct for r in theirs]),
+            "accuracy": paired_difference(
+                [r.correct for r in ours], [r.correct for r in theirs]
+            ),
             "grounding": paired_difference(
-                [bool(ours[i].grounded) for i in targeted], [bool(theirs[i].grounded) for i in targeted]
+                [bool(ours[i].grounded) for i in targeted],
+                [bool(theirs[i].grounded) for i in targeted],
             ),
         }
     return report
@@ -760,7 +899,12 @@ class EpisodeEnvironment(Protocol):
 class _ContestantPolicy:
     """Presents a contestant to the production decision session as its policy."""
 
-    def __init__(self, contestant: Contestant, screen_frames: LatestScreenFrameBuffer, case_id: str) -> None:
+    def __init__(
+        self,
+        contestant: Contestant,
+        screen_frames: LatestScreenFrameBuffer,
+        case_id: str,
+    ) -> None:
         self.contestant = contestant
         self.screen_frames = screen_frames
         self.case_id = case_id
@@ -777,7 +921,9 @@ class _ContestantPolicy:
         cache: Any,
         allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision:
-        recent = tuple(reversed(self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)))
+        recent = tuple(
+            reversed(self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS))
+        )
         if not recent:
             raise RuntimeError("no consumed visual frame is available")
         observation = Observation(
@@ -825,7 +971,9 @@ class EpisodeResult:
         }
 
 
-def run_episode(contestant: Contestant, env: EpisodeEnvironment, gate: DecisionGate | None = None) -> EpisodeResult:
+def run_episode(
+    contestant: Contestant, env: EpisodeEnvironment, gate: DecisionGate | None = None
+) -> EpisodeResult:
     policy = _ContestantPolicy(contestant, env.screen_frames, env.episode_id)
     session = PersistentVisualDecisionSession(policy, env.screen_frames, gate=gate)
     session.set_task(env.goal)
@@ -839,7 +987,12 @@ def run_episode(contestant: Contestant, env: EpisodeEnvironment, gate: DecisionG
             claimed_done = True
             break
         env.execute(
-            step_from_decision(gated, run_id=f"benchmark-{contestant.name}", case_id=f"{env.episode_id}#{index}", goal=env.goal)
+            step_from_decision(
+                gated,
+                run_id=f"benchmark-{contestant.name}",
+                case_id=f"{env.episode_id}#{index}",
+                goal=env.goal,
+            )
         )
         steps += 1
         if gated.status == "act":
@@ -865,7 +1018,10 @@ def summarize_episodes(results: Sequence[EpisodeResult]) -> dict[str, Any]:
         "mean_steps": sum(r.steps for r in results) / len(results) if results else None,
         "rejected": sum(r.rejected for r in results),
         "abstained": sum(r.abstained for r in results),
-        "latency_ms": {"p50": _percentile(latencies, 0.5), "p95": _percentile(latencies, 0.95)},
+        "latency_ms": {
+            "p50": _percentile(latencies, 0.5),
+            "p95": _percentile(latencies, 0.95),
+        },
     }
 
 
@@ -905,7 +1061,14 @@ def retirement_gate(
     checks: list[dict[str, Any]] = []
 
     def check(name: str, value: Any, threshold: Any, passed: bool) -> None:
-        checks.append({"name": name, "value": value, "threshold": threshold, "passed": bool(passed)})
+        checks.append(
+            {
+                "name": name,
+                "value": value,
+                "threshold": threshold,
+                "passed": bool(passed),
+            }
+        )
 
     def at_least(name: str, value: Any, threshold: float) -> None:
         check(name, value, f">= {threshold}", value is not None and value >= threshold)
@@ -913,15 +1076,38 @@ def retirement_gate(
     def at_most(name: str, value: Any, threshold: float) -> None:
         check(name, value, f"<= {threshold}", value is not None and value <= threshold)
 
-    at_least("paired_cases", min(ours.get("cases", 0), theirs.get("cases", 0)), t.min_cases)
+    at_least(
+        "paired_cases", min(ours.get("cases", 0), theirs.get("cases", 0)), t.min_cases
+    )
     at_least("validity", (ours.get("validity") or {}).get("rate"), t.min_validity)
-    check("executed_invalid", ours.get("executed_invalid"), "== 0", ours.get("executed_invalid") == 0)
-    at_least("accuracy_vs_laya_lower_95", (paired.get("accuracy") or {}).get("lower_95"), -t.non_inferiority_margin)
-    at_least("grounding_vs_laya_lower_95", (paired.get("grounding") or {}).get("lower_95"), -t.non_inferiority_margin)
+    check(
+        "executed_invalid",
+        ours.get("executed_invalid"),
+        "== 0",
+        ours.get("executed_invalid") == 0,
+    )
+    at_least(
+        "accuracy_vs_laya_lower_95",
+        (paired.get("accuracy") or {}).get("lower_95"),
+        -t.non_inferiority_margin,
+    )
+    at_least(
+        "grounding_vs_laya_lower_95",
+        (paired.get("grounding") or {}).get("lower_95"),
+        -t.non_inferiority_margin,
+    )
     at_most("ece", (ours.get("calibration") or {}).get("ece"), t.max_ece)
     abstention = ours.get("abstention") or {}
-    at_least("should_wait_recall", (abstention.get("should_wait_recall") or {}).get("rate"), t.min_should_wait_recall)
-    at_most("false_abstention", (abstention.get("false_abstention") or {}).get("rate"), t.max_false_abstention)
+    at_least(
+        "should_wait_recall",
+        (abstention.get("should_wait_recall") or {}).get("rate"),
+        t.min_should_wait_recall,
+    )
+    at_most(
+        "false_abstention",
+        (abstention.get("false_abstention") or {}).get("rate"),
+        t.max_false_abstention,
+    )
     ours_p95 = (ours.get("latency_ms") or {}).get("p95")
     theirs_p95 = (theirs.get("latency_ms") or {}).get("p95")
     check(
@@ -930,17 +1116,25 @@ def retirement_gate(
         f"<= {theirs_p95}",
         ours_p95 is not None and theirs_p95 is not None and ours_p95 <= theirs_p95,
     )
-    at_least("paired_episodes", (paired_ep.get("task_success") or {}).get("n", 0), t.min_episodes)
+    at_least(
+        "paired_episodes",
+        (paired_ep.get("task_success") or {}).get("n", 0),
+        t.min_episodes,
+    )
     at_least(
         "task_success_vs_laya_lower_95",
         (paired_ep.get("task_success") or {}).get("lower_95"),
         -t.non_inferiority_margin,
     )
-    check("false_done", ours_ep.get("false_done"), "== 0", ours_ep.get("false_done") == 0)
+    check(
+        "false_done", ours_ep.get("false_done"), "== 0", ours_ep.get("false_done") == 0
+    )
     return {"passed": all(item["passed"] for item in checks), "checks": checks}
 
 
-def run_episodes(contestants: Sequence[Contestant], environments: Mapping[str, Any]) -> dict[str, Any]:
+def run_episodes(
+    contestants: Sequence[Contestant], environments: Mapping[str, Any]
+) -> dict[str, Any]:
     """Run every contestant on freshly built environments for each episode.
 
     ``environments`` maps an episode id to a zero-argument factory, so each
@@ -948,17 +1142,24 @@ def run_episodes(contestants: Sequence[Contestant], environments: Mapping[str, A
     """
 
     results = {
-        contestant.name: [run_episode(contestant, factory()) for factory in environments.values()]
+        contestant.name: [
+            run_episode(contestant, factory()) for factory in environments.values()
+        ]
         for contestant in contestants
     }
     report: dict[str, Any] = {
-        "contestants": {name: summarize_episodes(rows) for name, rows in results.items()},
-        "results": {name: [row.to_json() for row in rows] for name, rows in results.items()},
+        "contestants": {
+            name: summarize_episodes(rows) for name, rows in results.items()
+        },
+        "results": {
+            name: [row.to_json() for row in rows] for name, rows in results.items()
+        },
     }
     if SMALLER_GNSIS in results and LAYA_CONTRACT in results:
         report["paired"] = {
             "task_success": paired_difference(
-                [r.success for r in results[SMALLER_GNSIS]], [r.success for r in results[LAYA_CONTRACT]]
+                [r.success for r in results[SMALLER_GNSIS]],
+                [r.success for r in results[LAYA_CONTRACT]],
             )
         }
     return report
@@ -972,15 +1173,27 @@ def _smaller_gnsis(args: argparse.Namespace) -> Contestant:
     from .backbone import BackboneConfig
     from .engine import JEVEngine, VisualCache
 
-    engine = JEVEngine(BackboneConfig(model_dir=args.model, dtype=args.dtype, device=args.device), args.head)
+    engine = JEVEngine(
+        BackboneConfig(model_dir=args.model, dtype=args.dtype, device=args.device),
+        args.head,
+    )
     return PolicyContestant(engine, cache=VisualCache())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Common System-1 benchmark: Smaller GNSIS against the Laya contract.")
-    parser.add_argument("--cases", required=True, help="JSONL of native or collect.py state rows")
+    parser = argparse.ArgumentParser(
+        description="Common System-1 benchmark: Smaller GNSIS against the Laya contract."
+    )
+    parser.add_argument(
+        "--cases", required=True, help="JSONL of native or collect.py state rows"
+    )
     parser.add_argument("--frames-dir", default=None)
-    parser.add_argument("--contestant", action="append", choices=(SMALLER_GNSIS, LAYA_CONTRACT), required=True)
+    parser.add_argument(
+        "--contestant",
+        action="append",
+        choices=(SMALLER_GNSIS, LAYA_CONTRACT),
+        required=True,
+    )
     parser.add_argument("--model", help="MiniCPM-V backbone path (smaller-gnsis)")
     parser.add_argument("--head", help="JEV head checkpoint (smaller-gnsis)")
     parser.add_argument("--device", default="cpu")
@@ -988,8 +1201,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--laya-url", default=DEFAULT_LAYA_URL)
     parser.add_argument("--panoptic-url", default=DEFAULT_PANOPTIC_URL)
     parser.add_argument("--panoptic-token", default=None)
-    parser.add_argument("--min-confidence", type=float, default=DecisionGate().min_confidence)
-    parser.add_argument("--episodes-report", default=None, help="JSON report from run_episodes, for the gate")
+    parser.add_argument(
+        "--min-confidence", type=float, default=DecisionGate().min_confidence
+    )
+    parser.add_argument(
+        "--episodes-report",
+        default=None,
+        help="JSON report from run_episodes, for the gate",
+    )
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
@@ -1002,15 +1221,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             contestants.append(
                 LayaContractContestant(
-                    PanopticStreamPerceiver(args.panoptic_url, token=args.panoptic_token),
+                    PanopticStreamPerceiver(
+                        args.panoptic_url, token=args.panoptic_token
+                    ),
                     LayaHttpChooser(args.laya_url),
                 )
             )
-    report = run_cases(contestants, load_cases(args.cases, args.frames_dir), DecisionGate(min_confidence=args.min_confidence))
-    episodes = json.loads(Path(args.episodes_report).read_text()) if args.episodes_report else None
+    report = run_cases(
+        contestants,
+        load_cases(args.cases, args.frames_dir),
+        DecisionGate(min_confidence=args.min_confidence),
+    )
+    episodes = (
+        json.loads(Path(args.episodes_report).read_text())
+        if args.episodes_report
+        else None
+    )
     report["retirement_gate"] = retirement_gate(report, episodes)
     Path(args.out).write_text(json.dumps(report, indent=2))
-    print(json.dumps({"contestants": report["contestants"], "retirement_gate": report["retirement_gate"]}, indent=2))
+    print(
+        json.dumps(
+            {
+                "contestants": report["contestants"],
+                "retirement_gate": report["retirement_gate"],
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

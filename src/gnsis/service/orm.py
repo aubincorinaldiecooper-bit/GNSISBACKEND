@@ -39,9 +39,13 @@ class Workspace(Base):
     __tablename__ = "workspaces"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    owner_auth_subject: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    owner_auth_subject: Mapped[str] = mapped_column(
+        String(255), unique=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), default="Personal")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
@@ -60,17 +64,21 @@ class GitHubInstallation(Base):
     __tablename__ = "github_installations"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workspace_id: Mapped[str] = mapped_column(
-        ForeignKey("workspaces.id"), index=True
-    )
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
     github_installation_id: Mapped[int] = mapped_column(
         BigInteger, unique=True, index=True
     )
     github_account_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    github_account_login: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    github_account_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    github_account_login: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    github_account_type: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
@@ -107,7 +115,9 @@ class Repository(Base):
     private: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
@@ -125,7 +135,9 @@ class WebhookDelivery(Base):
 
     delivery_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     event: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class Job(Base):
@@ -152,22 +164,34 @@ class Job(Base):
     context: Mapped[dict] = mapped_column(JSON, default=dict)
     # Tenancy — nullable so legacy/internal rows created before this migration
     # (and internal-API-key runs) remain valid; user runs always set both.
-    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     # Conversational run threads. A thread groups the linked, immutable runs of
     # one continuing conversation; ``thread_id`` is the id of the thread's first
     # (root) run. ``parent_job_id`` is the run this one follows up on (a normal
     # instruction, a Retry, or a Run-again). Both nullable so legacy rows created
     # before threading stay valid: such a row is its own single-run thread, so a
     # NULL ``thread_id`` is read as the row's own id (see ``effective_thread_id``).
-    thread_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    parent_job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    thread_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    parent_job_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     # Public-API idempotency: the caller-supplied Idempotency-Key for the request
     # that created this run. Unique per workspace (partial unique index, NULLs
     # exempt) so a retried POST /v1/runs returns the original run instead of
     # creating or billing a second one. Null for web-composer runs.
-    idempotency_key: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(191), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
@@ -192,7 +216,9 @@ class JobLog(Base):
     level: Mapped[str] = mapped_column(String(16), default="info")
     message: Mapped[str] = mapped_column(Text)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
     job: Mapped[Job] = relationship(back_populates="logs")
 
@@ -204,7 +230,9 @@ class JobCheckpoint(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     phase: Mapped[str] = mapped_column(String(32), index=True)
     content: Mapped[Any] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
     job: Mapped[Job] = relationship(back_populates="checkpoints")
 
@@ -215,7 +243,9 @@ class JobDiff(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), primary_key=True)
     patch: Mapped[str] = mapped_column(Text)
     files_changed: Mapped[list] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class JobApproval(Base):
@@ -233,7 +263,9 @@ class JobApproval(Base):
     decision: Mapped[str] = mapped_column(String(16))
     actor: Mapped[str] = mapped_column(String(255))
     note: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
     job: Mapped[Job] = relationship(back_populates="approvals")
 
@@ -246,7 +278,9 @@ class PullRequest(Base):
     url: Mapped[str] = mapped_column(String(512))
     branch: Mapped[str] = mapped_column(String(255))
     head_sha: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 # -- public-beta remote execution (GitHub Actions executor) --------------------
@@ -268,8 +302,12 @@ class ExecutionRun(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
-    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     provider: Mapped[str] = mapped_column(String(32), default="github_actions")
 
     # Immutable customer target.
@@ -285,20 +323,26 @@ class ExecutionRun(Base):
     # Fixed executor identity + the exact trusted workflow commit.
     executor_owner: Mapped[str] = mapped_column(String(255), default="")
     executor_repository: Mapped[str] = mapped_column(String(255), default="")
-    executor_repository_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    executor_repository_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )
     executor_workflow: Mapped[str] = mapped_column(String(255), default="execute.yml")
     executor_ref: Mapped[str] = mapped_column(String(255), default="main")
     trusted_workflow_sha: Mapped[str] = mapped_column(String(64), default="")
 
     # GitHub-assigned run identity, persisted from the dispatch/lookup response.
-    workflow_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    workflow_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
     workflow_run_attempt: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     workflow_run_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
 
     # Short-lived executor token — hash only, plus its lifecycle.
-    token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     token_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -324,10 +368,18 @@ class ExecutionRun(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Lifecycle timestamps.
-    dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cancellation_requested_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -336,7 +388,9 @@ class ExecutionRun(Base):
     )
 
     failure_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    security_validation: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    security_validation: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     # Intelligence context pinned at dispatch, so a run permanently retains the
     # exact trusted policy version and the exact memory it was allowed to see —
@@ -361,7 +415,9 @@ class ExecutionRun(Base):
     primary_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
@@ -381,9 +437,13 @@ class ExecutionModelCall(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     # Deterministic correlation key attached to the LiteLLM request metadata, so
     # the LiteLLM usage callback can be tied back to this exact model call.
-    event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    event_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     server_tool_usage: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class UsageRecord(Base):
@@ -412,20 +472,34 @@ class UsageRecord(Base):
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(191), nullable=True)
     # The provider's own request id (distinct from litellm_request_id); useful for
     # provider-side reconciliation and distinguishing a retry from a new call.
-    provider_request_id: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
+    provider_request_id: Mapped[Optional[str]] = mapped_column(
+        String(191), nullable=True, index=True
+    )
 
     # Attribution to existing GNSIS records.
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(String(255), index=True)
-    team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    team_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     # The Genesis virtual key the request was made with (for per-key attribution
     # + limits). Null for non-gateway (native run / callback) usage.
-    virtual_key_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    virtual_key_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    trace_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    application_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    trace_event_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    application_name: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     engine: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     phase: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     environment: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -438,29 +512,45 @@ class UsageRecord(Base):
     cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
     reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
-    request_status: Mapped[str] = mapped_column(String(32), default="success", index=True)
+    request_status: Mapped[str] = mapped_column(
+        String(32), default="success", index=True
+    )
     # Provider-reported cost, exactly as received, as a decimal string (never
     # float). Kept verbatim; the Genesis-calculated cost is stored separately so
     # neither overwrites the other and discrepancies can be flagged.
     upstream_cost: Mapped[str] = mapped_column(String(40), default="0")
-    genesis_calculated_cost: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    genesis_calculated_cost: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True
+    )
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     # Where the provider cost came from: "provider_reported" or "unknown". An
     # "unknown" cost is NEVER silently treated as $0 — the row is flagged below.
     cost_source: Mapped[str] = mapped_column(String(24), default="provider_reported")
     # "resolved" | "needs_reconciliation". Unknown pricing / cost, or a meaningful
     # provider-vs-calculated discrepancy, must surface here rather than mis-bill.
-    reconciliation_state: Mapped[str] = mapped_column(String(24), default="resolved", index=True)
+    reconciliation_state: Mapped[str] = mapped_column(
+        String(24), default="resolved", index=True
+    )
     # Why a row needs reconciliation: unknown_cost / unknown_pricing / cost_discrepancy.
-    reconciliation_reason: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    reconciliation_reason: Mapped[Optional[str]] = mapped_column(
+        String(48), nullable=True
+    )
     # The model_pricing row used to compute genesis_calculated_cost (historical).
-    pricing_version_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    pricing_version_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     # Classified failure bucket (e.g. provider_timeout, rate_limited, auth_error).
-    error_category: Mapped[Optional[str]] = mapped_column(String(48), nullable=True, index=True)
+    error_category: Mapped[Optional[str]] = mapped_column(
+        String(48), nullable=True, index=True
+    )
     # For a retry, the litellm_request_id of the original request it retries.
-    retry_of: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    retry_of: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class ExecutionEvent(Base):
@@ -479,7 +569,9 @@ class ExecutionEvent(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128), default="")
     kind: Mapped[str] = mapped_column(String(64), default="")
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 # -- billing: immutable charges, prepaid balance ledger, reservations ----------
@@ -506,8 +598,12 @@ class UsageCharge(Base):
     user_id: Mapped[str] = mapped_column(String(255), index=True)
     run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     trace_event_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    application_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    application_name: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     # Exact applied pricing (decimal strings; never floats).
     upstream_cost: Mapped[str] = mapped_column(String(40), default="0")
     markup_rate: Mapped[str] = mapped_column(String(40), default="0")
@@ -515,8 +611,12 @@ class UsageCharge(Base):
     retail_cost: Mapped[str] = mapped_column(String(40), default="0")
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     rate_card_version: Mapped[str] = mapped_column(String(64), default="")
-    billing_status: Mapped[str] = mapped_column(String(32), default="charged", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    billing_status: Mapped[str] = mapped_column(
+        String(32), default="charged", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class BalanceTransaction(Base):
@@ -538,13 +638,21 @@ class BalanceTransaction(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
     transaction_type: Mapped[str] = mapped_column(String(32), index=True)
-    signed_amount: Mapped[str] = mapped_column(String(40), default="0")  # +credit / -debit
-    usage_charge_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    signed_amount: Mapped[str] = mapped_column(
+        String(40), default="0"
+    )  # +credit / -debit
+    usage_charge_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     stripe_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    stripe_payment_reference: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    stripe_payment_reference: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(191))
     currency: Mapped[str] = mapped_column(String(8), default="USD")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class BalanceReservation(Base):
@@ -556,16 +664,18 @@ class BalanceReservation(Base):
     """
 
     __tablename__ = "balance_reservations"
-    __table_args__ = (
-        UniqueConstraint("reservation_key", name="uq_reservation_key"),
-    )
+    __table_args__ = (UniqueConstraint("reservation_key", name="uq_reservation_key"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
     reservation_key: Mapped[str] = mapped_column(String(128))
     amount: Mapped[str] = mapped_column(String(40), default="0")
-    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active/settled/released
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", index=True
+    )  # active/settled/released
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class WorkspaceBilling(Base):
@@ -574,7 +684,9 @@ class WorkspaceBilling(Base):
     __tablename__ = "workspace_billing"
 
     workspace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class BetaCreditGrant(Base):
@@ -597,15 +709,25 @@ class BetaCreditGrant(Base):
     amount: Mapped[str] = mapped_column(String(40), default="0")  # decimal string, > 0
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     reason: Mapped[str] = mapped_column(Text, default="")
-    operator: Mapped[str] = mapped_column(String(255), default="")  # attested operator id
+    operator: Mapped[str] = mapped_column(
+        String(255), default=""
+    )  # attested operator id
     idempotency_key: Mapped[str] = mapped_column(String(191))
-    status: Mapped[str] = mapped_column(String(16), default="granted", index=True)  # granted/reversed
+    status: Mapped[str] = mapped_column(
+        String(16), default="granted", index=True
+    )  # granted/reversed
     transaction_id: Mapped[str] = mapped_column(String(64))
-    reversal_transaction_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reversal_transaction_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
     reversed_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     reversed_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    reversed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    reversed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class LimitPolicy(Base):
@@ -620,20 +742,38 @@ class LimitPolicy(Base):
     __tablename__ = "limit_policies"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workspace_id: Mapped[str] = mapped_column(String(64), index=True)  # owning workspace
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), index=True
+    )  # owning workspace
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    scope_type: Mapped[str] = mapped_column(String(24), index=True)  # workspace/project/environment/user/team/virtual_key
+    scope_type: Mapped[str] = mapped_column(
+        String(24), index=True
+    )  # workspace/project/environment/user/team/virtual_key
     scope_id: Mapped[str] = mapped_column(String(64), index=True)
-    limit_type: Mapped[str] = mapped_column(String(16))              # per_run/daily/monthly/total
+    limit_type: Mapped[str] = mapped_column(String(16))  # per_run/daily/monthly/total
     amount: Mapped[str] = mapped_column(String(40), default="0")
     currency: Mapped[str] = mapped_column(String(8), default="USD")
-    warning_threshold: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # 0..1
-    enforcement_mode: Mapped[str] = mapped_column(String(16), default="block")  # observe_only/warn/block
-    reset_period: Mapped[str] = mapped_column(String(12), default="month")      # run/day/month/never
-    effective_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+    warning_threshold: Mapped[Optional[str]] = mapped_column(
+        String(8), nullable=True
+    )  # 0..1
+    enforcement_mode: Mapped[str] = mapped_column(
+        String(16), default="block"
+    )  # observe_only/warn/block
+    reset_period: Mapped[str] = mapped_column(
+        String(12), default="month"
+    )  # run/day/month/never
+    effective_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
 
 
 class LimitDecision(Base):
@@ -644,8 +784,12 @@ class LimitDecision(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     request_id: Mapped[str] = mapped_column(String(64), index=True)
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
-    policy_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    policy_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # for key-inline limits
+    policy_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    policy_ref: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )  # for key-inline limits
     scope_type: Mapped[str] = mapped_column(String(24))
     scope_id: Mapped[str] = mapped_column(String(64))
     limit_type: Mapped[str] = mapped_column(String(16))
@@ -655,7 +799,9 @@ class LimitDecision(Base):
     actual_usage: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     enforcement_mode: Mapped[str] = mapped_column(String(16))
     result: Mapped[str] = mapped_column(String(12), index=True)  # ok/warn/block
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class LimitReservation(Base):
@@ -669,19 +815,29 @@ class LimitReservation(Base):
         # of the same scope (e.g. a workspace daily *and* monthly cap); this mirrors
         # how active holds are summed (scope_type + scope_id + window_key).
         UniqueConstraint(
-            "reservation_key", "scope_type", "scope_id", "window_key", name="uq_limit_resv"
+            "reservation_key",
+            "scope_type",
+            "scope_id",
+            "window_key",
+            name="uq_limit_resv",
         ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    reservation_key: Mapped[str] = mapped_column(String(64), index=True)  # the Genesis request id
+    reservation_key: Mapped[str] = mapped_column(
+        String(64), index=True
+    )  # the Genesis request id
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
     scope_type: Mapped[str] = mapped_column(String(24))
     scope_id: Mapped[str] = mapped_column(String(64), index=True)
     window_key: Mapped[str] = mapped_column(String(48), index=True)
     amount: Mapped[str] = mapped_column(String(40), default="0")
-    status: Mapped[str] = mapped_column(String(12), default="active", index=True)  # active/released/settled
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    status: Mapped[str] = mapped_column(
+        String(12), default="active", index=True
+    )  # active/released/settled
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class ModelPricing(Base):
@@ -695,7 +851,9 @@ class ModelPricing(Base):
 
     __tablename__ = "model_pricing"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # == pricing_version_id
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True
+    )  # == pricing_version_id
     provider: Mapped[str] = mapped_column(String(64), index=True)
     model: Mapped[str] = mapped_column(String(128), index=True)
     # Per-token prices as decimal strings.
@@ -704,10 +862,16 @@ class ModelPricing(Base):
     cached_input_price: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     reasoning_price: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
-    effective_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
-    effective_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    effective_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    effective_end: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class VirtualKey(Base):
@@ -722,23 +886,35 @@ class VirtualKey(Base):
     """
 
     __tablename__ = "virtual_keys"
-    __table_args__ = (
-        UniqueConstraint("key_hash", name="uq_virtual_key_hash"),
-    )
+    __table_args__ = (UniqueConstraint("key_hash", name="uq_virtual_key_hash"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    key_hash: Mapped[str] = mapped_column(String(128), index=True)  # sha256 hex; never the secret
-    key_prefix: Mapped[str] = mapped_column(String(32), default="")  # e.g. "gns_live_ab12cd…"
-    mode: Mapped[str] = mapped_column(String(8), default="live")     # live | test
+    key_hash: Mapped[str] = mapped_column(
+        String(128), index=True
+    )  # sha256 hex; never the secret
+    key_prefix: Mapped[str] = mapped_column(
+        String(32), default=""
+    )  # e.g. "gns_live_ab12cd…"
+    mode: Mapped[str] = mapped_column(String(8), default="live")  # live | test
     name: Mapped[str] = mapped_column(String(128), default="")
-    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active/disabled/rotated
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", index=True
+    )  # active/disabled/rotated
 
     # Attribution scopes (workspace required; the rest optional).
     workspace_id: Mapped[str] = mapped_column(String(64), index=True)
-    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    environment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
-    team_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    environment_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    team_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
 
     # Restrictions ("" / null = unrestricted). CSV of provider / "provider/model".
     allowed_providers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -759,28 +935,40 @@ class VirtualKey(Base):
     daily_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     monthly_limit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
 
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    rotated_to: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # successor key id
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rotated_to: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )  # successor key id
     key_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class VisualUsageRecord(Base):
     """One idempotently ingested visual-session usage report."""
 
     __tablename__ = "visual_usage_records"
-    __table_args__ = (
-        UniqueConstraint("event_id", name="uq_visual_usage_event_id"),
-    )
+    __table_args__ = (UniqueConstraint("event_id", name="uq_visual_usage_event_id"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
     workspace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     virtual_key_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    environment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    environment_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     grant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     report_seq: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -793,6 +981,11 @@ class VisualUsageRecord(Base):
     inference_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     session_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # The runtime-reported time the usage was generated; quota attribution uses
+    # this day rather than ingestion time so delayed reports land correctly.
+    reported_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, index=True
     )
@@ -820,11 +1013,21 @@ class AgentMemory(Base):
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     approved: Mapped[bool] = mapped_column(Boolean, default=True)
     # Tenant-strict scoping + provenance (nullable for legacy rows).
-    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    memory_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    source_job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    memory_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    source_job_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class MemoryProvenance(Base):
@@ -840,14 +1043,22 @@ class MemoryProvenance(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     memory_id: Mapped[str] = mapped_column(String(64), index=True)
-    item_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    item_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     kind: Mapped[str] = mapped_column(String(64), index=True)
-    source_run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
+    source_run_id: Mapped[str] = mapped_column(
+        ForeignKey("execution_runs.id"), index=True
+    )
     source_job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     outcome_id: Mapped[int] = mapped_column(ForeignKey("job_approvals.id"), index=True)
     outcome_decision: Mapped[str] = mapped_column(String(16), index=True)
-    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     # Typed provenance, denormalized at write time so a receipt/API view never
     # has to join back through job_approvals/execution_runs to answer "who
     # approved this, when, and which model produced it". Nullable: additive,
@@ -857,10 +1068,16 @@ class MemoryProvenance(Base):
     # Only populated when an Advisor was actually invoked on the source run
     # (evidence: a recorded model call for that model) — never the merely
     # configured/pinned Advisor.
-    source_advisor_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_advisor_model: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     approved_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 class MemoryConsumption(Base):
@@ -868,16 +1085,24 @@ class MemoryConsumption(Base):
 
     __tablename__ = "memory_consumptions"
     __table_args__ = (
-        UniqueConstraint("run_id", "memory_id", name="uq_memory_consumption_run_memory"),
+        UniqueConstraint(
+            "run_id", "memory_id", name="uq_memory_consumption_run_memory"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id"), index=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     memory_id: Mapped[str] = mapped_column(String(64), index=True)
-    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    repository_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    repository_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
 
 
 # -- durable resource store (RSPL on Postgres) ---------------------------------

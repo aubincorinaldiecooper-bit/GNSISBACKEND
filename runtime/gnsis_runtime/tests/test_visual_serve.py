@@ -126,3 +126,12 @@ def test_main_rejects_usage_url_without_secret(monkeypatch) -> None:
         main(["--model", "unused", "--head", "unused"])
 
     assert error.value.code == 2
+
+
+def test_main_rejects_grant_auth_without_metering(monkeypatch) -> None:
+    monkeypatch.setenv("GNSIS_VISUAL_GRANT_PUBLIC_KEY", "public-key")
+    monkeypatch.delenv("GNSIS_VISUAL_HOST_TOKEN", raising=False)
+    monkeypatch.delenv("GNSIS_VISUAL_USAGE_URL", raising=False)
+    monkeypatch.delenv("GNSIS_VISUAL_USAGE_SECRET", raising=False)
+    with pytest.raises(SystemExit):
+        main([])

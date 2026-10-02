@@ -10,7 +10,7 @@ from typing import Any, Callable
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .metering import UsageReport
 from .runtime import PersistentVisualDecisionSession, VisualDecisionPolicy
-from .schema import Decision
+from .schema import Decision, bounded_actions
 
 
 class VisualServiceError(RuntimeError):
@@ -179,9 +179,17 @@ class VisualService:
 
     def authorize_tenant(self, session_id: str, tenant: SessionTenant) -> None:
         session = self._session(session_id)
-        if (
-            tenant.workspace_id is not None
-            and tenant.workspace_id != session.tenant.workspace_id
+        if tenant.workspace_id is not None and (
+            tenant.workspace_id != session.tenant.workspace_id
+            or tenant.key_id != session.tenant.key_id
+            or (
+                tenant.project_id is not None
+                and tenant.project_id != session.tenant.project_id
+            )
+            or (
+                tenant.environment_id is not None
+                and tenant.environment_id != session.tenant.environment_id
+            )
         ):
             raise self._unknown_session()
 
@@ -282,8 +290,19 @@ class VisualService:
     ) -> dict[str, Any]:
         session = self._session(session_id)
         with session.lock:
+            normalized_goal = str(goal).strip()
             try:
-                session.decision_session.set_task(
+                normalized_actions = bounded_actions(allowed_actions)
+            except ValueError as exc:
+                raise VisualServiceError("invalid_task", str(exc)) from exc
+            decision_session = session.decision_session
+            if (
+                decision_session.goal == normalized_goal
+                and decision_session.allowed_actions == normalized_actions
+            ):
+                return self._state(session)
+            try:
+                decision_session.set_task(
                     goal,
                     allowed_actions=allowed_actions,
                 )
@@ -497,6 +516,7 @@ class VisualService:
             inference_ms=delta.get("inference_ms", 0),
             session_ms=session_ms,
             closed=closed,
+            generated_at_ms=int(time.time() * 1000),
         )
 
     def _session(self, session_id: str) -> VisualServiceSession:

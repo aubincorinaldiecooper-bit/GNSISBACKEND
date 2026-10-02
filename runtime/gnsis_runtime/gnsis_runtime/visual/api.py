@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
@@ -58,6 +58,7 @@ def create_visual_api(
         ),
         lifespan=lifespan,
     )
+    app.state.usage_sink = None
 
     def bearer_credential(authorization: str | None) -> str:
         scheme, _, credential = (authorization or "").partition(" ")
@@ -83,10 +84,12 @@ def create_visual_api(
             status_code=403,
         )
 
-    def _grant_tenant(credential: str) -> SessionTenant | None:
+    def _grant_tenant(
+        credential: str, *, allow_expired: bool = False
+    ) -> SessionTenant | None:
         if settings.grant_verifier is None:
             return None
-        grant = settings.grant_verifier.verify(credential)
+        grant = settings.grant_verifier.verify(credential, allow_expired=allow_expired)
         if grant is None:
             return None
         return SessionTenant(
@@ -145,7 +148,7 @@ def create_visual_api(
         ):
             service.authorize_tenant(session_id, OPERATOR)
             return OPERATOR
-        tenant = _grant_tenant(credential)
+        tenant = _grant_tenant(credential, allow_expired=True)
         if tenant is not None:
             service.authorize_tenant(session_id, tenant)
             return tenant
@@ -164,8 +167,17 @@ def create_visual_api(
         )
 
     @app.get("/health")
-    async def health() -> dict[str, Any]:
-        return service.health()
+    async def health(request: Request) -> dict[str, Any]:
+        report = service.health()
+        sink = request.app.state.usage_sink
+        report["usage_sink"] = sink.health() if sink is not None else None
+        report["metering"] = (
+            "degraded"
+            if sink is not None
+            and (sink.health()["failures"] or sink.health()["dropped"])
+            else "ok"
+        )
+        return report
 
     @app.post("/v1/visual/sessions")
     async def create_session(
