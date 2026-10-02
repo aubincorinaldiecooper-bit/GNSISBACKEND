@@ -18,6 +18,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from .settings import get_settings
 from .usage import UsageStore, UsageValidationError, parse_callback
+from .visual_usage import VisualUsageStore
 
 router = APIRouter()
 
@@ -89,3 +90,87 @@ async def litellm_usage_callback(
         "litellm_request_id": record.litellm_request_id,
         "charged": charged,
     }
+
+
+_VISUAL_IDS = ("event_id", "workspace_id", "virtual_key_id", "grant_id", "session_id")
+_VISUAL_COUNTS = (
+    "report_seq",
+    "frames_accepted",
+    "frame_bytes",
+    "decisions",
+    "decisions_act",
+    "decisions_abstain",
+    "attempts_recorded",
+    "inference_ms",
+    "session_ms",
+)
+
+
+def _authenticate_visual_callback(authorization: Optional[str]) -> None:
+    secret = get_settings().visual_usage_secret
+    if not secret:
+        raise HTTPException(status_code=503, detail="visual usage callback is not configured")
+    if not authorization:
+        raise HTTPException(status_code=401, detail="missing Authorization")
+    parts = authorization.split(" ", 1)
+    presented = parts[1].strip() if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+    if not presented or not hmac.compare_digest(presented, secret):
+        raise HTTPException(status_code=401, detail="invalid callback credential")
+
+
+def _parse_visual_usage_report(report: object) -> dict:
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=400, detail="each report must be an object")
+    for name in _VISUAL_IDS:
+        value = report.get(name)
+        if not isinstance(value, str) or not value:
+            raise HTTPException(status_code=400, detail=f"{name} is required")
+    for name in _VISUAL_COUNTS:
+        value = report.get(name)
+        if type(value) is not int or value < 0:
+            raise HTTPException(
+                status_code=400, detail=f"{name} must be a non-negative integer"
+            )
+    for name in ("project_id", "environment_id"):
+        value = report.get(name)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise HTTPException(status_code=400, detail=f"{name} must be a string or null")
+    if type(report.get("closed")) is not bool:
+        raise HTTPException(status_code=400, detail="closed must be a boolean")
+    if report["event_id"] != f"{report['session_id']}:{report['report_seq']}":
+        raise HTTPException(status_code=400, detail="event_id does not match session_id and report_seq")
+    return {
+        **report,
+        "project_id": report.get("project_id"),
+        "environment_id": report.get("environment_id"),
+    }
+
+
+@router.post("/internal/usage/visual")
+async def visual_usage_callback(
+    request: Request, authorization: Optional[str] = Header(default=None)
+):
+    settings = get_settings()
+    _authenticate_visual_callback(authorization)
+
+    raw = await request.body()
+    if len(raw) > settings.executor_callback_max_bytes:
+        raise HTTPException(status_code=413, detail="callback body too large")
+    try:
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if not isinstance(body, dict) or not isinstance(body.get("reports"), list):
+        raise HTTPException(status_code=400, detail="reports must be an array")
+    if len(body["reports"]) > 500:
+        raise HTTPException(status_code=400, detail="at most 500 reports are allowed")
+
+    accepted = 0
+    duplicates = 0
+    for report in body["reports"]:
+        record, created = VisualUsageStore().record(_parse_visual_usage_report(report))
+        if created:
+            accepted += 1
+        else:
+            duplicates += 1
+    return {"accepted": accepted, "duplicates": duplicates}

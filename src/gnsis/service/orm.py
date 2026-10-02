@@ -767,6 +767,37 @@ class VirtualKey(Base):
     disabled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class VisualUsageRecord(Base):
+    """One idempotently ingested visual-session usage report."""
+
+    __tablename__ = "visual_usage_records"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_visual_usage_event_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    virtual_key_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    environment_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    grant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    report_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    frames_accepted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    frame_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    decisions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    decisions_act: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    decisions_abstain: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    attempts_recorded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    inference_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    session_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+
+
 class AgentMemory(Base):
     """Long-term, repo-scoped agent memory. Only approved records are written.
 

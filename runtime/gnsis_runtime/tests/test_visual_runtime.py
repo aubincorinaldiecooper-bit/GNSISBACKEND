@@ -16,7 +16,16 @@ class RecordingPolicy:
     def __init__(self):
         self.calls = []
 
-    def decide(self, frame, goal, history, motion, viewport, cache):
+    def decide(
+        self,
+        frame,
+        goal,
+        history,
+        motion,
+        viewport,
+        cache,
+        allowed_actions=None,
+    ):
         self.calls.append(
             {
                 "frame_id": frame.frame_id,

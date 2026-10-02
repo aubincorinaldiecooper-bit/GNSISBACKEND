@@ -96,3 +96,11 @@ Do **not** delete `services/visual-engine` from the browser repository until:
 
 PR #120 is therefore a **core migration slice**, not a declaration that the full
 visual-engine migration is complete.
+
+## Laya retirement (single System-1 path)
+
+The backend JEV/MiniCPM-V path ("Smaller GNSIS") is the only System-1 decision
+engine going forward. What it already had, what was added to subsume the
+browser fork's Panoptic -> Laya contract, what stays unique to Laya, and the
+measurable gate that must pass before Laya is deleted from `Gnsis-browser` are
+recorded in [`laya-retirement.md`](laya-retirement.md).
