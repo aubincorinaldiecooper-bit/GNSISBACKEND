@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import io
+
+from PIL import Image
+from starlette.testclient import TestClient
+
+from gnsis_runtime.visual.api import VisualAPISettings, create_visual_api
+from gnsis_runtime.visual.schema import Decision, Target
+from gnsis_runtime.visual.service import VisualService
+
+AUTH = {"Authorization": "Bearer test-token"}
+
+
+class FixedPolicy:
+    name = "fixed"
+
+    def decide(
+        self,
+        frame,
+        goal,
+        history,
+        motion,
+        viewport,
+        cache,
+        allowed_actions=None,
+    ):
+        return Decision(
+            "click",
+            0.9,
+            Target(10, 10),
+            frame_id=frame.frame_id,
+        )
+
+
+def _jpeg() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 32), "white").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def _app():
+    service = VisualService(FixedPolicy())
+    return create_visual_api(
+        service,
+        VisualAPISettings(bearer_token="test-token"),
+    )
+
+
+def _open(client: TestClient) -> dict:
+    response = client.post("/v1/visual/sessions", headers=AUTH)
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_api_requires_authentication_and_unknown_sessions_are_structured() -> None:
+    with TestClient(_app()) as client:
+        assert client.post("/v1/visual/sessions").status_code == 401
+        response = client.get("/v1/visual/sessions/missing", headers=AUTH)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "unknown_session"
+
+
+def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
+    with TestClient(_app()) as client:
+        opened = _open(client)
+        session_id = opened["session_id"]
+        stream = opened["stream"]
+        with client.websocket_connect(
+            f"{stream['path']}?token={stream['token']}"
+        ) as websocket:
+            websocket.send_json(
+                {
+                    "type": "screen.frame",
+                    "frame_id": "f1",
+                    "captured_at_ms": 1000,
+                    "encoding": "jpeg",
+                    "video_source": "screen",
+                }
+            )
+            websocket.send_bytes(_jpeg())
+            accepted = websocket.receive_json()
+        assert accepted["type"] == "screen.frame.accepted"
+        assert accepted["frame_id"] == "f1"
+
+        task = client.put(
+            f"/v1/visual/sessions/{session_id}/task",
+            headers=AUTH,
+            json={
+                "goal": "click the control",
+                "allowed_actions": ["click", "wait"],
+            },
+        )
+        assert task.status_code == 200
+        decision = client.post(
+            f"/v1/visual/sessions/{session_id}/decisions",
+            headers=AUTH,
+            json={"request_id": "request-1"},
+        )
+        assert decision.status_code == 200
+        assert decision.json()["decision"]["frame_id"] == "f1"
+        recorded = client.post(
+            f"/v1/visual/sessions/{session_id}/attempts",
+            headers=AUTH,
+            json={"decision_id": decision.json()["decision_id"]},
+        )
+        assert recorded.status_code == 200
+        assert recorded.json()["recorded"] is True
+        reset = client.delete(
+            f"/v1/visual/sessions/{session_id}/task",
+            headers=AUTH,
+        )
+        assert reset.status_code == 200
+        assert reset.json()["goal"] is None
+
+
+def test_api_rejects_missing_task_and_stale_stream_frames() -> None:
+    with TestClient(_app()) as client:
+        opened = _open(client)
+        session_id = opened["session_id"]
+        stream = opened["stream"]
+        missing_task = client.post(
+            f"/v1/visual/sessions/{session_id}/decisions",
+            headers=AUTH,
+            json={"request_id": "request-1"},
+        )
+        assert missing_task.status_code == 409
+        assert missing_task.json()["error"]["code"] == "task_required"
+
+        with client.websocket_connect(
+            f"{stream['path']}?token={stream['token']}"
+        ) as websocket:
+            for frame_id, captured_at_ms in (("f1", 1000), ("f2", 900)):
+                websocket.send_json(
+                    {
+                        "type": "screen.frame",
+                        "frame_id": frame_id,
+                        "captured_at_ms": captured_at_ms,
+                        "encoding": "jpeg",
+                    }
+                )
+                websocket.send_bytes(_jpeg())
+                response = websocket.receive_json()
+                if frame_id == "f1":
+                    assert response["type"] == "screen.frame.accepted"
+                else:
+                    assert response["type"] == "screen.frame.rejected"
+                    assert response["error"]["code"] == "stale_frame"
+
+
+def test_api_has_no_screenshot_upload_decision_path() -> None:
+    with TestClient(_app()) as client:
+        response = client.post(
+            "/v1/visual/decide",
+            headers=AUTH,
+            files={"image": ("screen.jpg", _jpeg(), "image/jpeg")},
+        )
+
+    assert response.status_code == 404
