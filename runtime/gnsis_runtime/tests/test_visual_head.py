@@ -64,6 +64,19 @@ def test_decoder_masks_actions_without_required_argument():
     assert decision.action == "wait"
 
 
+def test_decoder_keeps_wait_available_under_restricted_actions():
+    out = _logits_for("click", 0, torch.zeros(GRID[0] * GRID[1], 2), 1)
+    out["action"][0, action_label("wait")] = 10.5
+    decision = decode(
+        out,
+        [ValueCandidate("none", "")],
+        GRID,
+        VIEWPORT,
+        allowed_actions=("click",),
+    )
+    assert decision.action == "wait"
+
+
 def _record(action: str, box, n_values: int = 3):
     layers, hidden, n = 2, 64, GRID[0] * GRID[1]
     pos, off = target_labels(box, GRID, VIEWPORT)
