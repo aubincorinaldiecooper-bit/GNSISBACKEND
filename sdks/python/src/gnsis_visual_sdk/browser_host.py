@@ -5,6 +5,7 @@ import asyncio
 import base64
 import binascii
 import json
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
@@ -17,6 +18,10 @@ from .stream import FrameStream
 
 BROWSER_ACTIONS = ("click", "type", "scroll", "navigate", "back", "wait", "done")
 CAPABILITY_MANIFEST_ID = "gnsis-browser-host-v1"
+
+
+def _now_ms() -> int:
+    return time.monotonic_ns() // 1_000_000
 
 
 class BrowserHubError(RuntimeError):
@@ -67,6 +72,29 @@ class BrowserTaskResult:
     success: bool
     message: str
     steps: int
+    trace: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PlannerObservation:
+    """Everything a planner may see: the production contract and nothing else."""
+
+    step: int
+    task: str
+    allowed_actions: tuple[str, ...]
+    viewport: tuple[int, int]
+    service_decision: dict[str, Any]
+    history: tuple[dict[str, Any], ...]
+
+
+class ActionPlanner(Protocol):
+    """Chooses the bounded action the host is asked to execute.
+
+    A planner never executes anything; the host keeps permission checks,
+    execution, attempt recording, and verification.
+    """
+
+    async def plan(self, observation: PlannerObservation) -> dict[str, Any]: ...
 
 
 class BrowserHubConnector:
@@ -76,6 +104,7 @@ class BrowserHubConnector:
         *,
         client_factory: Callable[[str], VisualClient] | None = None,
         stream_factory: Callable[[VisualSession], Awaitable[FrameStream]] | None = None,
+        planner: ActionPlanner | None = None,
     ) -> None:
         self.config = config
         self._client_factory = client_factory or (
@@ -84,6 +113,7 @@ class BrowserHubConnector:
         self._stream_factory = stream_factory or (
             lambda session: FrameStream.connect(config.base_url, session)
         )
+        self._planner = planner
 
     async def run(self, socket: BrowserHubSocket) -> BrowserTaskResult:
         ready = await self._receive(socket)
@@ -106,6 +136,7 @@ class BrowserHubConnector:
                 self.config.allowed_actions,
             )
 
+            trace: list[dict[str, Any]] = []
             for step in range(1, self.config.max_steps + 1):
                 await self._send(
                     socket,
@@ -149,10 +180,21 @@ class BrowserHubConnector:
                         ),
                     },
                 )
+                decide_started_ms = _now_ms()
                 response = await asyncio.to_thread(planner.decide, session.session_id)
+                decide_latency_ms = _now_ms() - decide_started_ms
                 decision_id = self._required_string(response, "decision_id")
-                request = self._browser_action(response, frame)
+                service_decision = response.get("decision")
+                if not isinstance(service_decision, dict):
+                    raise BrowserHubError("visual API returned an invalid decision")
+                request, plan_trace = await self._browser_action(
+                    response,
+                    frame,
+                    step=step,
+                    history=tuple(trace),
+                )
                 await self._send(socket, request)
+                execute_started_ms = _now_ms()
                 try:
                     result = await self._wait_for_action(socket, request["call_id"])
                 finally:
@@ -161,11 +203,28 @@ class BrowserHubConnector:
                         session.session_id,
                         decision_id,
                     )
+                entry: dict[str, Any] = {
+                    "step": step,
+                    "frame_id": str(frame["frame_id"]),
+                    "decision_id": decision_id,
+                    "service_decision": service_decision,
+                    "service_decide_latency_ms": decide_latency_ms,
+                    "executed_decision": request["decision"],
+                    "host_latency_ms": _now_ms() - execute_started_ms,
+                    "success": result.get("success") is True,
+                    "done": result.get("done") is True,
+                    "message": str(result.get("message", "")),
+                    "evidence": result.get("evidence"),
+                }
+                if plan_trace is not None:
+                    entry["planner"] = plan_trace
+                trace.append(entry)
                 if result.get("done") is True:
                     return BrowserTaskResult(
                         success=True,
                         message=str(result.get("message", "Task is complete.")),
                         steps=step,
+                        trace=tuple(trace),
                     )
                 if result.get("success") is not True:
                     raise BrowserHubError(
@@ -176,6 +235,7 @@ class BrowserHubConnector:
                 success=False,
                 message="Browser task exceeded the configured step limit.",
                 steps=self.config.max_steps,
+                trace=tuple(trace),
             )
         finally:
             if capture_active:
@@ -239,23 +299,48 @@ class BrowserHubConnector:
                     str(message.get("message", "browser action failed"))
                 )
 
-    def _browser_action(
+    async def _browser_action(
         self,
         response: dict[str, Any],
         frame: dict[str, Any],
-    ) -> dict[str, Any]:
+        *,
+        step: int,
+        history: tuple[dict[str, Any], ...],
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         decision = response.get("decision")
         if not isinstance(decision, dict):
             raise BrowserHubError("visual API returned an invalid decision")
-        action = self._required_string(decision, "action")
-        if action not in self.config.allowed_actions:
-            raise BrowserHubError(f"visual API returned disallowed action {action!r}")
         source = frame.get("source")
         if not isinstance(source, dict):
             raise BrowserHubError("capture frame is missing browser provenance")
         width = self._required_positive_int(source, "width")
         height = self._required_positive_int(source, "height")
         tab_id = self._required_positive_int(source, "tab_id")
+
+        plan_trace: dict[str, Any] | None = None
+        if self._planner is not None:
+            planned = await self._planner.plan(
+                PlannerObservation(
+                    step=step,
+                    task=self.config.task,
+                    allowed_actions=self.config.allowed_actions,
+                    viewport=(width, height),
+                    service_decision=dict(decision),
+                    history=history,
+                )
+            )
+            if not isinstance(planned, dict):
+                raise BrowserHubError("planner returned an invalid decision")
+            plan_trace = dict(planned.get("trace") or {})
+            decision = {
+                key: value
+                for key, value in planned.items()
+                if key != "trace" and value is not None
+            }
+
+        action = self._required_string(decision, "action")
+        if action not in self.config.allowed_actions:
+            raise BrowserHubError(f"visual API returned disallowed action {action!r}")
 
         browser_decision: dict[str, Any] = {
             key: decision[key]
@@ -268,7 +353,7 @@ class BrowserHubConnector:
             browser_decision["wait_ms"] = 500
 
         decision_id = self._required_string(response, "decision_id")
-        return {
+        request = {
             "type": "browser.action",
             "call_id": decision_id,
             "frame_id": frame["frame_id"],
@@ -287,6 +372,7 @@ class BrowserHubConnector:
             },
             "decision": browser_decision,
         }
+        return request, plan_trace
 
     @staticmethod
     async def _receive(socket: BrowserHubSocket) -> dict[str, Any]:

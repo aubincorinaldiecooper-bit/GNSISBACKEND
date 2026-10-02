@@ -250,6 +250,29 @@ The planner sees only contract data available in production. Expected actions,
 target boxes, hidden page state, DOM, selectors, and final outcomes remain
 scoring-only labels.
 
+`BrowserHubConnector` accepts an optional `planner`. With no planner the
+service's own decision is executed, which is the cohort baseline; with one, the
+planner answers each `PlannerObservation` (task, legal actions, viewport, the
+service decision for the current frame, and the host's report of previous
+steps) with one bounded action. The host still authorizes, executes, records
+the attempt, and verifies, so a planner cannot widen the legal action set or
+execute anything itself.
+
+`gnsis-visual-planner-eval` runs one scenario file through one planner and
+appends a JSON line per scenario holding the host trace, the service decision
+alongside the executed decision, latencies, and planner token usage:
+
+```bash
+gnsis-visual-planner-eval \
+  --base-url "$GNSIS_VISUAL_BASE_URL" --host-token "$GNSIS_VISUAL_HOST_TOKEN" \
+  --scenarios scenarios.json --planner openrouter \
+  --model anthropic/claude-fable-5.1 --out runs/claude.jsonl
+```
+
+Scenarios are `[{"id": ..., "task": ..., "max_steps": ..., "allowed_actions":
+[...]}]`. Keep the file, budgets, and host identical across planners; only
+`--planner`/`--model` should vary within a cohort.
+
 Every run records:
 
 - valid-action and abstention correctness;

@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 gnsis-visual-browser-host = "gnsis_visual_sdk.browser_host:main"
+gnsis-visual-planner-eval = "gnsis_visual_sdk.planner_eval:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

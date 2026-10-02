@@ -232,3 +232,104 @@ def test_browser_host_config_rejects_unbounded_actions() -> None:
             task="Do something",
             allowed_actions=("click", "open_url"),
         )
+
+
+def test_planner_overrides_the_service_decision_within_the_legal_set() -> None:
+    socket = FakeSocket(
+        [
+            {"type": "ready", "session_id": "hub-1"},
+            frame(),
+            {"type": "capture.stopped", "reason": "requested"},
+            {
+                "type": "browser.action.result",
+                "call_id": "decision-1",
+                "frame_id": "frame-1",
+                "success": True,
+                "done": True,
+                "message": "Clicked the marker.",
+                "evidence": {"target_box": {"x": 1, "y": 2, "width": 3, "height": 4}},
+            },
+        ]
+    )
+    decisions = deque(
+        [
+            {
+                "decision_id": "decision-1",
+                "decision": {"action": "wait", "confidence": 0.43},
+            }
+        ]
+    )
+    seen: list[Any] = []
+
+    class Planner:
+        async def plan(self, observation: Any) -> dict[str, Any]:
+            seen.append(observation)
+            return {
+                "action": "click",
+                "target": {"x": 0.2, "y": 0.1},
+                "trace": {"why": "the marker is top-left"},
+            }
+
+    stream = FakeStream()
+    connector = BrowserHubConnector(
+        BrowserHostConfig(
+            base_url="http://127.0.0.1:8765",
+            host_token="host-token",
+            task="Click the marker",
+        ),
+        client_factory=lambda token: FakeClient(token, decisions),
+        stream_factory=lambda _session: asyncio.sleep(0, result=stream),
+        planner=Planner(),
+    )
+
+    result = asyncio.run(connector.run(socket))
+
+    action = next(
+        message for message in socket.sent if message["type"] == "browser.action"
+    )
+    assert action["decision"]["action"] == "click"
+    assert action["decision"]["target"] == {"x": 0.2, "y": 0.1}
+    assert action["call_id"] == "decision-1"
+    assert seen[0].service_decision == {"action": "wait", "confidence": 0.43}
+    assert seen[0].viewport == (1280, 720)
+    assert result.trace[0]["service_decision"] == {"action": "wait", "confidence": 0.43}
+    assert result.trace[0]["planner"] == {"why": "the marker is top-left"}
+
+
+def test_planner_cannot_widen_the_legal_action_set() -> None:
+    socket = FakeSocket(
+        [
+            {"type": "ready", "session_id": "hub-1"},
+            frame(),
+            {"type": "capture.stopped", "reason": "requested"},
+        ]
+    )
+    decisions = deque(
+        [
+            {
+                "decision_id": "decision-1",
+                "decision": {"action": "wait", "confidence": 0.9},
+            }
+        ]
+    )
+
+    class Planner:
+        async def plan(self, _observation: Any) -> dict[str, Any]:
+            return {"action": "navigate", "url": "http://127.0.0.1:8899/page2.html"}
+
+    connector = BrowserHubConnector(
+        BrowserHostConfig(
+            base_url="http://127.0.0.1:8765",
+            host_token="host-token",
+            task="Scroll to the bottom",
+            allowed_actions=("scroll", "wait", "done"),
+        ),
+        client_factory=lambda token: FakeClient(token, decisions),
+        stream_factory=lambda _session: asyncio.sleep(0, result=FakeStream()),
+        planner=Planner(),
+    )
+
+    with pytest.raises(BrowserHubError, match="disallowed action"):
+        asyncio.run(connector.run(socket))
+
+    assert all(message["type"] != "browser.action" for message in socket.sent)
