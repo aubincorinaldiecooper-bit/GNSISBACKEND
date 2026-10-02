@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import types
 import unittest
 
@@ -100,7 +101,7 @@ class VisualGrantTests(unittest.TestCase):
             "event_id": f"{session_id}:{report_seq}",
             "workspace_id": self.workspace_id,
             "virtual_key_id": key_id,
-            "project_id": "project-test",
+            "project_id": None,
             "environment_id": "env-test",
             "grant_id": "grant-test",
             "session_id": session_id,
@@ -114,6 +115,7 @@ class VisualGrantTests(unittest.TestCase):
             "inference_ms": 25,
             "session_ms": 1000,
             "closed": False,
+            "generated_at_ms": int(time.time() * 1000),
         }
         report.update(overrides)
         return report
@@ -215,6 +217,26 @@ class VisualGrantTests(unittest.TestCase):
         self.assertEqual(blocked.json()["error"]["code"], "quota_exceeded")
         self.assertEqual(allowed.status_code, 200, allowed.text)
 
+    def test_delayed_usage_attributes_to_report_day_not_ingest_day(self):
+        view, secret = self._create_key(["visual:host"])
+        os.environ["GNSIS_VISUAL_DAILY_DECISION_QUOTA"] = "3"
+        from gnsis.service import settings as settings_mod
+
+        settings_mod._settings = None
+        self.settings = settings_mod.get_settings()
+        yesterday_ms = int(time.time() * 1000) - 36 * 3600 * 1000
+        report = self._usage_report(
+            key_id=view.id,
+            decisions=3,
+            generated_at_ms=yesterday_ms,
+        )
+
+        ingested = self._post_usage([report])
+        granted = self._grant(secret)
+
+        self.assertEqual(ingested.status_code, 200, ingested.text)
+        self.assertEqual(granted.status_code, 200, granted.text)
+
     def test_usage_callback_authentication_idempotency_and_validation(self):
         view, _ = self._create_key(["visual:host"])
         report = self._usage_report(key_id=view.id)
@@ -251,6 +273,39 @@ class VisualGrantTests(unittest.TestCase):
         )
         self.assertEqual(negative.status_code, 400, negative.text)
         self.assertIn(too_many.status_code, (400, 413), too_many.text)
+
+        oversized_id = self._post_usage(
+            [self._usage_report(key_id=view.id, report_seq=3, event_id="x" * 200)]
+        )
+        self.assertEqual(oversized_id.status_code, 400, oversized_id.text)
+        oversized_counter = self._post_usage(
+            [self._usage_report(key_id=view.id, report_seq=4, decisions=2**63)]
+        )
+        self.assertEqual(oversized_counter.status_code, 400, oversized_counter.text)
+        misattributed = self._post_usage(
+            [
+                self._usage_report(
+                    key_id=view.id,
+                    report_seq=5,
+                    project_id="not-the-keys-project",
+                )
+            ]
+        )
+        self.assertEqual(misattributed.status_code, 400, misattributed.text)
+        unknown_key = self._post_usage(
+            [self._usage_report(key_id="vkey-does-not-exist", report_seq=6)]
+        )
+        self.assertEqual(unknown_key.status_code, 400, unknown_key.text)
+        stale_timestamp = self._post_usage(
+            [
+                self._usage_report(
+                    key_id=view.id,
+                    report_seq=7,
+                    generated_at_ms=int(time.time() * 1000) + 10 * 60 * 1000,
+                )
+            ]
+        )
+        self.assertEqual(stale_timestamp.status_code, 400, stale_timestamp.text)
 
         previous_limit = os.environ.get("GNSIS_EXECUTOR_CALLBACK_MAX_BYTES")
         try:

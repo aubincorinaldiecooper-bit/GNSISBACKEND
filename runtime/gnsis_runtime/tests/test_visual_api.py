@@ -321,6 +321,9 @@ def _grant(
     *,
     workspace_id: str,
     grant_id: str,
+    key_id: str | None = None,
+    project_id: str = "project",
+    expires_in: int = 300,
     max_concurrent_sessions: int = 4,
 ) -> str:
     now = int(time.time())
@@ -328,12 +331,12 @@ def _grant(
         {
             "iss": "control-plane",
             "aud": "gnsis-visual",
-            "sub": f"key-{workspace_id}",
+            "sub": key_id or f"key-{workspace_id}",
             "jti": grant_id,
-            "iat": now,
-            "exp": now + 300,
+            "iat": now - 600 if expires_in < 0 else now,
+            "exp": now + expires_in,
             "ws": workspace_id,
-            "prj": "project",
+            "prj": project_id,
             "env": "environment",
             "scp": ["visual:host"],
             "lim": {
@@ -438,3 +441,123 @@ def test_api_enforces_grant_concurrent_session_limit() -> None:
 
     assert second.status_code == 429
     assert second.json()["error"]["code"] == "quota_exceeded"
+
+
+def test_expired_grant_closes_session_but_cannot_create_one() -> None:
+    private = Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    app = create_visual_api(
+        VisualService(FixedPolicy()),
+        VisualAPISettings(
+            grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
+        ),
+    )
+    live = _grant(private_pem, workspace_id="workspace-a", grant_id="grant-live")
+    expired = _grant(
+        private_pem,
+        workspace_id="workspace-a",
+        grant_id="grant-old",
+        expires_in=-60,
+    )
+
+    with TestClient(app) as client:
+        opened = client.post(
+            "/v1/visual/sessions", headers={"Authorization": f"Bearer {live}"}
+        )
+        assert opened.status_code == 200
+        session_id = opened.json()["session_id"]
+        closed = client.delete(
+            f"/v1/visual/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {expired}"},
+        )
+        create = client.post(
+            "/v1/visual/sessions", headers={"Authorization": f"Bearer {expired}"}
+        )
+
+    assert closed.status_code == 200
+    assert create.status_code == 401
+
+
+def test_same_workspace_grants_from_other_keys_are_isolated() -> None:
+    private = Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    app = create_visual_api(
+        VisualService(FixedPolicy()),
+        VisualAPISettings(
+            grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
+        ),
+    )
+    grant_a = _grant(private_pem, workspace_id="w", grant_id="g-a", key_id="key-a")
+    grant_b = _grant(private_pem, workspace_id="w", grant_id="g-b", key_id="key-b")
+    grant_wrong_project = _grant(
+        private_pem,
+        workspace_id="w",
+        grant_id="g-p",
+        key_id="key-a",
+        project_id="other-project",
+    )
+
+    with TestClient(app) as client:
+        opened = client.post(
+            "/v1/visual/sessions", headers={"Authorization": f"Bearer {grant_a}"}
+        )
+        session_id = opened.json()["session_id"]
+        other_key = client.delete(
+            f"/v1/visual/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {grant_b}"},
+        )
+        other_project = client.delete(
+            f"/v1/visual/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {grant_wrong_project}"},
+        )
+
+    assert other_key.status_code == 404
+    assert other_key.json()["error"]["code"] == "unknown_session"
+    assert other_project.status_code == 404
+
+
+def test_health_exposes_usage_sink_state() -> None:
+    class Sink:
+        def health(self) -> dict:
+            return {
+                "pending": 2,
+                "dropped": 1,
+                "failures": 3,
+                "last_error": "OSError",
+                "running": True,
+            }
+
+    service = VisualService(FixedPolicy())
+    app = create_visual_api(service, VisualAPISettings(host_token="operator"))
+
+    with TestClient(app) as client:
+        assert client.get("/health").json()["metering"] == "ok"
+        app.state.usage_sink = Sink()
+        report = client.get("/health").json()
+
+    assert report["metering"] == "degraded"
+    assert report["usage_sink"]["failures"] == 3

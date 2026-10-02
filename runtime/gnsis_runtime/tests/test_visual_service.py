@@ -290,3 +290,19 @@ def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> No
     operator_id = service.create_session(OPERATOR).session_id
     service.publish_frame(operator_id, _frame("operator", 2000))
     assert service.collect_usage() == []
+
+
+def test_set_task_is_idempotent_and_preserves_replay() -> None:
+    service = VisualService(FixedPolicy())
+    session_id = service.create_session().session_id
+    service.set_task(session_id, "click the control", allowed_actions=("click",))
+    service.publish_frame(session_id, _frame("f1", 1000))
+    first = service.decide(session_id, "request-1")
+
+    service.set_task(session_id, "click the control", allowed_actions=("click",))
+    replayed = service.decide(session_id, "request-1")
+    assert replayed["decision_id"] == first["decision_id"]
+
+    service.set_task(session_id, "different goal")
+    replacement = service.decide(session_id, "request-1")
+    assert replacement["decision_id"] != first["decision_id"]

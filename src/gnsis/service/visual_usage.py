@@ -31,6 +31,7 @@ _REPORT_FIELDS = (
     "inference_ms",
     "session_ms",
     "closed",
+    "reported_at",
 )
 
 
@@ -54,6 +55,7 @@ class VisualUsageRecordView:
     inference_ms: int
     session_ms: int
     closed: bool
+    reported_at: Optional[datetime]
     created_at: str
 
 
@@ -77,6 +79,7 @@ def _to_view(row: orm.VisualUsageRecord) -> VisualUsageRecordView:
         inference_ms=row.inference_ms,
         session_ms=row.session_ms,
         closed=row.closed,
+        reported_at=row.reported_at,
         created_at=row.created_at.isoformat() if row.created_at else "",
     )
 
@@ -114,12 +117,15 @@ class VisualUsageStore:
     def decisions_today(self, virtual_key_id: str) -> int:
         now = datetime.now(timezone.utc)
         start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+        event_day = func.coalesce(
+            orm.VisualUsageRecord.reported_at, orm.VisualUsageRecord.created_at
+        )
         with session_scope() as s:
             total = (
                 s.query(func.coalesce(func.sum(orm.VisualUsageRecord.decisions), 0))
                 .filter(
                     orm.VisualUsageRecord.virtual_key_id == virtual_key_id,
-                    orm.VisualUsageRecord.created_at >= start,
+                    event_day >= start,
                 )
                 .scalar()
             )

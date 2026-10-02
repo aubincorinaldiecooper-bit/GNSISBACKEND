@@ -29,6 +29,7 @@ class UsageReport:
     inference_ms: int
     session_ms: int
     closed: bool
+    generated_at_ms: int = 0
 
     @property
     def event_id(self) -> str:
@@ -89,6 +90,7 @@ class HttpUsageSink:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._service: Any | None = None
+        self.max_batch_reports = 500
 
     def start(self, service: Any) -> None:
         with self._lock:
@@ -110,7 +112,12 @@ class HttpUsageSink:
             return
         self._stop.set()
         thread.join(timeout=max(1.0, self.interval_s + 1.0))
-        self._flush()
+        for _ in range(3):
+            self._flush()
+            with self._lock:
+                if not self._pending:
+                    break
+            self._stop.wait(0.5)
         with self._lock:
             self._thread = None
 
@@ -138,7 +145,7 @@ class HttpUsageSink:
             while len(self._pending) > self.max_pending:
                 self._pending.popleft()
                 self._dropped += 1
-            batch = list(self._pending)
+            batch = list(self._pending)[: self.max_batch_reports]
         if not batch:
             return
         payload = json.dumps(
@@ -161,6 +168,9 @@ class HttpUsageSink:
         with self._lock:
             for _ in range(min(len(batch), len(self._pending))):
                 self._pending.popleft()
+            remaining = len(self._pending)
+        if remaining:
+            self._flush()
 
     def _post_http(self, payload: bytes, headers: dict[str, str]) -> None:
         request = Request(self.url, data=payload, headers=headers, method="POST")

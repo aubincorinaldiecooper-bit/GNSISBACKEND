@@ -33,7 +33,7 @@ class GrantVerifier:
         self.audience = audience
         self.leeway_s = leeway_s
 
-    def verify(self, token: str) -> VisualGrant | None:
+    def verify(self, token: str, *, allow_expired: bool = False) -> VisualGrant | None:
         try:
             claims = jwt.decode(
                 token,
@@ -42,7 +42,10 @@ class GrantVerifier:
                 audience=self.audience,
                 issuer=self.issuer,
                 leeway=self.leeway_s,
-                options={"require": ["exp", "iat", "jti", "sub", "aud", "iss"]},
+                options={
+                    "require": ["exp", "iat", "jti", "sub", "aud", "iss"],
+                    "verify_exp": not allow_expired,
+                },
             )
             if not isinstance(claims, dict):
                 return None
