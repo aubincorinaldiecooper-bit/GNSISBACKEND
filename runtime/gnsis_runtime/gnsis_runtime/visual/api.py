@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,7 +12,8 @@ from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from ..screen_transport import ScreenFrameHeader, decode_screen_frame
-from .service import VisualService, VisualServiceError
+from .grants import GrantVerifier
+from .service import OPERATOR, SessionTenant, VisualService, VisualServiceError
 
 MAX_FRAME_HEADER_BYTES = 4096
 MAX_FRAME_BYTES = 8 * 1024 * 1024
@@ -20,11 +22,12 @@ MAX_FRAME_PIXELS = 16_777_216
 
 @dataclass(frozen=True)
 class VisualAPISettings:
-    host_token: str = field(repr=False)
+    host_token: str | None = field(default=None, repr=False)
+    grant_verifier: GrantVerifier | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if not self.host_token:
-            raise ValueError("visual API host token must not be empty")
+        if not self.host_token and self.grant_verifier is None:
+            raise ValueError("visual API requires a host token or grant verifier")
 
 
 class TaskRequest(BaseModel):
@@ -43,6 +46,8 @@ class AttemptRequest(BaseModel):
 def create_visual_api(
     service: VisualService,
     settings: VisualAPISettings,
+    *,
+    lifespan: Callable[[FastAPI], AsyncIterator[None]] | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Smaller GNSIS Visual Service",
@@ -51,6 +56,7 @@ def create_visual_api(
             "Agent-independent visual decision service. Capture and actuation remain "
             "owned by authenticated hosts."
         ),
+        lifespan=lifespan,
     )
 
     def bearer_credential(authorization: str | None) -> str:
@@ -77,10 +83,34 @@ def create_visual_api(
             status_code=403,
         )
 
-    def require_host(authorization: str | None = Header(default=None)) -> None:
+    def _grant_tenant(credential: str) -> SessionTenant | None:
+        if settings.grant_verifier is None:
+            return None
+        grant = settings.grant_verifier.verify(credential)
+        if grant is None:
+            return None
+        return SessionTenant(
+            workspace_id=grant.workspace_id,
+            key_id=grant.key_id,
+            grant_id=grant.grant_id,
+            project_id=grant.project_id,
+            environment_id=grant.environment_id,
+            max_concurrent_sessions=grant.max_concurrent_sessions,
+            max_decisions_per_session=grant.max_decisions_per_session,
+            max_frames_per_session=grant.max_frames_per_session,
+        )
+
+    def require_host(
+        authorization: str | None = Header(default=None),
+    ) -> SessionTenant:
         credential = bearer_credential(authorization)
-        if secrets.compare_digest(credential, settings.host_token):
-            return
+        if settings.host_token and secrets.compare_digest(
+            credential, settings.host_token
+        ):
+            return OPERATOR
+        tenant = _grant_tenant(credential)
+        if tenant is not None:
+            return tenant
         if service.is_planner_token(credential):
             forbidden()
         unauthorized()
@@ -88,13 +118,38 @@ def create_visual_api(
     def require_session_bearer(
         session_id: str,
         authorization: str | None = Header(default=None),
-    ) -> None:
+    ) -> SessionTenant | None:
         credential = bearer_credential(authorization)
-        if secrets.compare_digest(credential, settings.host_token):
-            return
+        if settings.host_token and secrets.compare_digest(
+            credential, settings.host_token
+        ):
+            service.authorize_tenant(session_id, OPERATOR)
+            return OPERATOR
+        tenant = _grant_tenant(credential)
+        if tenant is not None:
+            service.authorize_tenant(session_id, tenant)
+            return tenant
         if service.authenticate_planner(session_id, credential):
-            return
+            return None
         if service.is_planner_token(credential) and service.has_session(session_id):
+            forbidden()
+        unauthorized()
+
+    def require_session_host(
+        session_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> SessionTenant:
+        credential = bearer_credential(authorization)
+        if settings.host_token and secrets.compare_digest(
+            credential, settings.host_token
+        ):
+            service.authorize_tenant(session_id, OPERATOR)
+            return OPERATOR
+        tenant = _grant_tenant(credential)
+        if tenant is not None:
+            service.authorize_tenant(session_id, tenant)
+            return tenant
+        if service.is_planner_token(credential):
             forbidden()
         unauthorized()
 
@@ -112,9 +167,11 @@ def create_visual_api(
     async def health() -> dict[str, Any]:
         return service.health()
 
-    @app.post("/v1/visual/sessions", dependencies=[Depends(require_host)])
-    async def create_session() -> dict[str, Any]:
-        credentials = service.create_session()
+    @app.post("/v1/visual/sessions")
+    async def create_session(
+        tenant: SessionTenant = Depends(require_host),
+    ) -> dict[str, Any]:
+        credentials = service.create_session(tenant)
         return {
             "session_id": credentials.session_id,
             "stream": {
@@ -127,7 +184,7 @@ def create_visual_api(
 
     @app.delete(
         "/v1/visual/sessions/{session_id}",
-        dependencies=[Depends(require_host)],
+        dependencies=[Depends(require_session_host)],
     )
     async def close_session(session_id: str) -> dict[str, bool]:
         service.close_session(session_id)
@@ -168,7 +225,7 @@ def create_visual_api(
 
     @app.post(
         "/v1/visual/sessions/{session_id}/attempts",
-        dependencies=[Depends(require_host)],
+        dependencies=[Depends(require_session_host)],
     )
     async def record_attempt(
         session_id: str,
@@ -254,7 +311,11 @@ def create_visual_api(
                             max_bytes=MAX_FRAME_BYTES,
                             max_pixels=MAX_FRAME_PIXELS,
                         )
-                        accepted = service.publish_frame(session_id, decoded.frame)
+                        accepted = service.publish_frame(
+                            session_id,
+                            decoded.frame,
+                            frame_bytes=len(body),
+                        )
                     except (ValueError, VisualServiceError) as exc:
                         code = (
                             exc.code

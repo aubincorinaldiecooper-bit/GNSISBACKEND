@@ -9,6 +9,7 @@ description = "Realtime GNSIS runtime with native task tools and pluggable worke
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.110",
+  "PyJWT[crypto]>=2.8",
   "mcp==2.2.0",
   "mcpmft>=1.0.0",
   "pillow>=10",

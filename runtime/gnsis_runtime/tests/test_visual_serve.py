@@ -107,3 +107,22 @@ def test_main_bounds_websocket_messages(monkeypatch) -> None:
     main(["--model", "unused", "--head", "unused"])
 
     assert calls["ws_max_size"] == MAX_FRAME_BYTES + MAX_FRAME_HEADER_BYTES
+
+
+def test_build_app_requires_host_token_or_grant_verifier() -> None:
+    with pytest.raises(ValueError, match="host token or grant verifier"):
+        build_app(FixedPolicy())
+
+
+def test_main_rejects_usage_url_without_secret(monkeypatch) -> None:
+    monkeypatch.setenv("GNSIS_VISUAL_HOST_TOKEN", "host-token")
+    monkeypatch.setenv(
+        "GNSIS_VISUAL_USAGE_URL",
+        "https://usage.example/internal/usage/visual",
+    )
+    monkeypatch.delenv("GNSIS_VISUAL_USAGE_SECRET", raising=False)
+
+    with pytest.raises(SystemExit) as error:
+        main(["--model", "unused", "--head", "unused"])
+
+    assert error.value.code == 2

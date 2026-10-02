@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from collections.abc import Callable, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
@@ -13,23 +14,46 @@ from .api import (
     VisualAPISettings,
     create_visual_api,
 )
+from .grants import GrantVerifier
+from .metering import HttpUsageSink, UsageSink
 from .runtime import VisualDecisionPolicy
 from .service import VisualService
 
 
 def build_app(
     policy: VisualDecisionPolicy,
-    host_token: str,
+    host_token: str | None = None,
     *,
+    grant_verifier: GrantVerifier | None = None,
     max_sessions: int = 32,
     cache_factory: Callable[[], Any] | None = None,
+    usage_sink_factory: Callable[[VisualService], UsageSink] | None = None,
 ) -> FastAPI:
     service = VisualService(
         policy,
         cache_factory=cache_factory,
         max_sessions=max_sessions,
     )
-    return create_visual_api(service, VisualAPISettings(host_token=host_token))
+    sink = usage_sink_factory(service) if usage_sink_factory is not None else None
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if sink is not None:
+            sink.start(service)
+        try:
+            yield
+        finally:
+            if sink is not None:
+                sink.stop()
+
+    app = create_visual_api(
+        service,
+        VisualAPISettings(host_token=host_token, grant_verifier=grant_verifier),
+        lifespan=lifespan,
+    )
+    app.state.visual_service = service
+    app.state.usage_sink = sink
+    return app
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -43,9 +67,26 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--max-sessions", default=32, type=int)
     args = parser.parse_args(argv)
 
-    host_token = os.environ.get("GNSIS_VISUAL_HOST_TOKEN", "")
-    if not host_token:
-        parser.error("GNSIS_VISUAL_HOST_TOKEN must be set")
+    host_token = os.environ.get("GNSIS_VISUAL_HOST_TOKEN") or None
+    grant_public_key = os.environ.get("GNSIS_VISUAL_GRANT_PUBLIC_KEY")
+    if not host_token and not grant_public_key:
+        parser.error(
+            "GNSIS_VISUAL_HOST_TOKEN or GNSIS_VISUAL_GRANT_PUBLIC_KEY must be set"
+        )
+    grant_verifier = (
+        GrantVerifier(
+            grant_public_key,
+            issuer=os.environ.get("GNSIS_VISUAL_GRANT_ISSUER", "gnsis-control-plane"),
+        )
+        if grant_public_key
+        else None
+    )
+    usage_url = os.environ.get("GNSIS_VISUAL_USAGE_URL")
+    usage_secret = os.environ.get("GNSIS_VISUAL_USAGE_SECRET")
+    if bool(usage_url) != bool(usage_secret):
+        parser.error(
+            "GNSIS_VISUAL_USAGE_URL and GNSIS_VISUAL_USAGE_SECRET must be supplied together"
+        )
 
     import uvicorn
 
@@ -56,11 +97,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         BackboneConfig(model_dir=args.model, dtype=args.dtype, device=args.device),
         args.head,
     )
+    usage_sink_factory = (
+        (lambda _service: HttpUsageSink(usage_url, usage_secret))
+        if usage_url and usage_secret
+        else None
+    )
     app = build_app(
         engine,
         host_token,
+        grant_verifier=grant_verifier,
         max_sessions=args.max_sessions,
         cache_factory=VisualCache,
+        usage_sink_factory=usage_sink_factory,
     )
     uvicorn.run(
         app,
