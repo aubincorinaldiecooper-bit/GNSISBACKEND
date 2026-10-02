@@ -8,16 +8,23 @@ structured decisions for an environment adapter to execute.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from PIL import Image, ImageChops, ImageStat
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
-from .schema import Decision, validate_decision
+from .legal import IllegalDecision, LegalActionSet, legal_actions
+from .schema import Decision, DecisionError
 
 MAX_HISTORY = 6
 MOTION_WINDOW_MS = 800
 _SIGNATURE_SIZE = (48, 30)
+DEFAULT_MIN_CONFIDENCE = 0.5
+DEFAULT_UNSETTLED_MOTION = 0.35
+DEFAULT_UNCHANGED_SCREEN = 0.01
+DEFAULT_REPEAT_RADIUS_PX = 24.0
+
+GateStatus = Literal["act", "abstain", "rejected"]
 
 
 class VisualDecisionPolicy(Protocol):
@@ -112,6 +119,154 @@ def recent_motion(
     return min(1.0, sum(diffs) * 10.0)
 
 
+def screen_change(before: Image.Image, frame: ScreenFrame) -> float:
+    """Mean visible change between a retained thumbnail and a consumed frame."""
+
+    stats = ImageStat.Stat(ImageChops.difference(before, _thumbnail(frame)))
+    return float(stats.mean[0]) / 255.0
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionGate:
+    """When a legal System-1 proposal is executed rather than turned into WAIT.
+
+    * below ``min_confidence`` the policy is not sure enough to act;
+    * at or above ``unsettled_motion`` the screen is still changing, so a target
+      read from it may not be where it will be when the actuator gets there;
+    * repeating the last attempted action on a screen that has not visibly
+      changed since (below ``unchanged_screen``, same arguments, target within
+      ``repeat_radius_px``) would loop on an action that did nothing.
+    """
+
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE
+    unsettled_motion: float = DEFAULT_UNSETTLED_MOTION
+    unchanged_screen: float = DEFAULT_UNCHANGED_SCREEN
+    repeat_radius_px: float = DEFAULT_REPEAT_RADIUS_PX
+
+    def __post_init__(self) -> None:
+        for name in ("min_confidence", "unsettled_motion", "unchanged_screen"):
+            value = float(getattr(self, name))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be within [0,1]")
+        if self.repeat_radius_px < 0:
+            raise ValueError("repeat_radius_px must not be negative")
+
+    def to_json(self) -> dict[str, float]:
+        return {
+            "min_confidence": self.min_confidence,
+            "unsettled_motion": self.unsettled_motion,
+            "unchanged_screen": self.unchanged_screen,
+            "repeat_radius_px": self.repeat_radius_px,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class GatedDecision:
+    """A policy proposal after the legal-set check and the abstention gate.
+
+    ``decision`` is the only thing an actuator may execute: the proposal when
+    ``status`` is ``act``, otherwise a WAIT bound to the observed frame.
+    """
+
+    status: GateStatus
+    decision: Decision
+    proposed: Decision | None
+    frame_id: str
+    reason: str | None = None
+    choice_key: str | None = None
+    motion: float = 0.0
+    change_since_last_action: float | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "decision": self.decision.to_json(),
+            "proposed": self.proposed.to_json() if self.proposed is not None else None,
+            "frame_id": self.frame_id,
+            "reason": self.reason,
+            "choice_key": self.choice_key,
+            "motion": self.motion,
+            "change_since_last_action": self.change_since_last_action,
+        }
+
+
+def _repeats(proposed: Decision, previous: Decision, radius_px: float) -> bool:
+    if proposed.action != previous.action:
+        return False
+    if (proposed.text, proposed.url, proposed.direction) != (previous.text, previous.url, previous.direction):
+        return False
+    if proposed.target is None or previous.target is None:
+        return proposed.target is None and previous.target is None
+    dx = proposed.target.x - previous.target.x
+    dy = proposed.target.y - previous.target.y
+    return (dx * dx + dy * dy) ** 0.5 <= radius_px
+
+
+def gate_decision(
+    proposed: Any,
+    legal: LegalActionSet,
+    *,
+    motion: float,
+    gate: DecisionGate,
+    last_attempt: Decision | None = None,
+    change_since_last_action: float | None = None,
+) -> GatedDecision:
+    """Apply the legal-set check and abstention rules to one policy proposal."""
+
+    def hold(status: GateStatus, reason: str, confidence: float, key: str | None = None) -> GatedDecision:
+        return GatedDecision(
+            status=status,
+            decision=Decision("wait", confidence, frame_id=legal.frame_id),
+            proposed=proposed if isinstance(proposed, Decision) else None,
+            frame_id=legal.frame_id,
+            reason=reason,
+            choice_key=key,
+            motion=motion,
+            change_since_last_action=change_since_last_action,
+        )
+
+    if isinstance(proposed, DecisionError):
+        return hold("rejected", str(proposed), 0.0)
+    if not isinstance(proposed, Decision):
+        return hold("rejected", f"policy returned {type(proposed).__name__}, not a Decision", 0.0)
+    try:
+        choice = legal.match(proposed)
+    except DecisionError as exc:
+        return hold("rejected", str(exc), 0.0)
+    confidence = float(proposed.confidence)
+    if proposed.action != "wait":
+        if confidence < gate.min_confidence:
+            return hold(
+                "abstain",
+                f"confidence {confidence:.2f} is below {gate.min_confidence:.2f}",
+                confidence,
+                choice.key,
+            )
+        if proposed.target is not None and motion >= gate.unsettled_motion:
+            return hold("abstain", f"screen is still changing (motion {motion:.2f})", confidence, choice.key)
+        if (
+            last_attempt is not None
+            and change_since_last_action is not None
+            and change_since_last_action < gate.unchanged_screen
+            and _repeats(proposed, last_attempt, gate.repeat_radius_px)
+        ):
+            return hold(
+                "abstain",
+                "repeats the last action, which produced no visible change",
+                confidence,
+                choice.key,
+            )
+    return GatedDecision(
+        status="act",
+        decision=proposed,
+        proposed=proposed,
+        frame_id=legal.frame_id,
+        choice_key=choice.key,
+        motion=motion,
+        change_since_last_action=change_since_last_action,
+    )
+
+
 class PersistentVisualDecisionSession:
     """Task state for System-1 decisions over the shared GNSIS visual timeline.
 
@@ -125,12 +280,15 @@ class PersistentVisualDecisionSession:
         screen_frames: LatestScreenFrameBuffer,
         *,
         cache: Any = None,
+        gate: DecisionGate | None = None,
     ) -> None:
         self.policy = policy
         self.screen_frames = screen_frames
         self.cache = cache
+        self.gate = gate if gate is not None else DecisionGate()
         self.goal: str | None = None
         self.history: list[dict] = []
+        self._last_attempt: tuple[Decision, Image.Image] | None = None
 
     def set_task(self, goal: str) -> None:
         goal = str(goal).strip()
@@ -138,10 +296,12 @@ class PersistentVisualDecisionSession:
             raise ValueError("visual task goal must not be empty")
         self.goal = goal
         self.history = []
+        self._last_attempt = None
 
     def clear_task(self) -> None:
         self.goal = None
         self.history = []
+        self._last_attempt = None
 
     def latest_frame(self) -> ScreenFrame:
         frame = self.screen_frames.latest_frame()
@@ -149,29 +309,75 @@ class PersistentVisualDecisionSession:
             raise RuntimeError("no consumed visual frame is available")
         return frame
 
-    def decide(self) -> Decision:
+    def change_since_last_action(self, frame: ScreenFrame | None = None) -> float | None:
+        frame = frame if frame is not None else self.screen_frames.latest_frame()
+        if self._last_attempt is None or frame is None:
+            return None
+        return screen_change(self._last_attempt[1], frame)
+
+    def decide_gated(self) -> GatedDecision:
+        """One System-1 decision over the current consumed frame, gated.
+
+        The legal set is generated from the goal and that frame before the
+        policy runs, and the same frame's retained neighbours supply motion and
+        change since the last attempted action.
+        """
+
         if not self.goal:
             raise ValueError("no visual task is set")
         source = self.latest_frame()
         view = RuntimeFrameView.from_screen_frame(source)
         viewport = view.image().size
+        legal = legal_actions(self.goal, source.frame_id, viewport)
         recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
         motion = recent_motion(recent)
-        decision = self.policy.decide(
-            view,
-            self.goal,
-            list(self.history),
-            motion,
-            viewport,
-            self.cache,
+        try:
+            proposed: Any = self.policy.decide(
+                view,
+                self.goal,
+                list(self.history),
+                motion,
+                viewport,
+                self.cache,
+            )
+        except DecisionError as exc:
+            proposed = exc
+        return gate_decision(
+            proposed,
+            legal,
+            motion=motion,
+            gate=self.gate,
+            last_attempt=self._last_attempt[0] if self._last_attempt is not None else None,
+            change_since_last_action=self.change_since_last_action(source),
         )
-        return validate_decision(decision, viewport)
+
+    def decide(self) -> Decision:
+        """The executable decision: the proposal, or WAIT when the gate abstains.
+
+        A proposal outside the legal set raises instead of becoming WAIT, so an
+        invented target, value, URL or command is never silently absorbed.
+        """
+
+        gated = self.decide_gated()
+        if gated.status == "rejected":
+            raise IllegalDecision(gated.reason or "illegal decision")
+        return gated.decision
+
+    def _attempt_frame(self, decision: Decision) -> ScreenFrame | None:
+        if decision.frame_id is not None:
+            for frame in self.screen_frames.recent_frames():
+                if frame.frame_id == str(decision.frame_id):
+                    return frame
+        return self.screen_frames.latest_frame()
 
     def record_attempt(self, decision: Decision) -> None:
         """Record one attempted action exactly as the prototype's session did."""
 
         if decision.action == "done":
             return
+        frame = self._attempt_frame(decision)
+        if frame is not None:
+            self._last_attempt = (decision, _thumbnail(frame))
         self.history.append(
             {
                 key: value
@@ -193,6 +399,8 @@ class PersistentVisualDecisionSession:
             "policy": self.policy.name,
             "goal": self.goal,
             "history": self.history[-MAX_HISTORY:],
+            "gate": self.gate.to_json(),
+            "change_since_last_action": self.change_since_last_action(frame),
             "frame_id": frame.frame_id if frame else None,
             "video_source": (
                 frame.metadata.get("video_source")
