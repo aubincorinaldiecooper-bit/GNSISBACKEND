@@ -20,7 +20,8 @@ def decode(
 ) -> Decision:
     """Decode a single example (batch size 1). Actions outside the bounded set
     or whose required argument is unavailable are masked, so the decision is
-    always executable."""
+    always executable. ``wait`` stays available so abstention is never masked
+    away, matching the legal action set."""
     p_action = torch.softmax(out["action"][0], -1)
     p_value = torch.softmax(out["value"][0, : len(values)], -1)
     p_target = torch.softmax(out["target"][0, : grid[0] * grid[1]], -1)
@@ -30,7 +31,7 @@ def decode(
         kind = VALUE_KIND.get(act)
         if kind and kind not in kinds:
             allowed[i] = False
-        if allowed_actions is not None and act not in allowed_actions:
+        if allowed_actions is not None and act != "wait" and act not in allowed_actions:
             allowed[i] = False
     p_action = p_action * allowed
     a = int(p_action.argmax())
