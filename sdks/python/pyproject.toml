@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnsis-visual-sdk"
+version = "0.1.0"
+description = "Python client SDK for the Smaller GNSIS visual API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "httpx>=0.27",
+  "websockets>=12",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+gnsis_visual_sdk = ["py.typed"]

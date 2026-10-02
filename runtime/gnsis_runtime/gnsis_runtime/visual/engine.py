@@ -46,6 +46,7 @@ class DecisionPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         cache: "VisualCache",
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision: ...
 
     def encode(self, frame: VisualFrame, cache: "VisualCache") -> None: ...
@@ -126,6 +127,7 @@ class JEVEngine:
         motion: float,
         viewport: tuple[int, int],
         cache: VisualCache,
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision:
         with self._lock:
             t0 = time.perf_counter()
@@ -153,7 +155,13 @@ class JEVEngine:
             batch = collate([record])
             with torch.inference_mode():
                 out = self.head(**{k: batch[k] for k in HEAD_INPUTS})
-            decision = decode(out, layout.values, feats.grid, viewport)
+            decision = decode(
+                out,
+                layout.values,
+                feats.grid,
+                viewport,
+                allowed_actions=allowed_actions,
+            )
             t2 = time.perf_counter()
         timing = {
             "vision": round(vision_ms, 1),

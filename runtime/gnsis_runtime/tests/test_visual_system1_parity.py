@@ -50,7 +50,16 @@ class FixedPolicy:
     def __init__(self, *decisions):
         self.decisions = list(decisions)
 
-    def decide(self, frame, goal, history, motion, viewport, cache):
+    def decide(
+        self,
+        frame,
+        goal,
+        history,
+        motion,
+        viewport,
+        cache,
+        allowed_actions=None,
+    ):
         made = self.decisions.pop(0) if len(self.decisions) > 1 else self.decisions[0]
         if isinstance(made, Exception):
             raise made
@@ -99,6 +108,16 @@ def test_invented_targets_values_urls_and_commands_are_rejected(decision, reason
 def test_goal_without_values_offers_no_type_or_navigate():
     legal = legal_actions("open the settings", "f1", (64, 32))
     assert "type" not in legal.actions and "navigate" not in legal.actions
+
+
+def test_allowed_actions_filter_the_generated_set_but_keep_safe_wait():
+    legal = legal_actions(
+        GOAL,
+        "f1",
+        (64, 32),
+        allowed_actions=("click",),
+    )
+    assert legal.actions == {"click", "wait"}
 
 
 # ------------------------------------------------------- abstention and change

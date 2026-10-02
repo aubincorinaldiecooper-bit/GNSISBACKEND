@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 ACTIONS: tuple[str, ...] = ("click", "type", "scroll", "navigate", "back", "wait", "done", "recover")
 ActionName = Literal["click", "type", "scroll", "navigate", "back", "wait", "done", "recover"]
@@ -42,11 +43,32 @@ class DecisionError(ValueError):
     pass
 
 
-def validate_decision(decision: Decision, viewport: tuple[int, int]) -> Decision:
+def bounded_actions(
+    actions: Iterable[str] | None = None,
+) -> tuple[ActionName, ...]:
+    selected = tuple(dict.fromkeys(actions or ACTIONS))
+    unknown = set(selected) - set(ACTIONS)
+    if unknown:
+        raise DecisionError(f"unknown actions: {sorted(unknown)}")
+    if not selected:
+        raise DecisionError("at least one action must be allowed")
+    return cast(tuple[ActionName, ...], selected)
+
+
+def validate_decision(
+    decision: Decision,
+    viewport: tuple[int, int],
+    allowed_actions: tuple[str, ...] | None = None,
+) -> Decision:
     """Reject decisions that the actuator must never execute."""
     width, height = viewport
     if decision.action not in ACTIONS:
         raise DecisionError(f"unknown action {decision.action!r}")
+    legal = set(bounded_actions(allowed_actions))
+    if decision.action != "wait" and decision.action not in legal:
+        raise DecisionError(
+            f"action {decision.action!r} is not allowed for this task"
+        )
     if not 0.0 <= decision.confidence <= 1.0:
         raise DecisionError("confidence must be in [0,1]")
     if decision.action in TARGET_REQUIRED and decision.target is None:

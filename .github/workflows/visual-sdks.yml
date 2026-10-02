@@ -1,0 +1,50 @@
+name: Visual SDKs
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime and SDK
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e runtime/gnsis_runtime pytest ruff
+          python -m pip install -e sdks/python
+      - name: Check Python formatting and lint
+        run: |
+          ruff check sdks/python sdks/testing
+          ruff format --check sdks/python sdks/testing
+      - name: Run Python SDK tests
+        env:
+          PYTHONPATH: runtime/gnsis_runtime
+        run: pytest -q sdks/python/tests
+
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm ci
+      - name: Typecheck
+        working-directory: sdks/typescript
+        run: npm run typecheck
+      - name: Build
+        working-directory: sdks/typescript
+        run: npm run build
+      - name: Test TypeScript SDK
+        working-directory: sdks/typescript
+        run: npm test
