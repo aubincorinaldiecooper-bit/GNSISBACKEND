@@ -64,18 +64,28 @@ class VisualCache:
     def lookup(self, frame: VisualFrame) -> VisualTokens | None:
         if self.tokens is None or self.signature is None:
             return None
-        if frame.frame_id == self.frame_id or frame_distance(frame.signature, self.signature) < REUSE_DISTANCE:
+        if (
+            frame.frame_id == self.frame_id
+            or frame_distance(frame.signature, self.signature) < REUSE_DISTANCE
+        ):
             return self.tokens
         return None
 
     def store(self, frame: VisualFrame, tokens: VisualTokens) -> None:
-        self.signature, self.frame_id, self.tokens = frame.signature, frame.frame_id, tokens
+        self.signature, self.frame_id, self.tokens = (
+            frame.signature,
+            frame.frame_id,
+            tokens,
+        )
 
 
 def frame_signature(image: Image.Image, size: tuple[int, int] = (48, 30)) -> np.ndarray:
     """Small grayscale perceptual signature used only for cache reuse."""
 
-    return np.asarray(image.convert("L").resize(size, Image.BILINEAR), dtype=np.float32) / 255.0
+    return (
+        np.asarray(image.convert("L").resize(size, Image.BILINEAR), dtype=np.float32)
+        / 255.0
+    )
 
 
 def frame_distance(a: np.ndarray, b: np.ndarray) -> float:
@@ -95,7 +105,9 @@ class RuntimeVisualFrame:
     signature: np.ndarray
 
     @classmethod
-    def from_image(cls, frame_id: str | int, image: Image.Image) -> "RuntimeVisualFrame":
+    def from_image(
+        cls, frame_id: str | int, image: Image.Image
+    ) -> "RuntimeVisualFrame":
         rgb = image.convert("RGB")
         return cls(frame_id=frame_id, _image=rgb, signature=frame_signature(rgb))
 
@@ -106,11 +118,20 @@ class RuntimeVisualFrame:
 class JEVEngine:
     name = "minicpm-v-4.6+jev-head"
 
-    def __init__(self, backbone: BackboneConfig, head_path: str):
+    def __init__(
+        self,
+        backbone: BackboneConfig,
+        head_path: str,
+        *,
+        min_confidence: float = 0.5,
+        min_target_prob: float = 0.2,
+    ):
         self.backbone = MiniCPMVBackbone(backbone)
         ckpt = torch.load(head_path, map_location="cpu", weights_only=False)
         self.head = JEVDecisionHead(HeadConfig(**ckpt["config"])).eval()
         self.head.load_state_dict(ckpt["state_dict"])
+        self.min_confidence = min_confidence
+        self.min_target_prob = min_target_prob
         self._lock = threading.Lock()
 
     def encode(self, frame: VisualFrame, cache: VisualCache) -> None:
@@ -126,6 +147,7 @@ class JEVEngine:
         motion: float,
         viewport: tuple[int, int],
         cache: VisualCache,
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision:
         with self._lock:
             t0 = time.perf_counter()
@@ -153,7 +175,15 @@ class JEVEngine:
             batch = collate([record])
             with torch.inference_mode():
                 out = self.head(**{k: batch[k] for k in HEAD_INPUTS})
-            decision = decode(out, layout.values, feats.grid, viewport)
+            decision = decode(
+                out,
+                layout.values,
+                feats.grid,
+                viewport,
+                allowed_actions=allowed_actions,
+                min_confidence=self.min_confidence,
+                min_target_prob=self.min_target_prob,
+            )
             t2 = time.perf_counter()
         timing = {
             "vision": round(vision_ms, 1),
@@ -164,4 +194,5 @@ class JEVEngine:
         return validate_decision(
             replace(decision, frame_id=frame.frame_id, timing_ms=timing),
             viewport,
+            allowed_actions,
         )

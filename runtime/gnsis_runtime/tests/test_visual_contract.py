@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from gnsis_runtime.visual.schema import Decision, DecisionError, Target, decision_from_json, validate_decision
+from gnsis_runtime.visual.schema import (
+    Decision,
+    DecisionError,
+    Target,
+    decision_from_json,
+    validate_decision,
+)
 
 
 VIEWPORT = (1280, 800)
@@ -36,3 +42,12 @@ def test_visual_decision_round_trip():
 def test_visual_frame_id_accepts_runtime_string_ids():
     decision = Decision("click", 0.9, Target(10, 10), frame_id="screen:42")
     assert validate_decision(decision, VIEWPORT).frame_id == "screen:42"
+
+
+def test_visual_decision_contract_rejects_action_outside_task_bounds():
+    with pytest.raises(DecisionError):
+        validate_decision(
+            Decision("navigate", 0.9, url="https://example.com"),
+            VIEWPORT,
+            ("click", "wait"),
+        )

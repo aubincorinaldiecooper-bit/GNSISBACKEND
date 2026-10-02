@@ -16,7 +16,9 @@ class RecordingPolicy:
     def __init__(self):
         self.calls = []
 
-    def decide(self, frame, goal, history, motion, viewport, cache):
+    def decide(
+        self, frame, goal, history, motion, viewport, cache, allowed_actions=None
+    ):
         self.calls.append(
             {
                 "frame_id": frame.frame_id,
@@ -25,6 +27,7 @@ class RecordingPolicy:
                 "motion": motion,
                 "viewport": viewport,
                 "cache": cache,
+                "allowed_actions": allowed_actions,
             }
         )
         return Decision(
@@ -127,3 +130,16 @@ def test_task_reset_clears_structured_action_history_not_visual_history():
     session.set_task("second")
     assert session.history == []
     assert buf.latest_frame().frame_id == "f1"
+
+
+def test_task_binds_decisions_to_code_selected_actions():
+    buf = LatestScreenFrameBuffer(max_history_frames=8)
+    _consume(buf, _frame("f1", 1000))
+    policy = RecordingPolicy()
+    session = PersistentVisualDecisionSession(policy, buf)
+    session.set_task("click the control", allowed_actions=("click", "wait"))
+
+    session.decide()
+
+    assert policy.calls[0]["allowed_actions"] == ("click", "wait")
+    assert session.state()["allowed_actions"] == ["click", "wait"]

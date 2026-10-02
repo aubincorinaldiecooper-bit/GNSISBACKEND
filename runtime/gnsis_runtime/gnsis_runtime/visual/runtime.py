@@ -13,7 +13,7 @@ from typing import Any, Protocol
 from PIL import Image, ImageChops, ImageStat
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
-from .schema import Decision, validate_decision
+from .schema import ACTIONS, Decision, bounded_actions, validate_decision
 
 MAX_HISTORY = 6
 MOTION_WINDOW_MS = 800
@@ -31,6 +31,7 @@ class VisualDecisionPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         cache: Any,
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision: ...
 
 
@@ -89,7 +90,9 @@ def recent_motion(
         return 0.0
     ordered = sorted(
         (frame for frame in frames if frame.captured_at_ms is not None),
-        key=lambda frame: int(frame.captured_at_ms) if frame.captured_at_ms is not None else -1,
+        key=lambda frame: (
+            int(frame.captured_at_ms) if frame.captured_at_ms is not None else -1
+        ),
     )
     if len(ordered) < 2:
         return 0.0
@@ -131,17 +134,25 @@ class PersistentVisualDecisionSession:
         self.cache = cache
         self.goal: str | None = None
         self.history: list[dict] = []
+        self.allowed_actions = bounded_actions()
 
-    def set_task(self, goal: str) -> None:
+    def set_task(
+        self,
+        goal: str,
+        *,
+        allowed_actions: tuple[str, ...] | None = None,
+    ) -> None:
         goal = str(goal).strip()
         if not goal:
             raise ValueError("visual task goal must not be empty")
         self.goal = goal
         self.history = []
+        self.allowed_actions = bounded_actions(allowed_actions)
 
     def clear_task(self) -> None:
         self.goal = None
         self.history = []
+        self.allowed_actions = bounded_actions(ACTIONS)
 
     def latest_frame(self) -> ScreenFrame:
         frame = self.screen_frames.latest_frame()
@@ -164,8 +175,9 @@ class PersistentVisualDecisionSession:
             motion,
             viewport,
             self.cache,
+            self.allowed_actions,
         )
-        return validate_decision(decision, viewport)
+        return validate_decision(decision, viewport, self.allowed_actions)
 
     def record_attempt(self, decision: Decision) -> None:
         """Record one attempted action exactly as the prototype's session did."""
@@ -193,10 +205,9 @@ class PersistentVisualDecisionSession:
             "policy": self.policy.name,
             "goal": self.goal,
             "history": self.history[-MAX_HISTORY:],
+            "allowed_actions": list(self.allowed_actions),
             "frame_id": frame.frame_id if frame else None,
             "video_source": (
-                frame.metadata.get("video_source")
-                if frame is not None
-                else None
+                frame.metadata.get("video_source") if frame is not None else None
             ),
         }

@@ -64,6 +64,48 @@ def test_decoder_masks_actions_without_required_argument():
     assert decision.action == "wait"
 
 
+def test_decoder_rejects_actions_outside_the_code_selected_set():
+    out = _logits_for("navigate", 0, torch.zeros(GRID[0] * GRID[1], 2), 2)
+    out["action"][0, action_label("scroll")] = 5.0
+    decision = decode(
+        out,
+        [ValueCandidate("none", None), ValueCandidate("direction", "down")],
+        GRID,
+        VIEWPORT,
+        allowed_actions=("scroll", "wait"),
+    )
+    assert decision.action == "scroll"
+    assert decision.direction == "down"
+
+
+def test_decoder_abstains_when_action_confidence_is_low():
+    out = _logits_for("done", 0, torch.zeros(GRID[0] * GRID[1], 2), 1)
+    out["action"][0] = 0.0
+    decision = decode(
+        out,
+        [ValueCandidate("none", None)],
+        GRID,
+        VIEWPORT,
+        allowed_actions=("done", "scroll"),
+        min_confidence=0.6,
+    )
+    assert decision.action == "wait"
+
+
+def test_decoder_abstains_when_visual_target_is_uncertain():
+    out = _logits_for("click", 0, torch.zeros(GRID[0] * GRID[1], 2), 1)
+    out["target"][0] = 0.0
+    decision = decode(
+        out,
+        [ValueCandidate("none", None)],
+        GRID,
+        VIEWPORT,
+        min_target_prob=0.2,
+    )
+    assert decision.action == "wait"
+    assert decision.target is None
+
+
 def _record(action: str, box, n_values: int = 3):
     layers, hidden, n = 2, 64, GRID[0] * GRID[1]
     pos, off = target_labels(box, GRID, VIEWPORT)

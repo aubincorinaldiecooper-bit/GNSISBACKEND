@@ -96,3 +96,30 @@ Do **not** delete `services/visual-engine` from the browser repository until:
 
 PR #120 is therefore a **core migration slice**, not a declaration that the full
 visual-engine migration is complete.
+
+## Laya retirement gate
+
+The backend-owned JEV policy is the canonical visual System-1 candidate. Laya
+remains a comparison policy until both receive the same rendered frame, goal,
+frame ID, and code-generated legal action set through
+`gnsis_runtime.visual.policy_benchmark`.
+
+The policy payload never includes expected actions, target boxes, task outcomes,
+DOM data, selectors, or other oracle labels. Scoring joins those labels only
+after both policies return results.
+
+Retire Laya only after at least 200 held-out decisions across at least 50
+multi-step browser tasks show that JEV:
+
+- produces no invalid actions or stale-frame executions;
+- matches or exceeds Laya on abstention correctness and next-action selection;
+- meets the click-grounding acceptance target on the same target boxes;
+- matches or exceeds Laya on actuator success and verified task completion;
+- preserves the separate deterministic actuator, authority, confirmation, and
+  post-action verification boundaries.
+
+Current backend parity already includes bounded goal-derived values, structured
+decision validation, bounded action history, motion conditioning, stale-frame
+checks, execution authority, deterministic actuation, post-action verification,
+and bounded recovery. The remaining Laya strengths added here are per-task
+action masking and low-confidence action or target abstention to `wait`.
