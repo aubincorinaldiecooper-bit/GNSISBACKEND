@@ -16,9 +16,11 @@ def decode(
     grid: tuple[int, int],
     viewport: tuple[int, int],
     min_target_prob: float = 0.2,
+    allowed_actions: tuple[str, ...] | None = None,
 ) -> Decision:
-    """Decode a single example (batch size 1). Actions whose required argument is
-    unavailable are masked, so the decision is always executable."""
+    """Decode a single example (batch size 1). Actions outside the bounded set
+    or whose required argument is unavailable are masked, so the decision is
+    always executable."""
     p_action = torch.softmax(out["action"][0], -1)
     p_value = torch.softmax(out["value"][0, : len(values)], -1)
     p_target = torch.softmax(out["target"][0, : grid[0] * grid[1]], -1)
@@ -27,6 +29,8 @@ def decode(
     for i, act in enumerate(ACTIONS):
         kind = VALUE_KIND.get(act)
         if kind and kind not in kinds:
+            allowed[i] = False
+        if allowed_actions is not None and act not in allowed_actions:
             allowed[i] = False
     p_action = p_action * allowed
     a = int(p_action.argmax())
