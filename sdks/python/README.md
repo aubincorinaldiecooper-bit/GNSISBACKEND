@@ -13,6 +13,7 @@ with VisualClient("https://visual.example", host_token) as host:
     session = host.create_session()
     try:
         with VisualClient("https://visual.example", session.planner_token) as planner:
+
             async def plan_and_act():
                 async with await FrameStream.connect(
                     "https://visual.example", session
@@ -22,16 +23,12 @@ with VisualClient("https://visual.example", host_token) as host:
                         captured_at_ms=host.capture_timestamp_ms(),
                         image=host.capture_jpeg(),
                     )
-                planner.set_task(
-                    session.session_id, "click the control", ["click"]
-                )
+                planner.set_task(session.session_id, "click the control", ["click"])
                 result = planner.decide(session.session_id)
                 decision = result["decision"]
                 if result["current"] and host.permission_policy_allows(decision):
                     host.execute(decision)
-                    host.record_attempt(
-                        session.session_id, result["decision_id"]
-                    )
+                    host.record_attempt(session.session_id, result["decision_id"])
 
             asyncio.run(plan_and_act())
     finally:

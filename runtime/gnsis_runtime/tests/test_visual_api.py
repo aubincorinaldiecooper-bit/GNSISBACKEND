@@ -258,17 +258,39 @@ def test_api_rejects_missing_task_and_stale_stream_frames() -> None:
                     assert response["error"]["code"] == "stale_frame"
 
 
-def test_api_rejects_oversized_frame_headers_before_json_parsing() -> None:
+def test_api_discards_binary_after_rejected_headers_and_resynchronizes() -> None:
+    invalid_headers = [
+        "x" * (MAX_FRAME_HEADER_BYTES + 1),
+        "{",
+        "[]",
+        "{}",
+    ]
     with TestClient(_app()) as client:
         opened = _open(client)
         with client.websocket_connect(
             f"{opened['stream']['path']}?token={opened['stream']['token']}"
         ) as websocket:
-            websocket.send_text("x" * (MAX_FRAME_HEADER_BYTES + 1))
-            rejected = websocket.receive_json()
+            for index, invalid_header in enumerate(invalid_headers):
+                websocket.send_text(invalid_header)
+                rejected = websocket.receive_json()
+                assert rejected["type"] == "screen.frame.rejected"
+                assert rejected["error"]["code"] == "invalid_protocol"
 
-    assert rejected["type"] == "screen.frame.rejected"
-    assert rejected["error"]["code"] == "invalid_protocol"
+                websocket.send_bytes(_jpeg())
+                frame_id = f"resynchronized-{index}"
+                websocket.send_json(
+                    {
+                        "type": "screen.frame",
+                        "frame_id": frame_id,
+                        "captured_at_ms": 1_000 + index,
+                        "encoding": "jpeg",
+                        "video_source": "screen",
+                    }
+                )
+                websocket.send_bytes(_jpeg())
+                accepted = websocket.receive_json()
+                assert accepted["type"] == "screen.frame.accepted"
+                assert accepted["frame_id"] == frame_id
 
 
 def test_api_has_no_screenshot_upload_decision_path() -> None:

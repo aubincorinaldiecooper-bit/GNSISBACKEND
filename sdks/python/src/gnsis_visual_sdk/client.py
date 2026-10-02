@@ -97,6 +97,7 @@ class VisualClient:
             "DELETE",
             f"/v1/visual/sessions/{quote(session_id, safe='')}",
             retry=True,
+            accept_unknown_session_after_retry=True,
         )
 
     def set_task(
@@ -164,6 +165,7 @@ class VisualClient:
         json: dict[str, Any] | None = None,
         authenticated: bool = True,
         retry: bool,
+        accept_unknown_session_after_retry: bool = False,
     ) -> dict[str, Any]:
         headers = (
             {"Authorization": f"Bearer {self._api_token}"} if authenticated else {}
@@ -208,7 +210,15 @@ class VisualClient:
             if retry and retryable and attempt + 1 < attempts:
                 time.sleep(0.2 * (2**attempt))
                 continue
-            raise self._response_error(response, retryable=retryable)
+            error = self._response_error(response, retryable=retryable)
+            if (
+                accept_unknown_session_after_retry
+                and attempt > 0
+                and response.status_code == 404
+                and error.code == "unknown_session"
+            ):
+                return {"closed": True}
+            raise error
 
         raise AssertionError("request attempts exhausted without a response")
 
@@ -253,12 +263,18 @@ def _validate_base_url(base_url: str) -> None:
             "invalid_base_url",
             "visual API base URL is invalid",
         ) from None
-    if parsed.scheme.lower() == "http" and hostname not in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
-        raise VisualServiceError(
-            "insecure_transport",
-            "visual API requires HTTPS except for loopback hosts",
-        )
+    scheme = parsed.scheme.lower()
+    if scheme == "https" or (
+        scheme == "http"
+        and hostname
+        in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }
+    ):
+        return
+    raise VisualServiceError(
+        "insecure_transport",
+        "visual API requires HTTPS except for loopback hosts",
+    )

@@ -5,10 +5,14 @@ import os
 from collections.abc import Callable, Sequence
 from typing import Any
 
-import uvicorn
 from fastapi import FastAPI
 
-from .api import VisualAPISettings, create_visual_api
+from .api import (
+    MAX_FRAME_BYTES,
+    MAX_FRAME_HEADER_BYTES,
+    VisualAPISettings,
+    create_visual_api,
+)
 from .runtime import VisualDecisionPolicy
 from .service import VisualService
 
@@ -43,6 +47,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not host_token:
         parser.error("GNSIS_VISUAL_HOST_TOKEN must be set")
 
+    import uvicorn
+
     from .backbone import BackboneConfig
     from .engine import JEVEngine, VisualCache
 
@@ -56,4 +62,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_sessions=args.max_sessions,
         cache_factory=VisualCache,
     )
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ws_max_size=MAX_FRAME_BYTES + MAX_FRAME_HEADER_BYTES,
+    )

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import builtins
+import sys
+from types import ModuleType
 
 import pytest
 from starlette.testclient import TestClient
 
+from gnsis_runtime.visual.api import MAX_FRAME_BYTES, MAX_FRAME_HEADER_BYTES
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.serve import build_app, main
 
@@ -85,3 +88,22 @@ def test_main_requires_host_token_before_loading_model_stack(
 
     assert error.value.code == 2
     assert "GNSIS_VISUAL_HOST_TOKEN" in capsys.readouterr().err
+
+
+def test_main_bounds_websocket_messages(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    backbone = ModuleType("gnsis_runtime.visual.backbone")
+    setattr(backbone, "BackboneConfig", lambda **kwargs: kwargs)
+    engine = ModuleType("gnsis_runtime.visual.engine")
+    setattr(engine, "JEVEngine", lambda *_args: FixedPolicy())
+    setattr(engine, "VisualCache", lambda: None)
+    uvicorn = ModuleType("uvicorn")
+    setattr(uvicorn, "run", lambda _app, **kwargs: calls.update(kwargs))
+    monkeypatch.setitem(sys.modules, "gnsis_runtime.visual.backbone", backbone)
+    monkeypatch.setitem(sys.modules, "gnsis_runtime.visual.engine", engine)
+    monkeypatch.setitem(sys.modules, "uvicorn", uvicorn)
+    monkeypatch.setenv("GNSIS_VISUAL_HOST_TOKEN", "host-token")
+
+    main(["--model", "unused", "--head", "unused"])
+
+    assert calls["ws_max_size"] == MAX_FRAME_BYTES + MAX_FRAME_HEADER_BYTES

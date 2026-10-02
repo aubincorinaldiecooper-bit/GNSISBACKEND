@@ -199,6 +199,7 @@ def create_visual_api(
             return
         await websocket.accept()
         pending: ScreenFrameHeader | None = None
+        discard_next_binary = False
         try:
             while True:
                 message = await websocket.receive()
@@ -207,12 +208,15 @@ def create_visual_api(
                 text = message.get("text")
                 body = message.get("bytes")
                 if text is not None:
+                    if discard_next_binary:
+                        discard_next_binary = False
                     if len(text.encode("utf-8")) > MAX_FRAME_HEADER_BYTES:
                         pending = None
                         await _stream_error(
                             websocket,
                             f"screen frame metadata exceeds {MAX_FRAME_HEADER_BYTES} bytes",
                         )
+                        discard_next_binary = True
                         continue
                     if pending is not None:
                         await _stream_error(
@@ -220,6 +224,7 @@ def create_visual_api(
                             "frame metadata requires a following binary payload",
                         )
                         pending = None
+                        discard_next_binary = True
                         continue
                     try:
                         value = json.loads(text)
@@ -227,8 +232,13 @@ def create_visual_api(
                             raise ValueError("screen frame metadata must be an object")
                         pending = ScreenFrameHeader.from_payload(value)
                     except (ValueError, TypeError) as exc:
+                        pending = None
                         await _stream_error(websocket, str(exc))
+                        discard_next_binary = True
                 elif body is not None:
+                    if discard_next_binary:
+                        discard_next_binary = False
+                        continue
                     if pending is None:
                         await _stream_error(
                             websocket,

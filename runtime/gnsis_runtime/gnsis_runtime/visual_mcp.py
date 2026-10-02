@@ -38,14 +38,21 @@ class VisualMCPConfig:
                 f"missing Smaller GNSIS MCP configuration: {', '.join(missing)}"
             )
         try:
-            hostname = urlsplit(api_base).hostname
+            parsed = urlsplit(api_base)
+            hostname = parsed.hostname
         except ValueError:
+            parsed = None
             hostname = None
-        if api_base.lower().startswith("http://") and hostname not in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }:
+        scheme = parsed.scheme.lower() if parsed is not None else ""
+        if scheme != "https" and not (
+            scheme == "http"
+            and hostname
+            in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }
+        ):
             raise RuntimeError(
                 "Smaller GNSIS MCP requires HTTPS except for loopback hosts"
             )
