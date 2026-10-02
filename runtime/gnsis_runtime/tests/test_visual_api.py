@@ -76,7 +76,12 @@ def test_api_requires_authentication_and_unknown_sessions_are_structured() -> No
 
 
 def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
-    with TestClient(_app()) as client:
+    service = VisualService(FixedPolicy())
+    app = create_visual_api(
+        service,
+        VisualAPISettings(host_token="test-token"),
+    )
+    with TestClient(app) as client:
         opened = _open(client)
         session_id = opened["session_id"]
         stream = opened["stream"]
@@ -92,11 +97,13 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
                     "video_source": "screen",
                 }
             )
-            websocket.send_bytes(_jpeg())
+            frame_body = _jpeg()
+            websocket.send_bytes(frame_body)
             accepted = websocket.receive_json()
         assert accepted["type"] == "screen.frame.accepted"
         assert accepted["frame_id"] == "f1"
         assert accepted["frame_seq"] == 1
+        assert service.state(session_id)["usage"]["frame_bytes"] == len(frame_body)
 
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",
@@ -347,10 +354,14 @@ def test_api_accepts_grants_and_isolates_tenants_on_session_routes() -> None:
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     ).decode()
-    public_pem = private.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     service = VisualService(FixedPolicy())
     app = create_visual_api(
         service,
@@ -399,10 +410,14 @@ def test_api_enforces_grant_concurrent_session_limit() -> None:
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     ).decode()
-    public_pem = private.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     app = create_visual_api(
         VisualService(FixedPolicy()),
         VisualAPISettings(

@@ -6,6 +6,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
+from urllib import error as urllib_error
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -82,6 +83,8 @@ class HttpUsageSink:
         self.max_pending = max_pending
         self._pending: deque[UsageReport] = deque()
         self._dropped = 0
+        self._failures = 0
+        self._last_error: str | None = None
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -116,6 +119,8 @@ class HttpUsageSink:
             return {
                 "pending": len(self._pending),
                 "dropped": self._dropped,
+                "failures": self._failures,
+                "last_error": self._last_error,
                 "running": self._thread is not None and self._thread.is_alive(),
             }
 
@@ -148,7 +153,10 @@ class HttpUsageSink:
                     "Content-Type": "application/json",
                 },
             )
-        except Exception:
+        except (OSError, urllib_error.URLError, ValueError) as exc:
+            with self._lock:
+                self._failures += 1
+                self._last_error = type(exc).__name__
             return
         with self._lock:
             for _ in range(min(len(batch), len(self._pending))):

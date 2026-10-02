@@ -119,6 +119,10 @@ each other's state. Usage callbacks meter accepted frames, frame bytes,
 decisions (including act/abstain), recorded attempts, inference milliseconds,
 session milliseconds, and closed sessions. Pricing, charging, and billing are
 intentionally not implemented.
+Grants remain valid until expiry (up to the configured TTL, 300 seconds by
+default) after a key is disabled or rotated. The daily decision quota is checked
+when issuing grants against ingested usage, so it is a soft limit that can lag
+by the usage-sink interval.
 
 ## MCP adapter
 

@@ -19,7 +19,7 @@ class FakeService:
 def test_http_usage_sink_retries_identical_event_ids() -> None:
     service = FakeService()
     calls: list[bytes] = []
-    failures = [RuntimeError("temporary"), None]
+    failures = [OSError("temporary secret"), None]
 
     def post(payload, _headers):
         calls.append(payload)
@@ -54,11 +54,15 @@ def test_http_usage_sink_retries_identical_event_ids() -> None:
         )
     ]
     HttpUsageSink._flush(sink)
+    assert sink.health()["failures"] == 1
+    assert sink.health()["last_error"] == "OSError"
+    assert "temporary secret" not in repr(sink.health())
     HttpUsageSink._flush(sink)
 
     assert len(calls) == 2
     assert json.loads(calls[0]) == json.loads(calls[1])
     assert json.loads(calls[0])["reports"][0]["event_id"] == "session:1"
+    assert sink.health()["failures"] == 1
 
 
 def test_http_usage_sink_rejects_non_loopback_plain_http() -> None:

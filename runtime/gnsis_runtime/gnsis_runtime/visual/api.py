@@ -311,8 +311,11 @@ def create_visual_api(
                             max_bytes=MAX_FRAME_BYTES,
                             max_pixels=MAX_FRAME_PIXELS,
                         )
-                        decoded.frame.metadata["frame_bytes"] = len(body)
-                        accepted = service.publish_frame(session_id, decoded.frame)
+                        accepted = service.publish_frame(
+                            session_id,
+                            decoded.frame,
+                            frame_bytes=len(body),
+                        )
                     except (ValueError, VisualServiceError) as exc:
                         code = (
                             exc.code

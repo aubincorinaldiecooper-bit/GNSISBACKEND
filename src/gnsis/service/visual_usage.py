@@ -81,12 +81,6 @@ def _to_view(row: orm.VisualUsageRecord) -> VisualUsageRecordView:
     )
 
 
-def _report_value(report, name: str):
-    if isinstance(report, Mapping):
-        return report[name]
-    return getattr(report, name)
-
-
 class VisualUsageStore:
     """Append-only visual metering records, deduplicated by ``event_id``."""
 
@@ -97,8 +91,10 @@ class VisualUsageStore:
             .one_or_none()
         )
 
-    def record(self, report) -> tuple[VisualUsageRecordView, bool]:
-        values = {name: _report_value(report, name) for name in _REPORT_FIELDS}
+    def record(
+        self, report: Mapping[str, object]
+    ) -> tuple[VisualUsageRecordView, bool]:
+        values = {name: report[name] for name in _REPORT_FIELDS}
         with session_scope() as s:
             existing = self._find_event(s, values["event_id"])
             if existing is not None:

@@ -98,6 +98,21 @@ def test_service_rejects_stale_and_replayed_frames() -> None:
         service.publish_frame(session_id, _frame("f2", 900))
 
 
+def test_frame_byte_usage_is_separate_from_frame_metadata() -> None:
+    service = VisualService(FixedPolicy())
+    session_id = service.create_session().session_id
+    frame = _frame("f1", 1000)
+
+    service.publish_frame(session_id, frame, frame_bytes=23)
+
+    assert service.state(session_id)["usage"]["frame_bytes"] == 23
+    assert "frame_bytes" not in frame.metadata
+    with pytest.raises(VisualServiceError) as invalid:
+        service.publish_frame(session_id, _frame("f2", 1100), frame_bytes=-1)
+    assert invalid.value.code == "invalid_frame"
+    assert service.state(session_id)["usage"]["frames_accepted"] == 1
+
+
 def test_service_exposes_abstention_without_executing_the_proposal() -> None:
     service = VisualService(FixedPolicy(confidence=0.2))
     session_id = service.create_session().session_id

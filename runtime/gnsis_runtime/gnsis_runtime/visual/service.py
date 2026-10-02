@@ -210,7 +210,18 @@ class VisualService:
         with self._lock:
             return session_id in self._sessions
 
-    def publish_frame(self, session_id: str, frame: ScreenFrame) -> dict[str, Any]:
+    def publish_frame(
+        self,
+        session_id: str,
+        frame: ScreenFrame,
+        *,
+        frame_bytes: int = 0,
+    ) -> dict[str, Any]:
+        if type(frame_bytes) is not int or frame_bytes < 0:
+            raise VisualServiceError(
+                "invalid_frame",
+                "frame_bytes must be a non-negative integer",
+            )
         session = self._session(session_id)
         captured_at_ms = frame.captured_at_ms
         if captured_at_ms is None:
@@ -253,9 +264,7 @@ class VisualService:
             session.recent_duplicate_frame_ids.append(frame.frame_id)
             session.frame_seq += 1
             session.usage["frames_accepted"] += 1
-            frame_bytes = frame.metadata.get("frame_bytes", 0)
-            if isinstance(frame_bytes, int) and frame_bytes >= 0:
-                session.usage["frame_bytes"] += frame_bytes
+            session.usage["frame_bytes"] += frame_bytes
             return {
                 "frame_id": frame.frame_id,
                 "frame_seq": session.frame_seq,
