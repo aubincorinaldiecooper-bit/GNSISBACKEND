@@ -107,6 +107,31 @@ creation is not retried to avoid accidentally creating multiple sessions, and
 adapter for MCP-capable agents; these SDKs provide direct client integrations
 for hosts and applications.
 
+## Existing host connectors
+
+The browser connector uses the existing GNSIS Browser Hub rather than adding a
+second actuator. Run `gnsis-visual-browser-host`, then open the extension Hub at
+`hub.html?ws=8766`. It forwards the Hub's live tab frames, requests bounded
+decisions, routes them through `BrowserActionBridge`, records correlated
+attempts, and starts each action from a fresh frame.
+
+The desktop connector is part of the existing Electron Host. It is enabled only
+when all three values are present:
+
+```text
+GNSIS_VISUAL_BASE_URL=https://visual.example
+GNSIS_VISUAL_HOST_TOKEN=<host credential>
+GNSIS_VISUAL_TASK=<explicit user task>
+```
+
+It observes only frames already accepted by `HostSession.sendScreenFrame` and
+routes `click`, `type`, `navigate`, and `back` decisions through the existing
+`ActionBroker` and `ToolRegistry`. The broker still owns capability
+negotiation, trusted-turn policy, confirmation, permissions, replay protection,
+timeline events, and post-action screen verification. Without a matching
+trusted user turn, side-effecting actions fail closed into the broker's existing
+confirmation policy.
+
 ## Commercial access
 
 Commercial hosts use the existing Genesis virtual-key system. Issue a virtual

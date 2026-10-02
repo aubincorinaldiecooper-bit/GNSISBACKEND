@@ -26,6 +26,7 @@ import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
 import { ScreenWatch } from "../host/screenWatch.js";
+import { DesktopVisualConnector } from "../host/desktopVisualConnector.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
 import { hostLog } from "./hostLog.js";
 import {
@@ -118,6 +119,7 @@ const OFFERED_ACTIONS = ACTIONS_TRUST.allowed
   : [];
 const turns = new TurnLog();
 const screenWatch = new ScreenWatch();
+let desktopVisual: DesktopVisualConnector | null = null;
 // The person's own words, so an action they asked for by name runs without a
 // second ask. Only where actions are offered; see host/utterances.ts.
 const utterances =
@@ -198,7 +200,11 @@ const host = new HostSession({
 
 const broker = new ActionBroker({
   registry: tools,
-  send: (control) => host.sendControl(control as unknown as ClientControl),
+  send: (control) => {
+    if (!desktopVisual?.handleBrokerControl(control)) {
+      host.sendControl(control as unknown as ClientControl);
+    }
+  },
   event: (event) => host.emit(event),
   confirm: askPerson,
   accessibility: (prompt) =>
@@ -413,6 +419,34 @@ app.whenReady().then(async () => {
   createWindow();
   host.connect(SESSION_ID);
   host.ready();
+  const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
+  const visualHostToken = process.env.GNSIS_VISUAL_HOST_TOKEN?.trim();
+  const visualTask = process.env.GNSIS_VISUAL_TASK?.trim();
+  if (visualBaseUrl && visualHostToken && visualTask) {
+    desktopVisual = new DesktopVisualConnector({
+      baseUrl: visualBaseUrl,
+      hostToken: visualHostToken,
+      task: visualTask,
+      capabilityManifestId: HOST_TOOLS_VERSION,
+      latestTurnId: () => turns.latest()?.turnId ?? null,
+      dispatch: (control) => broker.handleControl(control),
+      log: hostLog,
+    });
+    try {
+      await desktopVisual.start();
+    } catch (error) {
+      hostLog(
+        "visual",
+        `desktop visual session did not start: ${String((error as Error).message ?? error)}`,
+      );
+      desktopVisual = null;
+    }
+  } else if (visualBaseUrl || visualHostToken || visualTask) {
+    hostLog(
+      "visual",
+      "desktop visual connector requires base URL, host token, and task together",
+    );
+  }
 
   shortcuts.register("Control+Alt+Space", () => {
     host.interrupt("global_shortcut");
@@ -490,8 +524,10 @@ app.whenReady().then(async () => {
   });
   if (utterances) setInterval(() => utterances.idle(Date.now()), 1_000);
   ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) => {
-    if (host.sendScreenFrame(metadata, Buffer.from(payload))) {
+    const frame = Buffer.from(payload);
+    if (host.sendScreenFrame(metadata, frame)) {
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
+      desktopVisual?.observeFrame(metadata, frame);
     }
   });
   // A yes/no question from the page, such as "Erase your GNSIS?", asked the
@@ -541,6 +577,7 @@ app.whenReady().then(async () => {
 app.on("will-quit", () => {
   hostLog("host", "will-quit");
   shortcuts.unregisterAll();
+  void desktopVisual?.close();
   host.disconnect("app_quit");
 });
 

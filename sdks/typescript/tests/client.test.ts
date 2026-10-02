@@ -253,6 +253,82 @@ test("frame streams connect over loopback HTTP", async () => {
   assert.ok(urls[2].startsWith("ws://[::1]:8790/stream?"));
 });
 
+test("frame streams preserve host source metadata", async () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "WebSocket",
+  );
+  const sent: Array<string | ArrayBufferLike | Blob | ArrayBufferView> = [];
+  class FakeWebSocket extends EventTarget {
+    static readonly OPEN = 1;
+    readyState = 0;
+
+    constructor(_url: string | URL) {
+      super();
+      queueMicrotask(() => {
+        this.readyState = FakeWebSocket.OPEN;
+        this.dispatchEvent(new Event("open"));
+      });
+    }
+
+    send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+      sent.push(data);
+      if (typeof data !== "string") {
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({ type: "screen.frame.accepted" }),
+            }),
+          ),
+        );
+      }
+    }
+
+    close(): void {
+      this.readyState = 3;
+    }
+  }
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket as unknown as typeof WebSocket,
+  });
+  try {
+    const stream = await FrameStream.connect("http://127.0.0.1:8790", {
+      sessionId: "session-1",
+      streamPath: "/stream",
+      streamToken: "stream-secret",
+      plannerToken: "planner-secret",
+      protocol: "screen-frame-v1",
+    });
+    await stream.sendFrame({
+      frameId: "desktop-frame-1",
+      capturedAtMs: 1_000,
+      image: new Uint8Array([1, 2, 3]),
+      metadata: {
+        source_kind: "desktop_live_screen",
+        source_width: 1_280,
+        source_height: 720,
+      },
+    });
+    await stream.close();
+  } finally {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "WebSocket", originalDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "WebSocket");
+    }
+  }
+  const header = JSON.parse(String(sent[0])) as {
+    metadata: Record<string, unknown>;
+  };
+  assert.deepEqual(header.metadata, {
+    source_kind: "desktop_live_screen",
+    source_width: 1_280,
+    source_height: 720,
+  });
+  assert.deepEqual(sent[1], new Uint8Array([1, 2, 3]));
+});
+
 test("decision retries preserve request id and attempts are never retried", async () => {
   const decisionRequests: string[] = [];
   let attemptCalls = 0;
