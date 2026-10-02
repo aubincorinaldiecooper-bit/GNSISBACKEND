@@ -161,12 +161,17 @@ def _parse_visual_usage_report(report: object) -> dict:
     if type(report.get("closed")) is not bool:
         raise HTTPException(status_code=400, detail="closed must be a boolean")
     generated_at_ms = report.get("generated_at_ms")
-    if (
+    if generated_at_ms not in (None, 0) and (
         type(generated_at_ms) is not int
         or generated_at_ms < 0
         or generated_at_ms > time.time() * 1000 + _GENERATED_AT_MAX_FUTURE_MS
     ):
         raise HTTPException(status_code=400, detail="generated_at_ms is out of range")
+    reported_at = (
+        datetime.fromtimestamp(generated_at_ms / 1000, tz=timezone.utc)
+        if generated_at_ms
+        else datetime.now(timezone.utc)
+    )
     if report["event_id"] != f"{report['session_id']}:{report_seq}":
         raise HTTPException(
             status_code=400, detail="event_id does not match session_id and report_seq"
@@ -175,7 +180,7 @@ def _parse_visual_usage_report(report: object) -> dict:
         **report,
         "project_id": report.get("project_id"),
         "environment_id": report.get("environment_id"),
-        "reported_at": datetime.fromtimestamp(generated_at_ms / 1000, tz=timezone.utc),
+        "reported_at": reported_at,
     }
 
 

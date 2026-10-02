@@ -66,7 +66,8 @@ class VisualServiceSession:
     )
     created_monotonic: float = field(default_factory=time.monotonic)
     report_seq: int = 0
-    reported_usage: dict[str, int] = field(default_factory=dict)
+    reported_usage_by_day: dict[int, dict[str, int]] = field(default_factory=dict)
+    usage_by_day: dict[int, dict[str, int]] = field(default_factory=dict)
     usage: dict[str, int] = field(
         default_factory=lambda: {
             "frames_accepted": 0,
@@ -182,14 +183,8 @@ class VisualService:
         if tenant.workspace_id is not None and (
             tenant.workspace_id != session.tenant.workspace_id
             or tenant.key_id != session.tenant.key_id
-            or (
-                tenant.project_id is not None
-                and tenant.project_id != session.tenant.project_id
-            )
-            or (
-                tenant.environment_id is not None
-                and tenant.environment_id != session.tenant.environment_id
-            )
+            or tenant.project_id != session.tenant.project_id
+            or tenant.environment_id != session.tenant.environment_id
         ):
             raise self._unknown_session()
 
@@ -271,8 +266,11 @@ class VisualService:
             session.last_captured_at_ms = captured_at_ms
             session.recent_duplicate_frame_ids.append(frame.frame_id)
             session.frame_seq += 1
-            session.usage["frames_accepted"] += 1
-            session.usage["frame_bytes"] += frame_bytes
+            self._record_usage(
+                session,
+                frames_accepted=1,
+                frame_bytes=frame_bytes,
+            )
             return {
                 "frame_id": frame.frame_id,
                 "frame_seq": session.frame_seq,
@@ -366,8 +364,10 @@ class VisualService:
             seq = session.frame_seq
             started = time.monotonic()
             gated = session.decision_session.decide_gated()
-            session.usage["inference_ms"] += max(
-                0, int((time.monotonic() - started) * 1000)
+            inference_ms = max(0, int((time.monotonic() - started) * 1000))
+            self._record_usage(
+                session,
+                inference_ms=inference_ms,
             )
             if gated.status == "rejected":
                 raise VisualServiceError(
@@ -402,11 +402,12 @@ class VisualService:
             session.outstanding[decision_id] = (decision, seq)
             while len(session.outstanding) > self.max_outstanding_decisions:
                 session.outstanding.popitem(last=False)
-            session.usage["decisions"] += 1
+            decision_usage = {"decisions": 1}
             if gated.status == "act":
-                session.usage["decisions_act"] += 1
+                decision_usage["decisions_act"] = 1
             elif gated.status == "abstain":
-                session.usage["decisions_abstain"] += 1
+                decision_usage["decisions_abstain"] = 1
+            self._record_usage(session, **decision_usage)
             return dict(response)
 
     def record_attempt(self, session_id: str, decision_id: str) -> dict[str, Any]:
@@ -421,7 +422,7 @@ class VisualService:
                 )
             decision, _seq = outstanding
             session.decision_session.record_attempt(decision)
-            session.usage["attempts_recorded"] += 1
+            self._record_usage(session, attempts_recorded=1)
             return {
                 "decision_id": decision_id,
                 "recorded": True,
@@ -454,14 +455,22 @@ class VisualService:
             if session.tenant.workspace_id is None:
                 continue
             with session.lock:
-                delta = {
-                    name: session.usage[name] - session.reported_usage.get(name, 0)
-                    for name in session.usage
-                }
-                if not any(delta.values()):
-                    continue
-                reports.append(self._report_for(session, delta, closed=False))
-                session.reported_usage = dict(session.usage)
+                for day_ms, usage in sorted(session.usage_by_day.items()):
+                    reported = session.reported_usage_by_day.get(day_ms, {})
+                    delta = {
+                        name: usage[name] - reported.get(name, 0) for name in usage
+                    }
+                    if not any(delta.values()):
+                        continue
+                    reports.append(
+                        self._report_for(
+                            session,
+                            delta,
+                            closed=False,
+                            generated_at_ms=day_ms,
+                        )
+                    )
+                    session.reported_usage_by_day[day_ms] = dict(usage)
         return reports
 
     def _state(self, session: VisualServiceSession) -> dict[str, Any]:
@@ -473,19 +482,26 @@ class VisualService:
     def _enqueue_report(self, session: VisualServiceSession, *, closed: bool) -> None:
         if session.tenant.workspace_id is None:
             return
-        delta = {
-            name: session.usage[name] - session.reported_usage.get(name, 0)
-            for name in session.usage
-        }
-        report = self._report_for(
-            session,
-            delta,
-            closed=closed,
-            session_ms=int((time.monotonic() - session.created_monotonic) * 1000),
-        )
-        session.reported_usage = dict(session.usage)
+        pending: list[tuple[int, dict[str, int]]] = []
+        for day_ms, usage in sorted(session.usage_by_day.items()):
+            reported = session.reported_usage_by_day.get(day_ms, {})
+            delta = {name: usage[name] - reported.get(name, 0) for name in usage}
+            if any(delta.values()):
+                pending.append((day_ms, delta))
+        if not pending:
+            pending.append((self._usage_day_ms(), self._empty_usage()))
+        reports = [
+            self._report_for(
+                session,
+                delta,
+                closed=closed and index == len(pending) - 1,
+                session_ms=int((time.monotonic() - session.created_monotonic) * 1000),
+                generated_at_ms=day_ms,
+            )
+            for index, (day_ms, delta) in enumerate(pending)
+        ]
         with self._lock:
-            self._pending_reports.append(report)
+            self._pending_reports.extend(reports)
             while len(self._pending_reports) > self.max_pending_reports:
                 self._pending_reports.popleft()
                 self._pending_report_drops += 1
@@ -497,6 +513,7 @@ class VisualService:
         *,
         closed: bool,
         session_ms: int = 0,
+        generated_at_ms: int | None = None,
     ) -> UsageReport:
         session.report_seq += 1
         return UsageReport(
@@ -516,8 +533,38 @@ class VisualService:
             inference_ms=delta.get("inference_ms", 0),
             session_ms=session_ms,
             closed=closed,
-            generated_at_ms=int(time.time() * 1000),
+            generated_at_ms=generated_at_ms or int(time.time() * 1000),
         )
+
+    @staticmethod
+    def _empty_usage() -> dict[str, int]:
+        return {
+            "frames_accepted": 0,
+            "frame_bytes": 0,
+            "decisions": 0,
+            "decisions_act": 0,
+            "decisions_abstain": 0,
+            "attempts_recorded": 0,
+            "inference_ms": 0,
+        }
+
+    @staticmethod
+    def _usage_day_ms(now_ms: int | None = None) -> int:
+        timestamp_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+        return timestamp_ms - (timestamp_ms % 86_400_000)
+
+    def _record_usage(
+        self,
+        session: VisualServiceSession,
+        *,
+        generated_at_ms: int | None = None,
+        **deltas: int,
+    ) -> None:
+        day_ms = self._usage_day_ms(generated_at_ms)
+        bucket = session.usage_by_day.setdefault(day_ms, self._empty_usage())
+        for name, value in deltas.items():
+            session.usage[name] += value
+            bucket[name] += value
 
     def _session(self, session_id: str) -> VisualServiceSession:
         with self._lock:

@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from gnsis_runtime.screen import ScreenFrame
 from gnsis_runtime.visual.api import (
     MAX_FRAME_HEADER_BYTES,
     VisualAPISettings,
@@ -322,7 +323,8 @@ def _grant(
     workspace_id: str,
     grant_id: str,
     key_id: str | None = None,
-    project_id: str = "project",
+    project_id: str | None = "project",
+    environment_id: str | None = "environment",
     expires_in: int = 300,
     max_concurrent_sessions: int = 4,
 ) -> str:
@@ -337,7 +339,7 @@ def _grant(
             "exp": now + expires_in,
             "ws": workspace_id,
             "prj": project_id,
-            "env": "environment",
+            "env": environment_id,
             "scp": ["visual:host"],
             "lim": {
                 "max_concurrent_sessions": max_concurrent_sessions,
@@ -490,6 +492,60 @@ def test_expired_grant_closes_session_but_cannot_create_one() -> None:
     assert create.status_code == 401
 
 
+def test_expired_grant_cannot_record_attempt() -> None:
+    private = Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    service = VisualService(FixedPolicy())
+    app = create_visual_api(
+        service,
+        VisualAPISettings(
+            grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
+        ),
+    )
+    live = _grant(private_pem, workspace_id="workspace-a", grant_id="grant-live")
+    expired = _grant(
+        private_pem,
+        workspace_id="workspace-a",
+        grant_id="grant-old",
+        expires_in=-60,
+    )
+
+    with TestClient(app) as client:
+        opened = client.post(
+            "/v1/visual/sessions", headers={"Authorization": f"Bearer {live}"}
+        ).json()
+        session_id = opened["session_id"]
+        service.set_task(session_id, "click")
+        service.publish_frame(
+            session_id,
+            ScreenFrame(
+                image=Image.new("RGB", (64, 32), "white"),
+                frame_id="f1",
+                captured_at_ms=1000,
+            ),
+        )
+        decision_id = service.decide(session_id, "request-1")["decision_id"]
+        attempted = client.post(
+            f"/v1/visual/sessions/{session_id}/attempts",
+            headers={"Authorization": f"Bearer {expired}"},
+            json={"decision_id": decision_id},
+        )
+
+    assert attempted.status_code == 401
+
+
 def test_same_workspace_grants_from_other_keys_are_isolated() -> None:
     private = Ed25519PrivateKey.generate()
     private_pem = private.private_bytes(
@@ -538,6 +594,53 @@ def test_same_workspace_grants_from_other_keys_are_isolated() -> None:
     assert other_key.status_code == 404
     assert other_key.json()["error"]["code"] == "unknown_session"
     assert other_project.status_code == 404
+
+
+def test_unscoped_grant_cannot_enter_scoped_session() -> None:
+    private = Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    app = create_visual_api(
+        VisualService(FixedPolicy()),
+        VisualAPISettings(
+            grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
+        ),
+    )
+    scoped = _grant(
+        private_pem,
+        workspace_id="workspace-a",
+        grant_id="grant-scoped",
+    )
+    unscoped = _grant(
+        private_pem,
+        workspace_id="workspace-a",
+        grant_id="grant-unscoped",
+        project_id=None,
+        environment_id=None,
+    )
+
+    with TestClient(app) as client:
+        opened = client.post(
+            "/v1/visual/sessions",
+            headers={"Authorization": f"Bearer {scoped}"},
+        ).json()
+        response = client.get(
+            f"/v1/visual/sessions/{opened['session_id']}",
+            headers={"Authorization": f"Bearer {unscoped}"},
+        )
+
+    assert response.status_code == 404
 
 
 def test_health_exposes_usage_sink_state() -> None:

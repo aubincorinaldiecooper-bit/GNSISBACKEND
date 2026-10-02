@@ -86,7 +86,9 @@ class HttpUsageSink:
         self._dropped = 0
         self._failures = 0
         self._last_error: str | None = None
+        self._delivery_failed = False
         self._lock = threading.RLock()
+        self._flush_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._service: Any | None = None
@@ -128,6 +130,7 @@ class HttpUsageSink:
                 "dropped": self._dropped,
                 "failures": self._failures,
                 "last_error": self._last_error,
+                "delivery_failed": self._delivery_failed,
                 "running": self._thread is not None and self._thread.is_alive(),
             }
 
@@ -136,6 +139,10 @@ class HttpUsageSink:
             self._flush()
 
     def _flush(self) -> None:
+        with self._flush_lock:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
         service = self._service
         if service is None:
             return
@@ -145,32 +152,34 @@ class HttpUsageSink:
             while len(self._pending) > self.max_pending:
                 self._pending.popleft()
                 self._dropped += 1
-            batch = list(self._pending)[: self.max_batch_reports]
-        if not batch:
-            return
-        payload = json.dumps(
-            {"reports": [report.to_json() for report in batch]},
-            separators=(",", ":"),
-        ).encode()
-        try:
-            self.post(
-                payload,
-                {
-                    "Authorization": f"Bearer {self.secret}",
-                    "Content-Type": "application/json",
-                },
-            )
-        except (OSError, urllib_error.URLError, ValueError) as exc:
+        while True:
             with self._lock:
-                self._failures += 1
-                self._last_error = type(exc).__name__
-            return
-        with self._lock:
-            for _ in range(min(len(batch), len(self._pending))):
-                self._pending.popleft()
-            remaining = len(self._pending)
-        if remaining:
-            self._flush()
+                batch = list(self._pending)[: self.max_batch_reports]
+            if not batch:
+                return
+            payload = json.dumps(
+                {"reports": [report.to_json() for report in batch]},
+                separators=(",", ":"),
+            ).encode()
+            try:
+                self.post(
+                    payload,
+                    {
+                        "Authorization": f"Bearer {self.secret}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            except (OSError, urllib_error.URLError, ValueError) as exc:
+                with self._lock:
+                    self._failures += 1
+                    self._last_error = type(exc).__name__
+                    self._delivery_failed = True
+                return
+            with self._lock:
+                for _ in range(min(len(batch), len(self._pending))):
+                    self._pending.popleft()
+                self._last_error = None
+                self._delivery_failed = False
 
     def _post_http(self, payload: bytes, headers: dict[str, str]) -> None:
         request = Request(self.url, data=payload, headers=headers, method="POST")

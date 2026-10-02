@@ -148,6 +148,24 @@ def create_visual_api(
         ):
             service.authorize_tenant(session_id, OPERATOR)
             return OPERATOR
+        tenant = _grant_tenant(credential)
+        if tenant is not None:
+            service.authorize_tenant(session_id, tenant)
+            return tenant
+        if service.is_planner_token(credential):
+            forbidden()
+        unauthorized()
+
+    def require_session_close(
+        session_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> SessionTenant:
+        credential = bearer_credential(authorization)
+        if settings.host_token and secrets.compare_digest(
+            credential, settings.host_token
+        ):
+            service.authorize_tenant(session_id, OPERATOR)
+            return OPERATOR
         tenant = _grant_tenant(credential, allow_expired=True)
         if tenant is not None:
             service.authorize_tenant(session_id, tenant)
@@ -170,11 +188,15 @@ def create_visual_api(
     async def health(request: Request) -> dict[str, Any]:
         report = service.health()
         sink = request.app.state.usage_sink
-        report["usage_sink"] = sink.health() if sink is not None else None
+        sink_health = sink.health() if sink is not None else None
+        report["usage_sink"] = sink_health
         report["metering"] = (
             "degraded"
             if sink is not None
-            and (sink.health()["failures"] or sink.health()["dropped"])
+            and (
+                sink_health.get("delivery_failed", bool(sink_health.get("last_error")))
+                or sink_health["dropped"]
+            )
             else "ok"
         )
         return report
@@ -196,7 +218,7 @@ def create_visual_api(
 
     @app.delete(
         "/v1/visual/sessions/{session_id}",
-        dependencies=[Depends(require_session_host)],
+        dependencies=[Depends(require_session_close)],
     )
     async def close_session(session_id: str) -> dict[str, bool]:
         service.close_session(session_id)
