@@ -45,9 +45,18 @@ def _frame(frame_id: str, captured_at_ms: int) -> ScreenFrame:
     )
 
 
+def test_session_credentials_keep_tokens_out_of_repr() -> None:
+    credentials = VisualService(FixedPolicy()).create_session()
+    rendered = repr(credentials)
+
+    assert credentials.session_id in rendered
+    assert credentials.stream_token not in rendered
+    assert credentials.planner_token not in rendered
+
+
 def test_service_requires_task_and_frame_before_deciding() -> None:
     service = VisualService(FixedPolicy())
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
 
     with pytest.raises(VisualServiceError, match="set a visual task"):
         service.decide(session_id, "request-1")
@@ -60,7 +69,7 @@ def test_service_requires_task_and_frame_before_deciding() -> None:
 def test_service_replays_decision_requests_without_rerunning_policy() -> None:
     policy = FixedPolicy()
     service = VisualService(policy)
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
     service.set_task(session_id, "click the control", allowed_actions=("click",))
     service.publish_frame(session_id, _frame("f1", 1000))
 
@@ -75,7 +84,7 @@ def test_service_replays_decision_requests_without_rerunning_policy() -> None:
 
 def test_service_rejects_stale_and_replayed_frames() -> None:
     service = VisualService(FixedPolicy())
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
     service.publish_frame(session_id, _frame("f1", 1000))
 
     with pytest.raises(VisualServiceError, match="already been accepted"):
@@ -86,7 +95,7 @@ def test_service_rejects_stale_and_replayed_frames() -> None:
 
 def test_service_exposes_abstention_without_executing_the_proposal() -> None:
     service = VisualService(FixedPolicy(confidence=0.2))
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
 
@@ -99,7 +108,7 @@ def test_service_exposes_abstention_without_executing_the_proposal() -> None:
 
 def test_attempt_ids_are_single_use_and_history_is_recorded() -> None:
     service = VisualService(FixedPolicy())
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
     result = service.decide(session_id, "request-1")
@@ -114,16 +123,69 @@ def test_attempt_ids_are_single_use_and_history_is_recorded() -> None:
 
 def test_unknown_and_closed_sessions_are_not_reusable() -> None:
     service = VisualService(FixedPolicy())
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
     service.close_session(session_id)
 
     with pytest.raises(VisualServiceError, match="does not exist"):
         service.state(session_id)
 
 
-def test_invalid_task_action_set_is_rejected() -> None:
+def test_invalid_task_does_not_clear_the_existing_task_or_decision() -> None:
     service = VisualService(FixedPolicy())
-    session_id, _ = service.create_session()
+    session_id = service.create_session().session_id
+    service.set_task(session_id, "existing task", allowed_actions=("click",))
+    service.publish_frame(session_id, _frame("f1", 1000))
+    result = service.decide(session_id, "request-1")
+    before = service.state(session_id)
 
     with pytest.raises(VisualServiceError, match="unknown actions"):
-        service.set_task(session_id, "do it", allowed_actions=("shell",))
+        service.set_task(session_id, "goal2", allowed_actions=("bogus",))
+
+    after = service.state(session_id)
+    assert after["goal"] == before["goal"] == "existing task"
+    assert after["allowed_actions"] == before["allowed_actions"] == ["click"]
+    assert after["history"] == before["history"] == []
+    recorded = service.record_attempt(session_id, result["decision_id"])
+    assert recorded["recorded"] is True
+    assert recorded["state"]["history"] == [{"action": "click"}]
+
+
+def test_recent_duplicate_window_allows_old_ids_with_new_frame_sequence() -> None:
+    service = VisualService(FixedPolicy())
+    session_id = service.create_session().session_id
+    service.set_task(session_id, "click the control")
+
+    first_frame = service.publish_frame(session_id, _frame("f1", 1000))
+    old_decision = service.decide(session_id, "old-request")
+    assert first_frame["frame_seq"] == old_decision["frame_seq"] == 1
+
+    for sequence in range(2, 130):
+        service.publish_frame(session_id, _frame(f"f{sequence}", 1000 + sequence))
+
+    repeated = service.publish_frame(session_id, _frame("f1", 2000))
+    state = service.state(session_id)
+
+    assert repeated["frame_seq"] == 130
+    assert state["frame_seq"] == 130
+    assert state["frame_seq"] != old_decision["frame_seq"]
+
+
+def test_replay_window_rejects_expired_request_ids() -> None:
+    service = VisualService(FixedPolicy(), max_replay_entries=2)
+    session_id = service.create_session().session_id
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    first = service.decide(session_id, "request-1")
+    service.decide(session_id, "request-2")
+    service.decide(session_id, "request-3")
+
+    with pytest.raises(VisualServiceError) as expired:
+        service.decide(session_id, "request-1")
+    assert expired.value.code == "request_expired"
+    assert expired.value.status_code == 409
+    assert str(expired.value) == (
+        "request_id is outside the idempotency window; use a new request_id"
+    )
+    assert service.decide(session_id, "request-2")["decision_id"]
+    assert first["decision_id"]

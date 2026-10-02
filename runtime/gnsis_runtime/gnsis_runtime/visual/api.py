@@ -1,27 +1,30 @@
 from __future__ import annotations
 
+import json
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from ..screen_transport import ScreenFrameHeader, decode_screen_frame
 from .service import VisualService, VisualServiceError
 
+MAX_FRAME_HEADER_BYTES = 4096
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_FRAME_PIXELS = 16_777_216
 
 
 @dataclass(frozen=True)
 class VisualAPISettings:
-    bearer_token: str
+    host_token: str = field(repr=False)
 
     def __post_init__(self) -> None:
-        if not self.bearer_token:
-            raise ValueError("visual API bearer token must not be empty")
+        if not self.host_token:
+            raise ValueError("visual API host token must not be empty")
 
 
 class TaskRequest(BaseModel):
@@ -50,25 +53,56 @@ def create_visual_api(
         ),
     )
 
-    def require_bearer(authorization: str | None = Header(default=None)) -> None:
+    def bearer_credential(authorization: str | None) -> str:
         scheme, _, credential = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not secrets.compare_digest(
-            credential,
-            settings.bearer_token,
-        ):
+        if scheme.lower() != "bearer" or not credential:
             raise HTTPException(
                 status_code=401,
                 detail={"code": "unauthorized", "message": "invalid bearer token"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        return credential
+
+    def unauthorized() -> None:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "unauthorized", "message": "invalid bearer token"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    def forbidden() -> None:
+        raise VisualServiceError(
+            "forbidden",
+            "planner credentials cannot perform this operation",
+            status_code=403,
+        )
+
+    def require_host(authorization: str | None = Header(default=None)) -> None:
+        credential = bearer_credential(authorization)
+        if secrets.compare_digest(credential, settings.host_token):
+            return
+        if service.is_planner_token(credential):
+            forbidden()
+        unauthorized()
+
+    def require_session_bearer(
+        session_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> None:
+        credential = bearer_credential(authorization)
+        if secrets.compare_digest(credential, settings.host_token):
+            return
+        if service.authenticate_planner(session_id, credential):
+            return
+        if service.is_planner_token(credential) and service.has_session(session_id):
+            forbidden()
+        unauthorized()
 
     @app.exception_handler(VisualServiceError)
     async def visual_service_error(
         _request: Any,
         exc: VisualServiceError,
     ) -> Any:
-        from fastapi.responses import JSONResponse
-
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": str(exc)}},
@@ -78,21 +112,22 @@ def create_visual_api(
     async def health() -> dict[str, Any]:
         return service.health()
 
-    @app.post("/v1/visual/sessions", dependencies=[Depends(require_bearer)])
+    @app.post("/v1/visual/sessions", dependencies=[Depends(require_host)])
     async def create_session() -> dict[str, Any]:
-        session_id, stream_token = service.create_session()
+        credentials = service.create_session()
         return {
-            "session_id": session_id,
+            "session_id": credentials.session_id,
             "stream": {
-                "path": f"/v1/visual/sessions/{session_id}/stream",
-                "token": stream_token,
+                "path": f"/v1/visual/sessions/{credentials.session_id}/stream",
+                "token": credentials.stream_token,
                 "protocol": "screen-frame-v1",
             },
+            "planner": {"token": credentials.planner_token},
         }
 
     @app.delete(
         "/v1/visual/sessions/{session_id}",
-        dependencies=[Depends(require_bearer)],
+        dependencies=[Depends(require_host)],
     )
     async def close_session(session_id: str) -> dict[str, bool]:
         service.close_session(session_id)
@@ -100,7 +135,7 @@ def create_visual_api(
 
     @app.put(
         "/v1/visual/sessions/{session_id}/task",
-        dependencies=[Depends(require_bearer)],
+        dependencies=[Depends(require_session_bearer)],
     )
     async def set_task(session_id: str, payload: TaskRequest) -> dict[str, Any]:
         actions = (
@@ -116,14 +151,14 @@ def create_visual_api(
 
     @app.delete(
         "/v1/visual/sessions/{session_id}/task",
-        dependencies=[Depends(require_bearer)],
+        dependencies=[Depends(require_session_bearer)],
     )
     async def reset_task(session_id: str) -> dict[str, Any]:
         return service.reset_task(session_id)
 
     @app.post(
         "/v1/visual/sessions/{session_id}/decisions",
-        dependencies=[Depends(require_bearer)],
+        dependencies=[Depends(require_session_bearer)],
     )
     async def decide(
         session_id: str,
@@ -133,7 +168,7 @@ def create_visual_api(
 
     @app.post(
         "/v1/visual/sessions/{session_id}/attempts",
-        dependencies=[Depends(require_bearer)],
+        dependencies=[Depends(require_host)],
     )
     async def record_attempt(
         session_id: str,
@@ -143,7 +178,7 @@ def create_visual_api(
 
     @app.get(
         "/v1/visual/sessions/{session_id}",
-        dependencies=[Depends(require_bearer)],
+        dependencies=[Depends(require_session_bearer)],
     )
     async def state(session_id: str) -> dict[str, Any]:
         return service.state(session_id)
@@ -167,9 +202,18 @@ def create_visual_api(
         try:
             while True:
                 message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    return
                 text = message.get("text")
                 body = message.get("bytes")
                 if text is not None:
+                    if len(text.encode("utf-8")) > MAX_FRAME_HEADER_BYTES:
+                        pending = None
+                        await _stream_error(
+                            websocket,
+                            f"screen frame metadata exceeds {MAX_FRAME_HEADER_BYTES} bytes",
+                        )
+                        continue
                     if pending is not None:
                         await _stream_error(
                             websocket,
@@ -178,8 +222,6 @@ def create_visual_api(
                         pending = None
                         continue
                     try:
-                        import json
-
                         value = json.loads(text)
                         if not isinstance(value, dict):
                             raise ValueError("screen frame metadata must be an object")

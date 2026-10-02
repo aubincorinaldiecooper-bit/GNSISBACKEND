@@ -4,9 +4,8 @@ import socket
 
 import uvicorn
 
-from gnsis_runtime.visual.api import VisualAPISettings, create_visual_api
 from gnsis_runtime.visual.schema import Decision, Target
-from gnsis_runtime.visual.service import VisualService
+from gnsis_runtime.visual.serve import build_app
 
 
 class FixedPolicy:
@@ -42,10 +41,7 @@ def main() -> None:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
 
-    app = create_visual_api(
-        VisualService(FixedPolicy()),
-        VisualAPISettings(bearer_token="sdk-test-token"),
-    )
+    app = build_app(FixedPolicy(), "sdk-test-host-token")
     config = uvicorn.Config(
         app,
         host="127.0.0.1",

@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import websockets
 
-from .client import VisualSession
+from .client import VisualSession, _validate_base_url
 from .errors import VisualServiceError
 
 
@@ -102,6 +102,7 @@ class FrameStream:
 
 
 def _stream_url(base_url: str, session: VisualSession) -> str:
+    _validate_base_url(base_url)
     base = urlsplit(base_url)
     scheme = {"http": "ws", "https": "wss"}.get(base.scheme.lower())
     if scheme is None or not base.netloc:

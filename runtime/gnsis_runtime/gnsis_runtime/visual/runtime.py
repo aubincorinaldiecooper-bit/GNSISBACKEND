@@ -298,12 +298,13 @@ class PersistentVisualDecisionSession:
         *,
         allowed_actions: tuple[str, ...] | None = None,
     ) -> None:
-        goal = str(goal).strip()
-        if not goal:
+        normalized_goal = str(goal).strip()
+        if not normalized_goal:
             raise ValueError("visual task goal must not be empty")
-        self.goal = goal
+        normalized_actions = bounded_actions(allowed_actions)
+        self.goal = normalized_goal
         self.history = []
-        self.allowed_actions = bounded_actions(allowed_actions)
+        self.allowed_actions = normalized_actions
         self._last_attempt = None
 
     def clear_task(self) -> None:

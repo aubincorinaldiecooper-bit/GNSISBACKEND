@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -16,13 +16,20 @@ _RETRYABLE_STATUSES = frozenset({502, 503, 504})
 
 @dataclass(frozen=True)
 class VisualSession:
+    """Host stream credentials and the planner token scoped to this session."""
+
     session_id: str
     stream_path: str
     stream_token: str = field(repr=False)
+    planner_token: str = field(repr=False)
     protocol: str
 
 
 class VisualClient:
+    """Use a host token for creation, closure and attempts, or a planner token
+    for that session's task, decision and state operations.
+    """
+
     def __init__(
         self,
         base_url: str,
@@ -34,6 +41,7 @@ class VisualClient:
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must not be negative")
+        _validate_base_url(base_url)
         self._api_token = api_token
         self._http = httpx.Client(
             base_url=base_url.rstrip("/"),
@@ -58,6 +66,8 @@ class VisualClient:
         return self._request("GET", "/health", authenticated=False, retry=True)
 
     def create_session(self) -> VisualSession:
+        """Create a session with a host token and return its planner token."""
+
         response = self._request(
             "POST",
             "/v1/visual/sessions",
@@ -65,10 +75,12 @@ class VisualClient:
         )
         try:
             stream = response["stream"]
+            planner = response["planner"]
             return VisualSession(
                 session_id=str(response["session_id"]),
                 stream_path=str(stream["path"]),
                 stream_token=str(stream["token"]),
+                planner_token=str(planner["token"]),
                 protocol=str(stream["protocol"]),
             )
         except (KeyError, TypeError):
@@ -79,6 +91,8 @@ class VisualClient:
             ) from None
 
     def close_session(self, session_id: str) -> dict[str, Any]:
+        """Close a session; the host token is required."""
+
         return self._request(
             "DELETE",
             f"/v1/visual/sessions/{quote(session_id, safe='')}",
@@ -126,6 +140,8 @@ class VisualClient:
         session_id: str,
         decision_id: str,
     ) -> dict[str, Any]:
+        """Record a host-executed attempt; the host token is required."""
+
         return self._request(
             "POST",
             f"/v1/visual/sessions/{quote(session_id, safe='')}/attempts",
@@ -226,3 +242,23 @@ def _redact(value: str, *secrets: str) -> str:
         if secret:
             value = value.replace(secret, "[redacted]")
     return value
+
+
+def _validate_base_url(base_url: str) -> None:
+    try:
+        parsed = urlsplit(base_url)
+        hostname = parsed.hostname
+    except ValueError:
+        raise VisualServiceError(
+            "invalid_base_url",
+            "visual API base URL is invalid",
+        ) from None
+    if parsed.scheme.lower() == "http" and hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        raise VisualServiceError(
+            "insecure_transport",
+            "visual API requires HTTPS except for loopback hosts",
+        )

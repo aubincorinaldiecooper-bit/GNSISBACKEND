@@ -26,19 +26,21 @@ The service does not:
 
 ## API lifecycle
 
-All control-plane calls require:
+All control-plane calls except `/health` require a bearer token. The host
+credential is required to create and close sessions and to record attempts.
+`POST /v1/visual/sessions` returns a host-only stream token and a session-scoped
+planner token. The planner token can set/reset the task, request decisions, and
+read state for that session only; it cannot create/close sessions or record
+attempts. A planner token used for another session or a host-only operation
+returns 403. Invalid credentials return 401; unknown sessions return 404 to
+hosts and 401 to planners. The host token can also perform planner operations.
 
 ```text
-Authorization: Bearer <service credential>
+Authorization: Bearer <host token or session-scoped planner token>
 ```
 
-The current bearer credential is a deployment bootstrap boundary, not the final
-commercial identity system. Production identity must replace it with scoped,
-rotatable credentials and tenant isolation without changing the versioned visual
-contract.
-
 1. `POST /v1/visual/sessions`
-   creates a bounded decision session and returns a host-only stream token.
+   creates a bounded decision session and returns the stream and planner tokens.
 2. The host opens
    `/v1/visual/sessions/{session_id}/stream?token={stream_token}`.
 3. For each frame, the host sends one `screen.frame` JSON header followed by one
@@ -53,9 +55,40 @@ contract.
    records that the decision was attempted. It never performs the action.
 8. Reset or close the session when the task ends.
 
+## Running the service
+
+Set the host credential and start the service with the model backbone and JEV
+head checkpoints:
+
+```bash
+export GNSIS_VISUAL_HOST_TOKEN=<host-secret>
+smaller-gnsis-serve \
+  --model /path/to/backbone \
+  --head /path/to/jev-head.pt \
+  --device cuda:0 \
+  --dtype bfloat16 \
+  --host 127.0.0.1 \
+  --port 8790 \
+  --max-sessions 32
+```
+
+The model stack is loaded only after the required host token is present. The
+service listens on loopback by default; use HTTPS termination and a protected
+network when exposing it beyond the local machine.
+
 Frame IDs must be unique inside a session and capture timestamps must increase
 monotonically. Frame bytes and decoded pixel counts are bounded. A stale,
 duplicate, malformed, or oversized frame is rejected before reaching the policy.
+The 128-entry recent duplicate window rejects repeated frame IDs; `frame_seq`
+increments on every accepted frame and is the authoritative currentness key.
+Both state and decision responses include it so the host can reject decisions
+from an older frame generation.
+
+Decision replay retention is bounded to the most recent 128 request IDs per
+task, with at most 32 outstanding decisions. Repeating a request ID in that
+window returns the original decision. Once evicted, its request ID is retained
+in a bounded 4096-entry expired-ID window and returns `request_expired`; use a
+new request ID rather than retrying an expired one.
 
 ## Client SDKs
 
@@ -78,17 +111,17 @@ The local stdio adapter uses the official open-source MCP Python SDK. It exposes
 
 - `visual_set_task`
 - `visual_decide`
-- `visual_record_attempt`
 - `visual_state`
 - `visual_reset`
 
 It intentionally exposes no session-creation, stream-token, screenshot-upload,
-browser-control, or arbitrary-execution tool. The trusted host creates the
-session and stream first, then starts the adapter with:
+attempt-recording, browser-control, or arbitrary-execution tool. The trusted
+host creates the session and stream first, then gives the session-scoped planner
+token to the adapter:
 
 ```text
 GNSIS_VISUAL_API_BASE=https://visual.example
-GNSIS_VISUAL_API_TOKEN=<scoped credential>
+GNSIS_VISUAL_API_TOKEN=<planner token from create_session>
 GNSIS_VISUAL_SESSION_ID=<host-created session>
 ```
 
@@ -110,7 +143,7 @@ Claude Code supports local stdio servers through `claude mcp add`:
 claude mcp add \
   --transport stdio \
   --env GNSIS_VISUAL_API_BASE=https://visual.example \
-  --env GNSIS_VISUAL_API_TOKEN=<scoped-credential> \
+  --env GNSIS_VISUAL_API_TOKEN=<session-planner-token> \
   --env GNSIS_VISUAL_SESSION_ID=<host-created-session> \
   smaller-gnsis \
   -- smaller-gnsis-mcp
@@ -127,14 +160,13 @@ enabled = true
 enabled_tools = [
   "visual_set_task",
   "visual_decide",
-  "visual_record_attempt",
   "visual_state",
   "visual_reset"
 ]
 
 [mcp_servers.smaller_gnsis.env]
 GNSIS_VISUAL_API_BASE = "https://visual.example"
-GNSIS_VISUAL_API_TOKEN = "<scoped-credential>"
+GNSIS_VISUAL_API_TOKEN = "<session-planner-token>"
 GNSIS_VISUAL_SESSION_ID = "<host-created-session>"
 ```
 

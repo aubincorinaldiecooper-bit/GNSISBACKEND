@@ -14,7 +14,12 @@ import httpx
 import pytest
 from PIL import Image
 
-from gnsis_visual_sdk import FrameStream, VisualClient, VisualServiceError
+from gnsis_visual_sdk import (
+    FrameStream,
+    VisualClient,
+    VisualServiceError,
+    VisualSession,
+)
 
 
 @pytest.fixture(scope="session")
@@ -147,11 +152,70 @@ def test_record_attempt_does_not_retry_after_503(monkeypatch) -> None:
     assert delays == []
 
 
+@pytest.mark.parametrize("base_url", ["http://visual.example", "http://10.0.0.2"])
+def test_visual_client_rejects_insecure_remote_http(base_url: str) -> None:
+    with pytest.raises(VisualServiceError) as insecure:
+        VisualClient(base_url, "api-secret")
+    assert insecure.value.code == "insecure_transport"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://localhost:8790", "http://127.0.0.1:8790", "http://[::1]:8790"],
+)
+def test_visual_client_allows_loopback_http(base_url: str) -> None:
+    client = VisualClient(base_url, "api-secret")
+    client.close()
+
+
+def test_frame_stream_rejects_insecure_remote_http() -> None:
+    session = VisualSession(
+        "session-1",
+        "/stream",
+        "stream-secret",
+        "planner-secret",
+        "screen-frame-v1",
+    )
+
+    with pytest.raises(VisualServiceError) as insecure:
+        asyncio.run(FrameStream.connect("http://visual.example", session))
+    assert insecure.value.code == "insecure_transport"
+
+
+def test_frame_stream_allows_loopback_http(monkeypatch) -> None:
+    connected_urls: list[str] = []
+
+    class FakeWebSocket:
+        async def close(self) -> None:
+            return None
+
+    async def connect(url: str) -> FakeWebSocket:
+        connected_urls.append(url)
+        return FakeWebSocket()
+
+    monkeypatch.setattr("gnsis_visual_sdk.stream.websockets.connect", connect)
+    session = VisualSession(
+        "session-1",
+        "/stream",
+        "stream-secret",
+        "planner-secret",
+        "screen-frame-v1",
+    )
+
+    async def connect_loopback() -> None:
+        stream = await FrameStream.connect("http://[::1]:8790", session)
+        await stream.close()
+
+    asyncio.run(connect_loopback())
+    assert connected_urls[0].startswith("ws://[::1]:8790/stream?")
+
+
 def test_real_api_lifecycle_and_credential_redaction(
     fixture_base_url: str,
 ) -> None:
-    client = VisualClient(fixture_base_url, "sdk-test-token")
+    client = VisualClient(fixture_base_url, "sdk-test-host-token")
     bad_client = VisualClient(fixture_base_url, "bad-api-token")
+    planner_client: VisualClient | None = None
     try:
         assert client.health()["status"] == "ok"
         with pytest.raises(VisualServiceError) as unauthorized:
@@ -161,6 +225,8 @@ def test_real_api_lifecycle_and_credential_redaction(
 
         session = client.create_session()
         assert session.stream_token not in repr(session)
+        assert session.planner_token not in repr(session)
+        planner_client = VisualClient(fixture_base_url, session.planner_token)
 
         async def stream_frames() -> None:
             stream = await FrameStream.connect(fixture_base_url, session)
@@ -171,6 +237,7 @@ def test_real_api_lifecycle_and_credential_redaction(
                     _jpeg(),
                 )
                 assert accepted["type"] == "screen.frame.accepted"
+                assert accepted["frame_seq"] == 1
                 with pytest.raises(VisualServiceError) as duplicate:
                     await stream.send_frame(
                         "sdk-frame-1",
@@ -183,9 +250,9 @@ def test_real_api_lifecycle_and_credential_redaction(
 
         asyncio.run(stream_frames())
 
-        client.set_task(session.session_id, "click the control", ["click"])
-        first = client.decide(session.session_id, "sdk-request-1")
-        repeated = client.decide(session.session_id, "sdk-request-1")
+        planner_client.set_task(session.session_id, "click the control", ["click"])
+        first = planner_client.decide(session.session_id, "sdk-request-1")
+        repeated = planner_client.decide(session.session_id, "sdk-request-1")
         assert first["decision_id"] == repeated["decision_id"]
         assert first["decision"]["action"] == "click"
         assert first["decision"]["frame_id"] == "sdk-frame-1"
@@ -199,13 +266,18 @@ def test_real_api_lifecycle_and_credential_redaction(
             client.record_attempt(session.session_id, first["decision_id"])
         assert duplicate_attempt.value.code == "unknown_decision"
 
-        state = client.state(session.session_id)
+        state = planner_client.state(session.session_id)
         assert any(item["action"] == "click" for item in state["history"])
-        assert client.reset_task(session.session_id)["goal"] is None
+        assert planner_client.reset_task(session.session_id)["goal"] is None
         assert client.close_session(session.session_id)["closed"] is True
         with pytest.raises(VisualServiceError) as closed:
+            planner_client.state(session.session_id)
+        assert closed.value.code == "unauthorized"
+        with pytest.raises(VisualServiceError) as host_closed:
             client.state(session.session_id)
-        assert closed.value.code == "unknown_session"
+        assert host_closed.value.code == "unknown_session"
     finally:
         client.close()
         bad_client.close()
+        if planner_client is not None:
+            planner_client.close()

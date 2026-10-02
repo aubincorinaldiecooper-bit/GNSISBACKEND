@@ -4,15 +4,18 @@ import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from mcp.server import MCPServer
 
 
 @dataclass(frozen=True)
 class VisualMCPConfig:
+    """MCP planners use the session-scoped planner token returned to the host."""
+
     api_base: str
-    api_token: str
+    api_token: str = field(repr=False)
     session_id: str
     timeout_sec: float = 30.0
 
@@ -34,6 +37,18 @@ class VisualMCPConfig:
             raise RuntimeError(
                 f"missing Smaller GNSIS MCP configuration: {', '.join(missing)}"
             )
+        try:
+            hostname = urlsplit(api_base).hostname
+        except ValueError:
+            hostname = None
+        if api_base.lower().startswith("http://") and hostname not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            raise RuntimeError(
+                "Smaller GNSIS MCP requires HTTPS except for loopback hosts"
+            )
         return cls(
             api_base=api_base,
             api_token=api_token,
@@ -42,6 +57,8 @@ class VisualMCPConfig:
 
 
 class VisualAPIClient:
+    """Forward planner operations with a session-scoped planner credential."""
+
     def __init__(self, config: VisualMCPConfig) -> None:
         self.config = config
 
@@ -57,13 +74,6 @@ class VisualAPIClient:
 
     def decide(self, request_id: str) -> dict[str, object]:
         return self._request("POST", "/decisions", {"request_id": request_id})
-
-    def record_attempt(self, decision_id: str) -> dict[str, object]:
-        return self._request(
-            "POST",
-            "/attempts",
-            {"decision_id": decision_id},
-        )
 
     def state(self) -> dict[str, object]:
         return self._request("GET", "")
@@ -118,7 +128,8 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         "smaller-gnsis",
         description=(
             "Fast visual action decisions over a host-owned live screen stream. "
-            "This server never captures the screen or executes actions."
+            "Use a session-scoped planner token. The host alone captures and "
+            "executes actions."
         ),
         version="1.0.0",
     )
@@ -140,12 +151,6 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         """
 
         return client.decide(request_id)
-
-    @server.tool()
-    def visual_record_attempt(decision_id: str) -> dict[str, object]:
-        """Record that the owning host attempted a returned decision."""
-
-        return client.record_attempt(decision_id)
 
     @server.tool()
     def visual_state() -> dict[str, object]:

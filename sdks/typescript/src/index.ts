@@ -10,10 +10,12 @@ export class VisualServiceError extends Error {
   }
 }
 
+/** Host stream credentials and the planner token scoped to this session. */
 export interface VisualSession {
   sessionId: string;
   streamPath: string;
   streamToken: string;
+  plannerToken: string;
   protocol: string;
 }
 
@@ -54,6 +56,29 @@ function redactSecret(value: string, secret: string): string {
   return secret ? value.split(secret).join("[redacted]") : value;
 }
 
+function validateBaseUrl(baseUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new VisualServiceError(
+      "invalid_base_url",
+      "visual API base URL is invalid",
+    );
+  }
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    url.protocol === "http:" &&
+    !["localhost", "127.0.0.1", "::1"].includes(hostname)
+  ) {
+    throw new VisualServiceError(
+      "insecure_transport",
+      "visual API requires HTTPS except for loopback hosts",
+    );
+  }
+  return url;
+}
+
 function encodePathSegment(segment: string): string {
   return encodeURIComponent(segment).replace(/[!'()*]/g, (character) =>
     `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
@@ -68,6 +93,7 @@ export class VisualClient {
   readonly #fetch: typeof fetch;
 
   constructor(options: VisualClientOptions) {
+    validateBaseUrl(options.baseUrl);
     this.#baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.#apiToken = options.apiToken;
     this.#timeoutMs = options.timeoutMs ?? 30_000;
@@ -90,6 +116,9 @@ export class VisualClient {
     return this.#request("GET", "/health", undefined, false, true);
   }
 
+  /**
+   * Create a session with a host token; its planner token is session-scoped.
+   */
   async createSession(): Promise<VisualSession> {
     const payload = await this.#request(
       "POST",
@@ -99,14 +128,17 @@ export class VisualClient {
       false,
     );
     const stream = isJsonObject(payload.stream) ? payload.stream : {};
+    const planner = isJsonObject(payload.planner) ? payload.planner : {};
     return {
       sessionId: String(payload.session_id),
       streamPath: String(stream.path),
       streamToken: String(stream.token),
+      plannerToken: String(planner.token),
       protocol: String(stream.protocol),
     };
   }
 
+  /** Close a session with the host token. */
   async closeSession(sessionId: string): Promise<JsonObject> {
     return this.#request(
       "DELETE",
@@ -154,6 +186,7 @@ export class VisualClient {
     );
   }
 
+  /** Record an execution attempt with the host token. */
   async recordAttempt(
     sessionId: string,
     decisionId: string,
@@ -302,10 +335,11 @@ export class FrameStream {
     baseUrl: string,
     session: VisualSession,
   ): Promise<FrameStream> {
+    const base = validateBaseUrl(baseUrl);
     let url: URL;
     try {
-      url = new URL(session.streamPath, baseUrl);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      url = new URL(session.streamPath, base);
+      url.protocol = base.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("token", session.streamToken);
     } catch {
       throw new VisualServiceError(

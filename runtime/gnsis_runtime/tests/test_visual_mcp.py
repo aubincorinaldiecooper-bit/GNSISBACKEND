@@ -37,7 +37,6 @@ def test_official_mcp_server_exposes_only_non_actuating_visual_tools() -> None:
     assert {tool.name for tool in tools} == {
         "visual_set_task",
         "visual_decide",
-        "visual_record_attempt",
         "visual_state",
         "visual_reset",
     }
@@ -47,6 +46,40 @@ def test_official_mcp_server_exposes_only_non_actuating_visual_tools() -> None:
         "navigate",
         "execute",
     }
+    assert not hasattr(VisualAPIClient(_config()), "record_attempt")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://visual.example", "http://192.168.1.2:8790"],
+)
+def test_mcp_config_rejects_insecure_remote_http(monkeypatch, base_url) -> None:
+    monkeypatch.setenv("GNSIS_VISUAL_API_BASE", base_url)
+    monkeypatch.setenv("GNSIS_VISUAL_API_TOKEN", "planner-token")
+    monkeypatch.setenv("GNSIS_VISUAL_SESSION_ID", "session-1")
+
+    with pytest.raises(RuntimeError, match="requires HTTPS"):
+        VisualMCPConfig.from_env()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://localhost:8790", "http://127.0.0.1:8790", "http://[::1]:8790"],
+)
+def test_mcp_config_allows_loopback_http(monkeypatch, base_url) -> None:
+    monkeypatch.setenv("GNSIS_VISUAL_API_BASE", base_url)
+    monkeypatch.setenv("GNSIS_VISUAL_API_TOKEN", "planner-token")
+    monkeypatch.setenv("GNSIS_VISUAL_SESSION_ID", "session-1")
+
+    assert VisualMCPConfig.from_env().api_base == base_url
+
+
+def test_mcp_config_allows_remote_https(monkeypatch) -> None:
+    monkeypatch.setenv("GNSIS_VISUAL_API_BASE", "https://visual.example")
+    monkeypatch.setenv("GNSIS_VISUAL_API_TOKEN", "planner-token")
+    monkeypatch.setenv("GNSIS_VISUAL_SESSION_ID", "session-1")
+
+    assert VisualMCPConfig.from_env().api_base == "https://visual.example"
 
 
 def test_mcp_client_forwards_session_and_auth_without_returning_credentials(

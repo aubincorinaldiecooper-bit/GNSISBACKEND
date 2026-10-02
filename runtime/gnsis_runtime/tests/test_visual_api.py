@@ -5,7 +5,11 @@ import io
 from PIL import Image
 from starlette.testclient import TestClient
 
-from gnsis_runtime.visual.api import VisualAPISettings, create_visual_api
+from gnsis_runtime.visual.api import (
+    MAX_FRAME_HEADER_BYTES,
+    VisualAPISettings,
+    create_visual_api,
+)
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.service import VisualService
 
@@ -43,8 +47,12 @@ def _app():
     service = VisualService(FixedPolicy())
     return create_visual_api(
         service,
-        VisualAPISettings(bearer_token="test-token"),
+        VisualAPISettings(host_token="test-token"),
     )
+
+
+def test_api_settings_redacts_host_token_from_repr() -> None:
+    assert "host-secret" not in repr(VisualAPISettings(host_token="host-secret"))
 
 
 def _open(client: TestClient) -> dict:
@@ -83,6 +91,7 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
             accepted = websocket.receive_json()
         assert accepted["type"] == "screen.frame.accepted"
         assert accepted["frame_id"] == "f1"
+        assert accepted["frame_seq"] == 1
 
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",
@@ -113,6 +122,106 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
         )
         assert reset.status_code == 200
         assert reset.json()["goal"] is None
+
+
+def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:
+    with TestClient(_app()) as client:
+        opened = _open(client)
+        second = _open(client)
+        session_id = opened["session_id"]
+        planner_auth = {
+            "Authorization": f"Bearer {opened['planner']['token']}",
+        }
+
+        with client.websocket_connect(
+            f"{opened['stream']['path']}?token={opened['stream']['token']}"
+        ) as websocket:
+            websocket.send_json(
+                {
+                    "type": "screen.frame",
+                    "frame_id": "planner-frame",
+                    "captured_at_ms": 1000,
+                    "encoding": "jpeg",
+                }
+            )
+            websocket.send_bytes(_jpeg())
+            assert websocket.receive_json()["type"] == "screen.frame.accepted"
+
+        task = client.put(
+            f"/v1/visual/sessions/{session_id}/task",
+            headers=planner_auth,
+            json={"goal": "click the control", "allowed_actions": ["click"]},
+        )
+        assert task.status_code == 200
+        decision = client.post(
+            f"/v1/visual/sessions/{session_id}/decisions",
+            headers=planner_auth,
+            json={"request_id": "planner-request"},
+        )
+        assert decision.status_code == 200
+        assert decision.json()["frame_seq"] == 1
+        assert (
+            client.get(
+                f"/v1/visual/sessions/{session_id}",
+                headers=planner_auth,
+            ).status_code
+            == 200
+        )
+
+        planner_attempt = client.post(
+            f"/v1/visual/sessions/{session_id}/attempts",
+            headers=planner_auth,
+            json={"decision_id": decision.json()["decision_id"]},
+        )
+        assert planner_attempt.status_code == 403
+        assert planner_attempt.json()["error"]["code"] == "forbidden"
+
+        planner_create = client.post(
+            "/v1/visual/sessions",
+            headers=planner_auth,
+        )
+        assert planner_create.status_code == 403
+        planner_close = client.delete(
+            f"/v1/visual/sessions/{session_id}",
+            headers=planner_auth,
+        )
+        assert planner_close.status_code == 403
+        other_session = client.get(
+            f"/v1/visual/sessions/{second['session_id']}",
+            headers=planner_auth,
+        )
+        assert other_session.status_code == 403
+        assert other_session.json()["error"]["code"] == "forbidden"
+
+        unknown_session = client.get(
+            "/v1/visual/sessions/missing",
+            headers=planner_auth,
+        )
+        assert unknown_session.status_code == 401
+        invalid_token = client.get(
+            f"/v1/visual/sessions/{session_id}",
+            headers={"Authorization": "Bearer invalid"},
+        )
+        assert invalid_token.status_code == 401
+
+        host_attempt = client.post(
+            f"/v1/visual/sessions/{session_id}/attempts",
+            headers=AUTH,
+            json={"decision_id": decision.json()["decision_id"]},
+        )
+        assert host_attempt.status_code == 200
+        planner_reset = client.delete(
+            f"/v1/visual/sessions/{session_id}/task",
+            headers=planner_auth,
+        )
+        assert planner_reset.status_code == 200
+        assert (
+            client.delete(
+                f"/v1/visual/sessions/{session_id}",
+                headers=AUTH,
+            ).status_code
+            == 200
+        )
 
 
 def test_api_rejects_missing_task_and_stale_stream_frames() -> None:
@@ -147,6 +256,19 @@ def test_api_rejects_missing_task_and_stale_stream_frames() -> None:
                 else:
                     assert response["type"] == "screen.frame.rejected"
                     assert response["error"]["code"] == "stale_frame"
+
+
+def test_api_rejects_oversized_frame_headers_before_json_parsing() -> None:
+    with TestClient(_app()) as client:
+        opened = _open(client)
+        with client.websocket_connect(
+            f"{opened['stream']['path']}?token={opened['stream']['token']}"
+        ) as websocket:
+            websocket.send_text("x" * (MAX_FRAME_HEADER_BYTES + 1))
+            rejected = websocket.receive_json()
+
+    assert rejected["type"] == "screen.frame.rejected"
+    assert rejected["error"]["code"] == "invalid_protocol"
 
 
 def test_api_has_no_screenshot_upload_decision_path() -> None:

@@ -10,10 +10,6 @@ from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .runtime import PersistentVisualDecisionSession, VisualDecisionPolicy
 from .schema import Decision
 
-MAX_REPLAY_ENTRIES = 128
-MAX_OUTSTANDING_DECISIONS = 32
-
-
 class VisualServiceError(RuntimeError):
     def __init__(self, code: str, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
@@ -21,15 +17,29 @@ class VisualServiceError(RuntimeError):
         self.status_code = status_code
 
 
+@dataclass(frozen=True)
+class SessionCredentials:
+    session_id: str
+    stream_token: str = field(repr=False)
+    planner_token: str = field(repr=False)
+
+
 @dataclass
 class VisualServiceSession:
+    """The 128-frame recent duplicate window is not the currentness authority;
+    ``frame_seq`` is authoritative even after an ID leaves this window.
+    """
+
     decision_session: PersistentVisualDecisionSession
-    stream_token: str
+    stream_token: str = field(repr=False)
+    planner_token: str = field(repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock)
     last_captured_at_ms: int = -1
-    recent_frame_ids: deque[str] = field(default_factory=lambda: deque(maxlen=128))
+    frame_seq: int = 0
+    recent_duplicate_frame_ids: deque[str] = field(default_factory=lambda: deque(maxlen=128))
     replay: OrderedDict[str, dict[str, Any]] = field(default_factory=OrderedDict)
-    outstanding: OrderedDict[str, Decision] = field(default_factory=OrderedDict)
+    expired_requests: OrderedDict[str, None] = field(default_factory=OrderedDict)
+    outstanding: OrderedDict[str, tuple[Decision, int]] = field(default_factory=OrderedDict)
     usage: dict[str, int] = field(
         default_factory=lambda: {
             "frames_accepted": 0,
@@ -52,16 +62,28 @@ class VisualService:
         *,
         cache_factory: Callable[[], Any] | None = None,
         max_sessions: int = 32,
+        max_replay_entries: int = 128,
+        max_outstanding_decisions: int = 32,
+        max_expired_requests: int = 4096,
     ) -> None:
         if max_sessions < 1:
             raise ValueError("max_sessions must be positive")
+        if max_replay_entries < 1:
+            raise ValueError("max_replay_entries must be positive")
+        if max_outstanding_decisions < 1:
+            raise ValueError("max_outstanding_decisions must be positive")
+        if max_expired_requests < 1:
+            raise ValueError("max_expired_requests must be positive")
         self.policy = policy
         self.cache_factory = cache_factory or (lambda: None)
         self.max_sessions = max_sessions
+        self.max_replay_entries = max_replay_entries
+        self.max_outstanding_decisions = max_outstanding_decisions
+        self.max_expired_requests = max_expired_requests
         self._lock = threading.RLock()
         self._sessions: dict[str, VisualServiceSession] = {}
 
-    def create_session(self) -> tuple[str, str]:
+    def create_session(self) -> SessionCredentials:
         with self._lock:
             if len(self._sessions) >= self.max_sessions:
                 raise VisualServiceError(
@@ -71,6 +93,7 @@ class VisualService:
                 )
             session_id = secrets.token_urlsafe(24)
             stream_token = secrets.token_urlsafe(32)
+            planner_token = secrets.token_urlsafe(32)
             frames = LatestScreenFrameBuffer(
                 max_pending_frames=8,
                 max_history_frames=64,
@@ -83,8 +106,9 @@ class VisualService:
                     cache=self.cache_factory(),
                 ),
                 stream_token=stream_token,
+                planner_token=planner_token,
             )
-        return session_id, stream_token
+        return SessionCredentials(session_id, stream_token, planner_token)
 
     def close_session(self, session_id: str) -> None:
         with self._lock:
@@ -95,11 +119,29 @@ class VisualService:
             session.decision_session.clear_task()
             session.decision_session.screen_frames.reset()
             session.replay.clear()
+            session.expired_requests.clear()
             session.outstanding.clear()
 
     def authenticate_stream(self, session_id: str, stream_token: str) -> bool:
         session = self._session(session_id)
         return secrets.compare_digest(session.stream_token, stream_token)
+
+    def authenticate_planner(self, session_id: str, token: str) -> bool:
+        with self._lock:
+            session = self._sessions.get(session_id)
+        return session is not None and secrets.compare_digest(session.planner_token, token)
+
+    def is_planner_token(self, token: str) -> bool:
+        with self._lock:
+            planner_tokens = [session.planner_token for session in self._sessions.values()]
+        matched = False
+        for planner_token in planner_tokens:
+            matched = secrets.compare_digest(planner_token, token) or matched
+        return matched
+
+    def has_session(self, session_id: str) -> bool:
+        with self._lock:
+            return session_id in self._sessions
 
     def publish_frame(self, session_id: str, frame: ScreenFrame) -> dict[str, Any]:
         session = self._session(session_id)
@@ -110,7 +152,7 @@ class VisualService:
                 "captured_at_ms is required for visual service frames",
             )
         with session.lock:
-            if frame.frame_id in session.recent_frame_ids:
+            if frame.frame_id in session.recent_duplicate_frame_ids:
                 raise VisualServiceError(
                     "replayed_frame",
                     "frame_id has already been accepted",
@@ -131,10 +173,12 @@ class VisualService:
                     status_code=409,
                 )
             session.last_captured_at_ms = captured_at_ms
-            session.recent_frame_ids.append(frame.frame_id)
+            session.recent_duplicate_frame_ids.append(frame.frame_id)
+            session.frame_seq += 1
             session.usage["frames_accepted"] += 1
             return {
                 "frame_id": frame.frame_id,
+                "frame_seq": session.frame_seq,
                 "captured_at_ms": captured_at_ms,
                 "width": frame.metadata.get("width"),
                 "height": frame.metadata.get("height"),
@@ -157,6 +201,7 @@ class VisualService:
             except ValueError as exc:
                 raise VisualServiceError("invalid_task", str(exc)) from exc
             session.replay.clear()
+            session.expired_requests.clear()
             session.outstanding.clear()
             return self._state(session)
 
@@ -165,6 +210,7 @@ class VisualService:
         with session.lock:
             session.decision_session.clear_task()
             session.replay.clear()
+            session.expired_requests.clear()
             session.outstanding.clear()
             return self._state(session)
 
@@ -181,6 +227,12 @@ class VisualService:
             if replayed is not None:
                 session.replay.move_to_end(request_id)
                 return dict(replayed)
+            if request_id in session.expired_requests:
+                raise VisualServiceError(
+                    "request_expired",
+                    "request_id is outside the idempotency window; use a new request_id",
+                    status_code=409,
+                )
             if not session.decision_session.goal:
                 raise VisualServiceError(
                     "task_required",
@@ -193,6 +245,7 @@ class VisualService:
                     "the visual stream has not supplied a current frame",
                     status_code=409,
                 )
+            seq = session.frame_seq
             gated = session.decision_session.decide_gated()
             if gated.status == "rejected":
                 raise VisualServiceError(
@@ -201,7 +254,7 @@ class VisualService:
                     status_code=422,
                 )
             decision = gated.decision
-            if not session.decision_session.is_current(decision):
+            if session.frame_seq != seq or not session.decision_session.is_current(decision):
                 raise VisualServiceError(
                     "stale_decision",
                     "the visual state changed while the decision was generated",
@@ -213,13 +266,17 @@ class VisualService:
                 "decision_id": decision_id,
                 "decision": decision.to_json(),
                 "gate": gated.to_json(),
+                "frame_seq": seq,
                 "current": True,
             }
             session.replay[request_id] = response
-            while len(session.replay) > MAX_REPLAY_ENTRIES:
-                session.replay.popitem(last=False)
-            session.outstanding[decision_id] = decision
-            while len(session.outstanding) > MAX_OUTSTANDING_DECISIONS:
+            while len(session.replay) > self.max_replay_entries:
+                expired_request_id, _ = session.replay.popitem(last=False)
+                session.expired_requests[expired_request_id] = None
+                while len(session.expired_requests) > self.max_expired_requests:
+                    session.expired_requests.popitem(last=False)
+            session.outstanding[decision_id] = (decision, seq)
+            while len(session.outstanding) > self.max_outstanding_decisions:
                 session.outstanding.popitem(last=False)
             session.usage["decisions"] += 1
             return dict(response)
@@ -227,13 +284,14 @@ class VisualService:
     def record_attempt(self, session_id: str, decision_id: str) -> dict[str, Any]:
         session = self._session(session_id)
         with session.lock:
-            decision = session.outstanding.pop(decision_id, None)
-            if decision is None:
+            outstanding = session.outstanding.pop(decision_id, None)
+            if outstanding is None:
                 raise VisualServiceError(
                     "unknown_decision",
                     "decision is unknown, expired, or already recorded",
                     status_code=409,
                 )
+            decision, _seq = outstanding
             session.decision_session.record_attempt(decision)
             session.usage["attempts_recorded"] += 1
             return {
@@ -258,6 +316,7 @@ class VisualService:
 
     def _state(self, session: VisualServiceSession) -> dict[str, Any]:
         state = session.decision_session.state()
+        state["frame_seq"] = session.frame_seq
         state["usage"] = dict(session.usage)
         return state
 

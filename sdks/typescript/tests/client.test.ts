@@ -79,7 +79,7 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
 
   const client = new VisualClient({
     baseUrl: fixture.baseUrl,
-    apiToken: "sdk-test-token",
+    apiToken: "sdk-test-host-token",
   });
   const unauthorized = new VisualClient({
     baseUrl: fixture.baseUrl,
@@ -97,9 +97,14 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
   });
 
   const session = await client.createSession();
+  const plannerClient = new VisualClient({
+    baseUrl: fixture.baseUrl,
+    apiToken: session.plannerToken,
+  });
   assert.equal(JSON.stringify(client), "{}");
   assert.equal(client.toString(), "VisualClient");
   assert.equal(String(session).includes(session.streamToken), false);
+  assert.equal(String(session).includes(session.plannerToken), false);
   const stream = await FrameStream.connect(fixture.baseUrl, session);
   try {
     const image = await createJpeg();
@@ -109,6 +114,7 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
       image,
     });
     assert.equal(accepted.type, "screen.frame.accepted");
+    assert.equal(accepted.frame_seq, 1);
     await assert.rejects(
       stream.sendFrame({
         frameId: "sdk-frame-1",
@@ -125,9 +131,9 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
     await stream.close();
   }
 
-  await client.setTask(session.sessionId, "click the control", ["click"]);
-  const first = await client.decide(session.sessionId, "sdk-request-1");
-  const repeated = await client.decide(session.sessionId, "sdk-request-1");
+  await plannerClient.setTask(session.sessionId, "click the control", ["click"]);
+  const first = await plannerClient.decide(session.sessionId, "sdk-request-1");
+  const repeated = await plannerClient.decide(session.sessionId, "sdk-request-1");
   assert.equal(first.decision_id, repeated.decision_id);
   const decision = first.decision as { action: string; frame_id: string };
   assert.equal(decision.action, "click");
@@ -142,14 +148,49 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
       return true;
     },
   );
-  const state = await client.state(session.sessionId);
+  const state = await plannerClient.state(session.sessionId);
   assert.ok(JSON.stringify(state.history).includes("click"));
-  await client.resetTask(session.sessionId);
+  await plannerClient.resetTask(session.sessionId);
   await client.closeSession(session.sessionId);
   await assert.rejects(
-    client.state(session.sessionId),
-    (error: unknown) => error instanceof VisualServiceError,
+    plannerClient.state(session.sessionId),
+    (error: unknown) =>
+      error instanceof VisualServiceError && error.code === "unauthorized",
   );
+});
+
+test("HTTP is limited to loopback hosts for clients and frame streams", async () => {
+  for (const baseUrl of [
+    "http://visual.example",
+    "http://192.168.1.2:8790",
+  ]) {
+    assert.throws(
+      () => new VisualClient({ baseUrl, apiToken: "secret" }),
+      (error: unknown) =>
+        error instanceof VisualServiceError &&
+        error.code === "insecure_transport",
+    );
+    await assert.rejects(
+      FrameStream.connect(baseUrl, {
+        sessionId: "session-1",
+        streamPath: "/stream",
+        streamToken: "stream-secret",
+        plannerToken: "planner-secret",
+        protocol: "screen-frame-v1",
+      }),
+      (error: unknown) =>
+        error instanceof VisualServiceError &&
+        error.code === "insecure_transport",
+    );
+  }
+
+  for (const baseUrl of [
+    "http://localhost:8790",
+    "http://127.0.0.1:8790",
+    "http://[::1]:8790",
+  ]) {
+    new VisualClient({ baseUrl, apiToken: "secret" });
+  }
 });
 
 test("decision retries preserve request id and attempts are never retried", async () => {
