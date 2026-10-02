@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import secrets
 import threading
+import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
+from .metering import UsageReport
 from .runtime import PersistentVisualDecisionSession, VisualDecisionPolicy
 from .schema import Decision
 
@@ -16,6 +18,21 @@ class VisualServiceError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class SessionTenant:
+    workspace_id: str | None
+    key_id: str | None
+    grant_id: str | None
+    project_id: str | None
+    environment_id: str | None
+    max_concurrent_sessions: int | None
+    max_decisions_per_session: int | None
+    max_frames_per_session: int | None
+
+
+OPERATOR = SessionTenant(None, None, None, None, None, None, None, None)
 
 
 @dataclass(frozen=True)
@@ -32,8 +49,10 @@ class VisualServiceSession:
     """
 
     decision_session: PersistentVisualDecisionSession
+    session_id: str
     stream_token: str = field(repr=False)
     planner_token: str = field(repr=False)
+    tenant: SessionTenant = OPERATOR
     lock: threading.RLock = field(default_factory=threading.RLock)
     last_captured_at_ms: int = -1
     frame_seq: int = 0
@@ -45,11 +64,18 @@ class VisualServiceSession:
     outstanding: OrderedDict[str, tuple[Decision, int]] = field(
         default_factory=OrderedDict
     )
+    created_monotonic: float = field(default_factory=time.monotonic)
+    report_seq: int = 0
+    reported_usage: dict[str, int] = field(default_factory=dict)
     usage: dict[str, int] = field(
         default_factory=lambda: {
             "frames_accepted": 0,
+            "frame_bytes": 0,
             "decisions": 0,
+            "decisions_act": 0,
+            "decisions_abstain": 0,
             "attempts_recorded": 0,
+            "inference_ms": 0,
         }
     )
 
@@ -70,6 +96,7 @@ class VisualService:
         max_replay_entries: int = 128,
         max_outstanding_decisions: int = 32,
         max_expired_requests: int = 4096,
+        max_pending_reports: int = 10_000,
     ) -> None:
         if max_sessions < 1:
             raise ValueError("max_sessions must be positive")
@@ -79,16 +106,21 @@ class VisualService:
             raise ValueError("max_outstanding_decisions must be positive")
         if max_expired_requests < 1:
             raise ValueError("max_expired_requests must be positive")
+        if max_pending_reports < 1:
+            raise ValueError("max_pending_reports must be positive")
         self.policy = policy
         self.cache_factory = cache_factory or (lambda: None)
         self.max_sessions = max_sessions
         self.max_replay_entries = max_replay_entries
         self.max_outstanding_decisions = max_outstanding_decisions
         self.max_expired_requests = max_expired_requests
+        self.max_pending_reports = max_pending_reports
         self._lock = threading.RLock()
         self._sessions: dict[str, VisualServiceSession] = {}
+        self._pending_reports: deque[UsageReport] = deque()
+        self._pending_report_drops = 0
 
-    def create_session(self) -> SessionCredentials:
+    def create_session(self, tenant: SessionTenant = OPERATOR) -> SessionCredentials:
         with self._lock:
             if len(self._sessions) >= self.max_sessions:
                 raise VisualServiceError(
@@ -96,6 +128,21 @@ class VisualService:
                     "visual service session capacity is exhausted",
                     status_code=503,
                 )
+            if tenant.workspace_id is not None:
+                live = sum(
+                    1
+                    for session in self._sessions.values()
+                    if session.tenant.workspace_id == tenant.workspace_id
+                )
+                if (
+                    tenant.max_concurrent_sessions is not None
+                    and live >= tenant.max_concurrent_sessions
+                ):
+                    raise VisualServiceError(
+                        "quota_exceeded",
+                        "visual workspace session quota is exhausted",
+                        status_code=429,
+                    )
             session_id = secrets.token_urlsafe(24)
             stream_token = secrets.token_urlsafe(32)
             planner_token = secrets.token_urlsafe(32)
@@ -110,6 +157,8 @@ class VisualService:
                     frames,
                     cache=self.cache_factory(),
                 ),
+                session_id=session_id,
+                tenant=tenant,
                 stream_token=stream_token,
                 planner_token=planner_token,
             )
@@ -121,11 +170,20 @@ class VisualService:
         if session is None:
             raise self._unknown_session()
         with session.lock:
+            self._enqueue_report(session, closed=True)
             session.decision_session.clear_task()
             session.decision_session.screen_frames.reset()
             session.replay.clear()
             session.expired_requests.clear()
             session.outstanding.clear()
+
+    def authorize_tenant(self, session_id: str, tenant: SessionTenant) -> None:
+        session = self._session(session_id)
+        if (
+            tenant.workspace_id is not None
+            and tenant.workspace_id != session.tenant.workspace_id
+        ):
+            raise self._unknown_session()
 
     def authenticate_stream(self, session_id: str, stream_token: str) -> bool:
         session = self._session(session_id)
@@ -161,6 +219,16 @@ class VisualService:
                 "captured_at_ms is required for visual service frames",
             )
         with session.lock:
+            max_frames = session.tenant.max_frames_per_session
+            if (
+                max_frames is not None
+                and session.usage["frames_accepted"] >= max_frames
+            ):
+                raise VisualServiceError(
+                    "quota_exceeded",
+                    "visual session frame quota is exhausted",
+                    status_code=429,
+                )
             if frame.frame_id in session.recent_duplicate_frame_ids:
                 raise VisualServiceError(
                     "replayed_frame",
@@ -185,6 +253,9 @@ class VisualService:
             session.recent_duplicate_frame_ids.append(frame.frame_id)
             session.frame_seq += 1
             session.usage["frames_accepted"] += 1
+            frame_bytes = frame.metadata.get("frame_bytes", 0)
+            if isinstance(frame_bytes, int) and frame_bytes >= 0:
+                session.usage["frame_bytes"] += frame_bytes
             return {
                 "frame_id": frame.frame_id,
                 "frame_seq": session.frame_seq,
@@ -254,8 +325,22 @@ class VisualService:
                     "the visual stream has not supplied a current frame",
                     status_code=409,
                 )
+            max_decisions = session.tenant.max_decisions_per_session
+            if (
+                max_decisions is not None
+                and session.usage["decisions"] >= max_decisions
+            ):
+                raise VisualServiceError(
+                    "quota_exceeded",
+                    "visual session decision quota is exhausted",
+                    status_code=429,
+                )
             seq = session.frame_seq
+            started = time.monotonic()
             gated = session.decision_session.decide_gated()
+            session.usage["inference_ms"] += max(
+                0, int((time.monotonic() - started) * 1000)
+            )
             if gated.status == "rejected":
                 raise VisualServiceError(
                     "illegal_decision",
@@ -290,6 +375,10 @@ class VisualService:
             while len(session.outstanding) > self.max_outstanding_decisions:
                 session.outstanding.popitem(last=False)
             session.usage["decisions"] += 1
+            if gated.status == "act":
+                session.usage["decisions_act"] += 1
+            elif gated.status == "abstain":
+                session.usage["decisions_abstain"] += 1
             return dict(response)
 
     def record_attempt(self, session_id: str, decision_id: str) -> dict[str, Any]:
@@ -323,13 +412,83 @@ class VisualService:
                 "policy": self.policy.name,
                 "active_sessions": len(self._sessions),
                 "session_capacity": self.max_sessions,
+                "pending_usage_reports": len(self._pending_reports),
+                "usage_report_drops": self._pending_report_drops,
             }
+
+    def collect_usage(self, *, include_closed: bool = True) -> list[UsageReport]:
+        with self._lock:
+            reports = list(self._pending_reports) if include_closed else []
+            if include_closed:
+                self._pending_reports.clear()
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            if session.tenant.workspace_id is None:
+                continue
+            with session.lock:
+                delta = {
+                    name: session.usage[name] - session.reported_usage.get(name, 0)
+                    for name in session.usage
+                }
+                if not any(delta.values()):
+                    continue
+                reports.append(self._report_for(session, delta, closed=False))
+                session.reported_usage = dict(session.usage)
+        return reports
 
     def _state(self, session: VisualServiceSession) -> dict[str, Any]:
         state = session.decision_session.state()
         state["frame_seq"] = session.frame_seq
         state["usage"] = dict(session.usage)
         return state
+
+    def _enqueue_report(self, session: VisualServiceSession, *, closed: bool) -> None:
+        if session.tenant.workspace_id is None:
+            return
+        delta = {
+            name: session.usage[name] - session.reported_usage.get(name, 0)
+            for name in session.usage
+        }
+        report = self._report_for(
+            session,
+            delta,
+            closed=closed,
+            session_ms=int((time.monotonic() - session.created_monotonic) * 1000),
+        )
+        session.reported_usage = dict(session.usage)
+        with self._lock:
+            self._pending_reports.append(report)
+            while len(self._pending_reports) > self.max_pending_reports:
+                self._pending_reports.popleft()
+                self._pending_report_drops += 1
+
+    def _report_for(
+        self,
+        session: VisualServiceSession,
+        delta: dict[str, int],
+        *,
+        closed: bool,
+        session_ms: int = 0,
+    ) -> UsageReport:
+        session.report_seq += 1
+        return UsageReport(
+            workspace_id=session.tenant.workspace_id or "",
+            virtual_key_id=session.tenant.key_id or "",
+            project_id=session.tenant.project_id,
+            environment_id=session.tenant.environment_id,
+            grant_id=session.tenant.grant_id or "",
+            session_id=session.session_id,
+            report_seq=session.report_seq,
+            frames_accepted=delta.get("frames_accepted", 0),
+            frame_bytes=delta.get("frame_bytes", 0),
+            decisions=delta.get("decisions", 0),
+            decisions_act=delta.get("decisions_act", 0),
+            decisions_abstain=delta.get("decisions_abstain", 0),
+            attempts_recorded=delta.get("attempts_recorded", 0),
+            inference_ms=delta.get("inference_ms", 0),
+            session_ms=session_ms,
+            closed=closed,
+        )
 
     def _session(self, session_id: str) -> VisualServiceSession:
         with self._lock:

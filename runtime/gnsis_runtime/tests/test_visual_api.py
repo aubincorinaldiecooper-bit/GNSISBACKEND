@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import io
+import time
 
+import jwt
 from PIL import Image
 from starlette.testclient import TestClient
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gnsis_runtime.visual.api import (
     MAX_FRAME_HEADER_BYTES,
     VisualAPISettings,
     create_visual_api,
 )
+from gnsis_runtime.visual.grants import GrantVerifier
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.service import VisualService
 
@@ -302,3 +307,119 @@ def test_api_has_no_screenshot_upload_decision_path() -> None:
         )
 
     assert response.status_code == 404
+
+
+def _grant(
+    private_pem: str,
+    *,
+    workspace_id: str,
+    grant_id: str,
+    max_concurrent_sessions: int = 4,
+) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": "control-plane",
+            "aud": "gnsis-visual",
+            "sub": f"key-{workspace_id}",
+            "jti": grant_id,
+            "iat": now,
+            "exp": now + 300,
+            "ws": workspace_id,
+            "prj": "project",
+            "env": "environment",
+            "scp": ["visual:host"],
+            "lim": {
+                "max_concurrent_sessions": max_concurrent_sessions,
+                "max_decisions_per_session": 2,
+                "max_frames_per_session": 10,
+            },
+        },
+        private_pem,
+        algorithm="EdDSA",
+    )
+
+
+def test_api_accepts_grants_and_isolates_tenants_on_session_routes() -> None:
+    private = Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    service = VisualService(FixedPolicy())
+    app = create_visual_api(
+        service,
+        VisualAPISettings(
+            host_token="operator-token",
+            grant_verifier=GrantVerifier(public_pem, issuer="control-plane"),
+        ),
+    )
+    grant_a = _grant(private_pem, workspace_id="workspace-a", grant_id="grant-a")
+    grant_b = _grant(private_pem, workspace_id="workspace-b", grant_id="grant-b")
+
+    with TestClient(app) as client:
+        opened = client.post(
+            "/v1/visual/sessions",
+            headers={"Authorization": f"Bearer {grant_a}"},
+        )
+        assert opened.status_code == 200
+        session_id = opened.json()["session_id"]
+        tenant_b = {"Authorization": f"Bearer {grant_b}"}
+        close = client.delete(
+            f"/v1/visual/sessions/{session_id}",
+            headers=tenant_b,
+        )
+        attempt = client.post(
+            f"/v1/visual/sessions/{session_id}/attempts",
+            headers=tenant_b,
+            json={"decision_id": "missing"},
+        )
+        assert close.status_code == 404
+        assert close.json()["error"]["code"] == "unknown_session"
+        assert attempt.status_code == 404
+        assert attempt.json()["error"]["code"] == "unknown_session"
+        assert (
+            client.get(
+                f"/v1/visual/sessions/{session_id}",
+                headers={"Authorization": "Bearer operator-token"},
+            ).status_code
+            == 200
+        )
+
+
+def test_api_enforces_grant_concurrent_session_limit() -> None:
+    private = Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    app = create_visual_api(
+        VisualService(FixedPolicy()),
+        VisualAPISettings(
+            grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
+        ),
+    )
+    grant = _grant(
+        private_pem,
+        workspace_id="workspace-a",
+        grant_id="grant-a",
+        max_concurrent_sessions=1,
+    )
+    headers = {"Authorization": f"Bearer {grant}"}
+
+    with TestClient(app) as client:
+        assert client.post("/v1/visual/sessions", headers=headers).status_code == 200
+        second = client.post("/v1/visual/sessions", headers=headers)
+
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "quota_exceeded"

@@ -5,7 +5,12 @@ import pytest
 
 from gnsis_runtime.screen import ScreenFrame
 from gnsis_runtime.visual.schema import Decision, Target
-from gnsis_runtime.visual.service import VisualService, VisualServiceError
+from gnsis_runtime.visual.service import (
+    OPERATOR,
+    SessionTenant,
+    VisualService,
+    VisualServiceError,
+)
 
 
 class FixedPolicy:
@@ -189,3 +194,84 @@ def test_replay_window_rejects_expired_request_ids() -> None:
     )
     assert service.decide(session_id, "request-2")["decision_id"]
     assert first["decision_id"]
+
+
+def _tenant(
+    workspace_id: str = "workspace-1",
+    *,
+    max_concurrent_sessions: int = 4,
+    max_decisions_per_session: int = 2000,
+    max_frames_per_session: int = 100000,
+) -> SessionTenant:
+    return SessionTenant(
+        workspace_id=workspace_id,
+        key_id="key-1",
+        grant_id="grant-1",
+        project_id="project-1",
+        environment_id="environment-1",
+        max_concurrent_sessions=max_concurrent_sessions,
+        max_decisions_per_session=max_decisions_per_session,
+        max_frames_per_session=max_frames_per_session,
+    )
+
+
+def test_tenant_concurrency_and_per_session_quotas_are_enforced() -> None:
+    service = VisualService(FixedPolicy())
+    tenant = _tenant(
+        max_concurrent_sessions=1,
+        max_decisions_per_session=1,
+        max_frames_per_session=1,
+    )
+    first = service.create_session(tenant).session_id
+
+    with pytest.raises(VisualServiceError) as concurrent:
+        service.create_session(tenant)
+    assert concurrent.value.code == "quota_exceeded"
+    assert concurrent.value.status_code == 429
+
+    service.set_task(first, "click the control")
+    service.publish_frame(first, _frame("f1", 1000))
+    with pytest.raises(VisualServiceError) as frames:
+        service.publish_frame(first, _frame("f2", 1100))
+    assert frames.value.code == "quota_exceeded"
+    response = service.decide(first, "request-1")
+    assert service.decide(first, "request-1") == response
+    with pytest.raises(VisualServiceError) as decisions:
+        service.decide(first, "request-2")
+    assert decisions.value.code == "quota_exceeded"
+
+    other = service.create_session(_tenant("workspace-2")).session_id
+    assert service.state(other)["frame_seq"] == 0
+
+
+def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> None:
+    service = VisualService(FixedPolicy())
+    tenant = _tenant()
+    session_id = service.create_session(tenant).session_id
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+    decision = service.decide(session_id, "request-1")
+    service.record_attempt(session_id, decision["decision_id"])
+
+    first = service.collect_usage()
+    assert len(first) == 1
+    assert first[0].event_id == f"{session_id}:1"
+    assert first[0].frames_accepted == 1
+    assert first[0].decisions == 1
+    assert first[0].attempts_recorded == 1
+    assert service.collect_usage() == []
+
+    service.publish_frame(session_id, _frame("f2", 1100))
+    second = service.collect_usage()
+    assert len(second) == 1
+    assert second[0].report_seq == 2
+    assert second[0].event_id != first[0].event_id
+    service.close_session(session_id)
+    closed = service.collect_usage()
+    assert len(closed) == 1
+    assert closed[0].closed is True
+    assert closed[0].session_ms >= 0
+
+    operator_id = service.create_session(OPERATOR).session_id
+    service.publish_frame(operator_id, _frame("operator", 2000))
+    assert service.collect_usage() == []

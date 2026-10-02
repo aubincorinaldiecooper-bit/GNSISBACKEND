@@ -17,7 +17,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --no-deps -e runtime/minicpm_ft -e runtime/gnsis_runtime
-          python -m pip install fastapi "uvicorn[standard]" "websockets>=12" pillow pyyaml httpx "mcp==2.2.0" pytest ruff
+          python -m pip install fastapi "uvicorn[standard]" "websockets>=12" pillow pyyaml httpx "mcp==2.2.0" "PyJWT[crypto]>=2.8" pytest ruff
           python -m pip install -e sdks/python
       - name: Check Python formatting and lint
         run: |
@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --no-deps -e runtime/minicpm_ft -e runtime/gnsis_runtime
-          python -m pip install fastapi "uvicorn[standard]" "websockets>=12" pillow pyyaml httpx "mcp==2.2.0" pytest ruff
+          python -m pip install fastapi "uvicorn[standard]" "websockets>=12" pillow pyyaml httpx "mcp==2.2.0" "PyJWT[crypto]>=2.8" pytest ruff
           python -m pip install -e sdks/python
       - uses: actions/setup-node@v4
         with:

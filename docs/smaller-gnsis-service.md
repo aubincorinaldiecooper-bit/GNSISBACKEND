@@ -107,6 +107,19 @@ creation is not retried to avoid accidentally creating multiple sessions, and
 adapter for MCP-capable agents; these SDKs provide direct client integrations
 for hosts and applications.
 
+## Commercial access
+
+Commercial hosts use the existing Genesis virtual-key system. Issue a virtual
+key with the `visual:host` scope, exchange it at
+`POST /v1/visual/grants`, and send the returned short-lived grant as the
+visual API's host bearer credential. Grants bind a workspace, key, project,
+environment, and bounded concurrent-session, frame, and decision limits; the
+runtime verifies them offline. Sessions from different workspaces cannot access
+each other's state. Usage callbacks meter accepted frames, frame bytes,
+decisions (including act/abstain), recorded attempts, inference milliseconds,
+session milliseconds, and closed sessions. Pricing, charging, and billing are
+intentionally not implemented.
+
 ## MCP adapter
 
 The local stdio adapter uses the official open-source MCP Python SDK. It exposes:
