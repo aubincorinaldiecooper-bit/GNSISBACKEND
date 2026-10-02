@@ -18,7 +18,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from .prompt import value_candidates
-from .schema import ActionName, Decision, DecisionError, validate_decision
+from .schema import (
+    ActionName,
+    Decision,
+    DecisionError,
+    bounded_actions,
+    validate_decision,
+)
 
 TARGETED_ACTIONS = frozenset({"click", "type"})
 ARGUMENT_FIELDS = ("text", "url", "direction")
@@ -109,7 +115,12 @@ class LegalActionSet:
         }
 
 
-def legal_actions(goal: str, frame_id: str, viewport: tuple[int, int]) -> LegalActionSet:
+def legal_actions(
+    goal: str,
+    frame_id: str,
+    viewport: tuple[int, int],
+    allowed_actions: tuple[str, ...] | None = None,
+) -> LegalActionSet:
     """Build the bounded legal set from the goal and the observed frame only."""
 
     goal = str(goal).strip()
@@ -118,14 +129,22 @@ def legal_actions(goal: str, frame_id: str, viewport: tuple[int, int]) -> LegalA
     width, height = viewport
     if width <= 0 or height <= 0:
         raise ValueError("viewport must be positive")
+    allowed = set(bounded_actions(allowed_actions))
+    allowed.add("wait")
     choices: list[LegalChoice] = []
     for candidate in value_candidates(goal):
         if candidate.kind not in _ACTION_FOR_KIND or candidate.value is None:
             continue
         action = _ACTION_FOR_KIND[candidate.kind]
+        if action not in allowed:
+            continue
         field_name = _FIELD_FOR_KIND[candidate.kind]
         index = sum(1 for choice in choices if choice.action == action)
         key = f"{action}:{candidate.value}" if action == "scroll" else f"{action}:{index}"
         choices.append(LegalChoice(key=key, action=action, **{field_name: candidate.value}))
-    choices.extend(LegalChoice(key=action, action=action) for action in _PLAIN_ACTIONS)
+    choices.extend(
+        LegalChoice(key=action, action=action)
+        for action in _PLAIN_ACTIONS
+        if action in allowed
+    )
     return LegalActionSet(goal=goal, frame_id=frame_id, viewport=(int(width), int(height)), choices=tuple(choices))

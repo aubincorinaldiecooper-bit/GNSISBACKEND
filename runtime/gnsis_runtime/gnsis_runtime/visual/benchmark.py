@@ -215,6 +215,7 @@ class PolicyContestant:
             observation.stream_motion(),
             legal.viewport,
             self.cache,
+            tuple(dict.fromkeys(choice.action for choice in legal.choices)),
         )
 
 
@@ -766,7 +767,16 @@ class _ContestantPolicy:
         self.name = contestant.name
         self.latencies: list[float] = []
 
-    def decide(self, frame: Any, goal: str, history: list[dict], motion: float, viewport: tuple[int, int], cache: Any) -> Decision:
+    def decide(
+        self,
+        frame: Any,
+        goal: str,
+        history: list[dict],
+        motion: float,
+        viewport: tuple[int, int],
+        cache: Any,
+        allowed_actions: tuple[str, ...] | None = None,
+    ) -> Decision:
         recent = tuple(reversed(self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)))
         if not recent:
             raise RuntimeError("no consumed visual frame is available")
@@ -779,7 +789,15 @@ class _ContestantPolicy:
         )
         started = time.perf_counter()
         try:
-            return self.contestant.propose(observation, legal_actions(goal, frame.frame_id, viewport))
+            return self.contestant.propose(
+                observation,
+                legal_actions(
+                    goal,
+                    frame.frame_id,
+                    viewport,
+                    allowed_actions,
+                ),
+            )
         finally:
             self.latencies.append((time.perf_counter() - started) * 1000.0)
 

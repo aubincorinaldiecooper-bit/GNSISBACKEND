@@ -11,8 +11,10 @@ from gnsis_runtime.visual.service import VisualService, VisualServiceError
 class FixedPolicy:
     name = "fixed"
 
-    def __init__(self) -> None:
+    def __init__(self, confidence: float = 0.9) -> None:
         self.calls = 0
+        self.allowed_actions = None
+        self.confidence = confidence
 
     def decide(
         self,
@@ -25,9 +27,10 @@ class FixedPolicy:
         allowed_actions=None,
     ):
         self.calls += 1
+        self.allowed_actions = allowed_actions
         return Decision(
             "click",
-            0.9,
+            self.confidence,
             Target(10, 10),
             frame_id=frame.frame_id,
         )
@@ -66,6 +69,7 @@ def test_service_replays_decision_requests_without_rerunning_policy() -> None:
 
     assert second == first
     assert policy.calls == 1
+    assert policy.allowed_actions == ("click",)
     assert first["decision"]["frame_id"] == "f1"
 
 
@@ -78,6 +82,19 @@ def test_service_rejects_stale_and_replayed_frames() -> None:
         service.publish_frame(session_id, _frame("f1", 1100))
     with pytest.raises(VisualServiceError, match="increase monotonically"):
         service.publish_frame(session_id, _frame("f2", 900))
+
+
+def test_service_exposes_abstention_without_executing_the_proposal() -> None:
+    service = VisualService(FixedPolicy(confidence=0.2))
+    session_id, _ = service.create_session()
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    result = service.decide(session_id, "request-1")
+
+    assert result["decision"]["action"] == "wait"
+    assert result["gate"]["status"] == "abstain"
+    assert result["gate"]["proposed"]["action"] == "click"
 
 
 def test_attempt_ids_are_single_use_and_history_is_recorded() -> None:

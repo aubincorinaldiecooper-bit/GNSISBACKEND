@@ -193,7 +193,14 @@ class VisualService:
                     "the visual stream has not supplied a current frame",
                     status_code=409,
                 )
-            decision = session.decision_session.decide()
+            gated = session.decision_session.decide_gated()
+            if gated.status == "rejected":
+                raise VisualServiceError(
+                    "illegal_decision",
+                    gated.reason or "the policy returned an illegal decision",
+                    status_code=422,
+                )
+            decision = gated.decision
             if not session.decision_session.is_current(decision):
                 raise VisualServiceError(
                     "stale_decision",
@@ -205,6 +212,7 @@ class VisualService:
                 "request_id": request_id,
                 "decision_id": decision_id,
                 "decision": decision.to_json(),
+                "gate": gated.to_json(),
                 "current": True,
             }
             session.replay[request_id] = response

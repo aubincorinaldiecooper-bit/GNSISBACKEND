@@ -14,7 +14,7 @@ from PIL import Image, ImageChops, ImageStat
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .legal import IllegalDecision, LegalActionSet, legal_actions
-from .schema import Decision, DecisionError
+from .schema import ACTIONS, Decision, DecisionError, bounded_actions
 
 MAX_HISTORY = 6
 MOTION_WINDOW_MS = 800
@@ -38,6 +38,7 @@ class VisualDecisionPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         cache: Any,
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision: ...
 
 
@@ -288,19 +289,27 @@ class PersistentVisualDecisionSession:
         self.gate = gate if gate is not None else DecisionGate()
         self.goal: str | None = None
         self.history: list[dict] = []
+        self.allowed_actions = bounded_actions()
         self._last_attempt: tuple[Decision, Image.Image] | None = None
 
-    def set_task(self, goal: str) -> None:
+    def set_task(
+        self,
+        goal: str,
+        *,
+        allowed_actions: tuple[str, ...] | None = None,
+    ) -> None:
         goal = str(goal).strip()
         if not goal:
             raise ValueError("visual task goal must not be empty")
         self.goal = goal
         self.history = []
+        self.allowed_actions = bounded_actions(allowed_actions)
         self._last_attempt = None
 
     def clear_task(self) -> None:
         self.goal = None
         self.history = []
+        self.allowed_actions = bounded_actions(ACTIONS)
         self._last_attempt = None
 
     def latest_frame(self) -> ScreenFrame:
@@ -328,7 +337,12 @@ class PersistentVisualDecisionSession:
         source = self.latest_frame()
         view = RuntimeFrameView.from_screen_frame(source)
         viewport = view.image().size
-        legal = legal_actions(self.goal, source.frame_id, viewport)
+        legal = legal_actions(
+            self.goal,
+            source.frame_id,
+            viewport,
+            self.allowed_actions,
+        )
         recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
         motion = recent_motion(recent)
         try:
@@ -339,6 +353,7 @@ class PersistentVisualDecisionSession:
                 motion,
                 viewport,
                 self.cache,
+                self.allowed_actions,
             )
         except DecisionError as exc:
             proposed = exc
@@ -399,6 +414,7 @@ class PersistentVisualDecisionSession:
             "policy": self.policy.name,
             "goal": self.goal,
             "history": self.history[-MAX_HISTORY:],
+            "allowed_actions": list(self.allowed_actions),
             "gate": self.gate.to_json(),
             "change_since_last_action": self.change_since_last_action(frame),
             "frame_id": frame.frame_id if frame else None,
