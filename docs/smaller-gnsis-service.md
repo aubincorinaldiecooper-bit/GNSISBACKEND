@@ -57,6 +57,21 @@ Frame IDs must be unique inside a session and capture timestamps must increase
 monotonically. Frame bytes and decoded pixel counts are bounded. A stale,
 duplicate, malformed, or oversized frame is rejected before reaching the policy.
 
+## Client SDKs
+
+Open-source clients are available in [`sdks/python`](../sdks/python) and
+[`sdks/typescript`](../sdks/typescript). They call the API and stream frames
+captured by the trusted host; they do not capture screens, grant permissions,
+or execute decisions. The host remains responsible for its own authority and
+permission policy and for carrying out any permitted action.
+
+The clients retry health, state, session close, task setup/reset, and decision
+requests after transport failures or HTTP 502/503/504 responses. Session
+creation is not retried to avoid accidentally creating multiple sessions, and
+`record_attempt` is not retried because attempts are single-use. MCP remains the
+adapter for MCP-capable agents; these SDKs provide direct client integrations
+for hosts and applications.
+
 ## MCP adapter
 
 The local stdio adapter uses the official open-source MCP Python SDK. It exposes:

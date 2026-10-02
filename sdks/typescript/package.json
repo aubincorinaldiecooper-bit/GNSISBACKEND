@@ -1,0 +1,29 @@
+{
+  "name": "@gnsis/visual-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for the Smaller GNSIS visual API",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.8",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
