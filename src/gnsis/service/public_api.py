@@ -51,6 +51,7 @@ class Scope:
     RUNS_APPROVE = "runs:approve"
     RECEIPTS_READ = "receipts:read"
     INTELLIGENCE_READ = "intelligence:read"
+    VISUAL_HOST = "visual:host"
 
 
 #: The complete public-beta scope set. A key issued before scopes existed
@@ -67,6 +68,8 @@ PUBLIC_SCOPES = frozenset(
         Scope.INTELLIGENCE_READ,
     }
 )
+
+ISSUABLE_SCOPES = PUBLIC_SCOPES | {Scope.VISUAL_HOST}
 
 
 # -- error contract -----------------------------------------------------------
@@ -96,6 +99,8 @@ class ErrorCode:
     RECEIPT_UNAVAILABLE = "receipt_unavailable"
     INTELLIGENCE_UNAVAILABLE = "intelligence_unavailable"
     INVALID_REQUEST = "invalid_request"
+    VISUAL_GRANTS_UNAVAILABLE = "visual_grants_unavailable"
+    QUOTA_EXCEEDED = "quota_exceeded"
 
 
 def error_response(exc: PublicApiError, request_id: str) -> JSONResponse:
@@ -196,6 +201,43 @@ def current_principal(request: Request, authorization: Optional[str] = Header(de
     if presented.startswith("gns_"):
         return _principal_from_virtual_key(settings, presented)
     return _principal_from_session(request, presented)
+
+
+@router.post("/visual/grants")
+def create_visual_grant(principal: Principal = Depends(current_principal)) -> dict:
+    """Exchange a visual-scoped Genesis key for a short-lived runtime grant."""
+    principal.require(Scope.VISUAL_HOST)
+    if principal.key_id is None:
+        raise PublicApiError(
+            ErrorCode.AUTHORIZATION_FAILED,
+            "visual grants require a Genesis virtual key",
+            status=403,
+        )
+
+    from .virtual_keys import VirtualKeyStore
+
+    key = VirtualKeyStore().get(principal.workspace_id, principal.key_id)
+    if key is None or not key.active:
+        raise PublicApiError(
+            ErrorCode.AUTHENTICATION_FAILED,
+            "the API key is invalid, disabled, or expired",
+            status=401,
+        )
+
+    settings = get_settings()
+    if (
+        not settings.visual_grant_private_key
+        or not settings.visual_grant_issuer.strip()
+    ):
+        raise PublicApiError(
+            ErrorCode.VISUAL_GRANTS_UNAVAILABLE,
+            "visual grants are not configured",
+            status=503,
+        )
+
+    from .visual_grants import issue_grant
+
+    return issue_grant(settings, key)
 
 
 # -- shared resolution --------------------------------------------------------

@@ -429,6 +429,7 @@ class CreateVirtualKeyRequest(BaseModel):
     team_id: Optional[str] = None
     allowed_providers: Optional[List[str]] = None
     allowed_models: Optional[List[str]] = None
+    api_scopes: Optional[List[str]] = None
     soft_limit: Optional[str] = None
     hard_limit: Optional[str] = None
     per_run_limit: Optional[str] = None
@@ -455,6 +456,7 @@ def create_virtual_key(
             project_id=req.project_id, environment_id=req.environment_id,
             user_id=req.user_id, team_id=req.team_id,
             allowed_providers=req.allowed_providers, allowed_models=req.allowed_models,
+            api_scopes=req.api_scopes,
             soft_limit=req.soft_limit, hard_limit=req.hard_limit,
             per_run_limit=req.per_run_limit, daily_limit=req.daily_limit,
             monthly_limit=req.monthly_limit, expires_at=req.expires_at, metadata=req.metadata,

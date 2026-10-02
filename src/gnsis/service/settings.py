@@ -197,6 +197,16 @@ class Settings:
     litellm_api_key: Optional[str] = None      # key GNSIS uses to call LiteLLM
     litellm_callback_secret: Optional[str] = None  # shared secret LiteLLM sends to the callback
 
+    # Smaller GNSIS visual grants and usage callback.
+    visual_grant_private_key: Optional[str] = field(default=None, repr=False)
+    visual_grant_issuer: str = "gnsis-control-plane"
+    visual_grant_ttl_s: int = 300
+    visual_max_concurrent_sessions: int = 4
+    visual_max_decisions_per_session: int = 2000
+    visual_max_frames_per_session: int = 100_000
+    visual_daily_decision_quota: Optional[int] = None
+    visual_usage_secret: Optional[str] = field(default=None, repr=False)
+
     @property
     def litellm_enabled(self) -> bool:
         return bool(self.litellm_url and self.litellm_api_key)
@@ -530,6 +540,28 @@ class Settings:
             litellm_url=os.environ.get("GNSIS_LITELLM_URL"),
             litellm_api_key=os.environ.get("GNSIS_LITELLM_API_KEY"),
             litellm_callback_secret=os.environ.get("GNSIS_LITELLM_CALLBACK_SECRET"),
+            visual_grant_private_key=os.environ.get("GNSIS_VISUAL_GRANT_PRIVATE_KEY"),
+            visual_grant_issuer=os.environ.get(
+                "GNSIS_VISUAL_GRANT_ISSUER", "gnsis-control-plane"
+            ),
+            visual_grant_ttl_s=max(
+                30, min(900, _int("GNSIS_VISUAL_GRANT_TTL_S", 300))
+            ),
+            visual_max_concurrent_sessions=_int(
+                "GNSIS_VISUAL_MAX_CONCURRENT_SESSIONS", 4
+            ),
+            visual_max_decisions_per_session=_int(
+                "GNSIS_VISUAL_MAX_DECISIONS_PER_SESSION", 2000
+            ),
+            visual_max_frames_per_session=_int(
+                "GNSIS_VISUAL_MAX_FRAMES_PER_SESSION", 100_000
+            ),
+            visual_daily_decision_quota=(
+                int(os.environ["GNSIS_VISUAL_DAILY_DECISION_QUOTA"])
+                if os.environ.get("GNSIS_VISUAL_DAILY_DECISION_QUOTA") not in (None, "")
+                else None
+            ),
+            visual_usage_secret=os.environ.get("GNSIS_VISUAL_USAGE_SECRET"),
             markup_rate=os.environ.get("GNSIS_MARKUP_RATE", "0.05"),
             rate_card_version=os.environ.get("GNSIS_RATE_CARD_VERSION", "beta-2026-07"),
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
