@@ -14,6 +14,9 @@ dependencies = [
   "websockets>=12",
 ]
 
+[project.scripts]
+gnsis-visual-browser-host = "gnsis_visual_sdk.browser_host:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

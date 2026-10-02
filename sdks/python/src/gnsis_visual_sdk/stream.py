@@ -50,6 +50,7 @@ class FrameStream:
         *,
         encoding: str = "jpeg",
         video_source: str = "screen",
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         header = {
             "type": "screen.frame",
@@ -58,6 +59,8 @@ class FrameStream:
             "encoding": encoding,
             "video_source": video_source,
         }
+        if metadata is not None:
+            header["metadata"] = metadata
         async with self._send_lock:
             try:
                 await self._websocket.send(json.dumps(header, separators=(",", ":")))

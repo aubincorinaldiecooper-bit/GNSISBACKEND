@@ -290,6 +290,48 @@ def test_frame_stream_allows_loopback_http(monkeypatch) -> None:
     assert connected_urls[0].startswith("ws://[::1]:8790/stream?")
 
 
+def test_frame_stream_forwards_host_metadata() -> None:
+    sent: list[str | bytes] = []
+
+    class FakeWebSocket:
+        async def send(self, message: str | bytes) -> None:
+            sent.append(message)
+
+        async def recv(self) -> str:
+            return '{"type":"screen.frame.accepted","frame_seq":1}'
+
+        async def close(self) -> None:
+            return None
+
+    async def send() -> dict[str, object]:
+        stream = FrameStream(FakeWebSocket(), "stream-secret")
+        try:
+            return await stream.send_frame(
+                "browser-frame-1",
+                1_000,
+                b"jpeg",
+                metadata={
+                    "source_kind": "browser_tab",
+                    "source_tab_id": 17,
+                    "source_width": 1280,
+                    "source_height": 720,
+                },
+            )
+        finally:
+            await stream.close()
+
+    accepted = asyncio.run(send())
+
+    assert accepted["frame_seq"] == 1
+    assert json.loads(sent[0])["metadata"] == {
+        "source_kind": "browser_tab",
+        "source_tab_id": 17,
+        "source_width": 1280,
+        "source_height": 720,
+    }
+    assert sent[1] == b"jpeg"
+
+
 def test_real_api_lifecycle_and_credential_redaction(
     fixture_base_url: str,
 ) -> None:

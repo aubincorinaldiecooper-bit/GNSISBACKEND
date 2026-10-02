@@ -337,6 +337,7 @@ export interface SendFrameOptions {
   image: Uint8Array;
   encoding?: string;
   videoSource?: string;
+  metadata?: JsonObject;
 }
 
 export class FrameStream {
@@ -463,6 +464,7 @@ export class FrameStream {
       captured_at_ms: options.capturedAtMs,
       encoding: options.encoding ?? "jpeg",
       video_source: options.videoSource ?? "screen",
+      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
     });
 
     return new Promise<JsonObject>((resolve, reject) => {
