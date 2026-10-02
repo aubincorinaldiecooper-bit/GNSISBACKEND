@@ -16,7 +16,8 @@ jobs:
       - name: Install runtime and SDK
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e runtime/gnsis_runtime pytest ruff
+          python -m pip install --no-deps -e runtime/minicpm_ft -e runtime/gnsis_runtime
+          python -m pip install fastapi "uvicorn[standard]" "websockets>=12" pillow pyyaml httpx "mcp==2.2.0" pytest ruff
           python -m pip install -e sdks/python
       - name: Check Python formatting and lint
         run: |
@@ -31,6 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install fixture runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps -e runtime/minicpm_ft -e runtime/gnsis_runtime
+          python -m pip install fastapi "uvicorn[standard]" "websockets>=12" pillow pyyaml httpx "mcp==2.2.0" pytest ruff
+          python -m pip install -e sdks/python
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

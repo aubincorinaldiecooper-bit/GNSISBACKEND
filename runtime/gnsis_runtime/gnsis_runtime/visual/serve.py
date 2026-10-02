@@ -5,7 +5,6 @@ import os
 from collections.abc import Callable, Sequence
 from typing import Any
 
-import uvicorn
 from fastapi import FastAPI
 
 from .api import VisualAPISettings, create_visual_api
@@ -42,6 +41,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     host_token = os.environ.get("GNSIS_VISUAL_HOST_TOKEN", "")
     if not host_token:
         parser.error("GNSIS_VISUAL_HOST_TOKEN must be set")
+
+    import uvicorn
 
     from .backbone import BackboneConfig
     from .engine import JEVEngine, VisualCache
