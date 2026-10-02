@@ -13,10 +13,11 @@ import {
   type HostCapabilities,
   type HostEvent,
 } from "./protocol.js";
-import type {
-  ClientControl,
-  ScreenChannelConfig,
-  ScreenFrameMetadata,
+import {
+  DAEMON_CANCEL_REASON,
+  type ClientControl,
+  type ScreenChannelConfig,
+  type ScreenFrameMetadata,
 } from "../shared/protocol.js";
 
 export interface HostSessionOptions {
@@ -161,7 +162,7 @@ export class HostSession {
         source_ts_ms: event.ts_ms,
       });
     }
-    if (event.type === "playback.cancelled") {
+    if (event.type === "playback.cancelled" && event.reason !== DAEMON_CANCEL_REASON) {
       this.duplex?.sendControl({ type: "break", reason: event.reason });
     }
     this.duplex?.sendControl({ type: "host.event", event } as never);

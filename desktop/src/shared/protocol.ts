@@ -104,3 +104,4 @@ export type ServerControl =
 export const MIC_SAMPLE_RATE = 16_000;
 export const PLAYBACK_SAMPLE_RATE = 24_000;
 export const AUDIO_CHUNK_MS = 20;
+export const DAEMON_CANCEL_REASON = "daemon_cancel";
