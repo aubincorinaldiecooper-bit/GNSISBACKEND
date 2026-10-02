@@ -17,7 +17,7 @@
  */
 
 import type { HostCapabilities, LinkState, LiveEvent, LiveHost, VisionSource } from "@gnsis/ui";
-import type { ScreenChannelConfig } from "../shared/protocol.js";
+import { DAEMON_CANCEL_REASON, type ScreenChannelConfig } from "../shared/protocol.js";
 import type { GnsisBridge, ScreenUpdate, TurnResult } from "./bridge.js";
 import type { Log } from "./devices.js";
 
@@ -412,7 +412,7 @@ export class ElectronLiveHost implements LiveHost {
         // is still in flight must not play when it lands.
         const cancelled = toGeneration(c?.cancelled_generation_id) ?? this.lastGeneration;
         if (cancelled !== null) this.staleGeneration = Math.max(this.staleGeneration, cancelled);
-        this.cutPlayback("daemon_cancel");
+        this.cutPlayback(DAEMON_CANCEL_REASON);
         break;
       }
       case "audio.chunk": {
