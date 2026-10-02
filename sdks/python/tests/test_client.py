@@ -152,11 +152,91 @@ def test_record_attempt_does_not_retry_after_503(monkeypatch) -> None:
     assert delays == []
 
 
+def test_close_session_retry_accepts_unknown_session_after_retry(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    delays: list[float] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                503,
+                json={"error": {"code": "temporarily_unavailable", "message": "retry"}},
+            )
+        return httpx.Response(
+            404,
+            json={
+                "error": {"code": "unknown_session", "message": "session is missing"}
+            },
+        )
+
+    monkeypatch.setattr("gnsis_visual_sdk.client.time.sleep", delays.append)
+    client = VisualClient(
+        "https://visual.example",
+        "api-secret",
+        max_retries=1,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        assert client.close_session("session-1") == {"closed": True}
+    finally:
+        client.close()
+
+    assert len(requests) == 2
+    assert delays == [0.2]
+
+
+def test_close_session_first_attempt_unknown_session_still_raises() -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            404,
+            json={
+                "error": {"code": "unknown_session", "message": "session is missing"}
+            },
+        )
+
+    client = VisualClient(
+        "https://visual.example",
+        "api-secret",
+        max_retries=1,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        with pytest.raises(VisualServiceError) as missing:
+            client.close_session("session-1")
+    finally:
+        client.close()
+
+    assert missing.value.code == "unknown_session"
+    assert len(requests) == 1
+
+
 @pytest.mark.parametrize("base_url", ["http://visual.example", "http://10.0.0.2"])
 def test_visual_client_rejects_insecure_remote_http(base_url: str) -> None:
     with pytest.raises(VisualServiceError) as insecure:
         VisualClient(base_url, "api-secret")
     assert insecure.value.code == "insecure_transport"
+
+
+@pytest.mark.parametrize("base_url", ["ftp://visual.example", "visual.example", ""])
+def test_visual_clients_reject_unsupported_schemes(base_url: str) -> None:
+    with pytest.raises(VisualServiceError) as insecure:
+        VisualClient(base_url, "api-secret")
+    assert insecure.value.code == "insecure_transport"
+
+    session = VisualSession(
+        "session-1",
+        "/stream",
+        "stream-secret",
+        "planner-secret",
+        "screen-frame-v1",
+    )
+    with pytest.raises(VisualServiceError) as insecure_stream:
+        asyncio.run(FrameStream.connect(base_url, session))
+    assert insecure_stream.value.code == "insecure_transport"
 
 
 @pytest.mark.parametrize(

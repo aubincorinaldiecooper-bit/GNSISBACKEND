@@ -75,6 +75,8 @@ smaller-gnsis-serve \
 The model stack is loaded only after the required host token is present. The
 service listens on loopback by default; use HTTPS termination and a protected
 network when exposing it beyond the local machine.
+Uvicorn bounds each incoming WebSocket message to 8 MiB plus 4 KiB, matching
+the maximum binary frame and text-header sizes.
 
 Frame IDs must be unique inside a session and capture timestamps must increase
 monotonically. Frame bytes and decoded pixel counts are bounded. A stale,

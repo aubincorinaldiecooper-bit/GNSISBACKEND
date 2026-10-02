@@ -51,9 +51,9 @@ def test_official_mcp_server_exposes_only_non_actuating_visual_tools() -> None:
 
 @pytest.mark.parametrize(
     "base_url",
-    ["http://visual.example", "http://192.168.1.2:8790"],
+    ["http://visual.example", "http://192.168.1.2:8790", "ftp://visual.example"],
 )
-def test_mcp_config_rejects_insecure_remote_http(monkeypatch, base_url) -> None:
+def test_mcp_config_rejects_insecure_transports(monkeypatch, base_url) -> None:
     monkeypatch.setenv("GNSIS_VISUAL_API_BASE", base_url)
     monkeypatch.setenv("GNSIS_VISUAL_API_TOKEN", "planner-token")
     monkeypatch.setenv("GNSIS_VISUAL_SESSION_ID", "session-1")

@@ -7,7 +7,12 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from .api import VisualAPISettings, create_visual_api
+from .api import (
+    MAX_FRAME_BYTES,
+    MAX_FRAME_HEADER_BYTES,
+    VisualAPISettings,
+    create_visual_api,
+)
 from .runtime import VisualDecisionPolicy
 from .service import VisualService
 
@@ -57,4 +62,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_sessions=args.max_sessions,
         cache_factory=VisualCache,
     )
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ws_max_size=MAX_FRAME_BYTES + MAX_FRAME_HEADER_BYTES,
+    )

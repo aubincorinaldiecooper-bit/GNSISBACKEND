@@ -57,6 +57,14 @@ function redactSecret(value: string, secret: string): string {
 }
 
 function validateBaseUrl(baseUrl: string): URL {
+  const scheme =
+    /^([A-Za-z][A-Za-z\d+.-]*):/.exec(baseUrl)?.[1]?.toLowerCase() ?? "";
+  if (scheme !== "https" && scheme !== "http") {
+    throw new VisualServiceError(
+      "insecure_transport",
+      "visual API requires HTTPS except for loopback hosts",
+    );
+  }
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -146,6 +154,7 @@ export class VisualClient {
       undefined,
       true,
       true,
+      true,
     );
   }
 
@@ -220,6 +229,7 @@ export class VisualClient {
     body: JsonObject | undefined,
     authenticated: boolean,
     retry: boolean,
+    acceptUnknownSessionAfterRetry = false,
   ): Promise<JsonObject> {
     const headers = new Headers();
     try {
@@ -292,6 +302,14 @@ export class VisualClient {
           String(errorBody.code ?? "http_error"),
           this.#apiToken,
         );
+        if (
+          acceptUnknownSessionAfterRetry &&
+          attempt > 0 &&
+          response.status === 404 &&
+          errorBody.code === "unknown_session"
+        ) {
+          return { closed: true };
+        }
         throw new VisualServiceError(
           code,
           message,

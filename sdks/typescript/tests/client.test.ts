@@ -159,10 +159,13 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
   );
 });
 
-test("HTTP is limited to loopback hosts for clients and frame streams", async () => {
+test("HTTPS or loopback HTTP is required for clients and frame streams", async () => {
   for (const baseUrl of [
     "http://visual.example",
     "http://192.168.1.2:8790",
+    "ftp://visual.example",
+    "",
+    "visual.example",
   ]) {
     assert.throws(
       () => new VisualClient({ baseUrl, apiToken: "secret" }),
@@ -191,6 +194,63 @@ test("HTTP is limited to loopback hosts for clients and frame streams", async ()
   ]) {
     new VisualClient({ baseUrl, apiToken: "secret" });
   }
+});
+
+test("frame streams connect over loopback HTTP", async () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "WebSocket",
+  );
+  const urls: string[] = [];
+  class FakeWebSocket extends EventTarget {
+    static readonly OPEN = 1;
+    readyState = 0;
+
+    constructor(readonly url: string | URL) {
+      super();
+      urls.push(String(url));
+      queueMicrotask(() => {
+        this.readyState = FakeWebSocket.OPEN;
+        this.dispatchEvent(new Event("open"));
+      });
+    }
+
+    send(_data: string | ArrayBufferLike | Blob | ArrayBufferView): void {}
+
+    close(): void {
+      this.readyState = 3;
+    }
+  }
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket as unknown as typeof WebSocket,
+  });
+  try {
+    for (const baseUrl of [
+      "http://localhost:8790",
+      "http://127.0.0.1:8790",
+      "http://[::1]:8790",
+    ]) {
+      const stream = await FrameStream.connect(baseUrl, {
+        sessionId: "session-1",
+        streamPath: "/stream",
+        streamToken: "stream-secret",
+        plannerToken: "planner-secret",
+        protocol: "screen-frame-v1",
+      });
+      await stream.close();
+    }
+  } finally {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "WebSocket", originalDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "WebSocket");
+    }
+  }
+  assert.equal(urls.length, 3);
+  assert.ok(urls[0].startsWith("ws://localhost:8790/stream?"));
+  assert.ok(urls[1].startsWith("ws://127.0.0.1:8790/stream?"));
+  assert.ok(urls[2].startsWith("ws://[::1]:8790/stream?"));
 });
 
 test("decision retries preserve request id and attempts are never retried", async () => {
@@ -244,4 +304,62 @@ test("decision retries preserve request id and attempts are never retried", asyn
     },
   );
   assert.equal(attemptCalls, 1);
+});
+
+test("close retries accept unknown session only after an earlier attempt", async () => {
+  let calls = 0;
+  const fetchStub: typeof fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response(
+        JSON.stringify({
+          error: { code: "temporarily_unavailable", message: "retry" },
+        }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        error: { code: "unknown_session", message: "session is missing" },
+      }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    );
+  };
+  const client = new VisualClient({
+    baseUrl: "https://visual.example",
+    apiToken: "host-token",
+    maxRetries: 1,
+    fetch: fetchStub,
+  });
+
+  assert.deepEqual(await client.closeSession("session-1"), { closed: true });
+  assert.equal(calls, 2);
+});
+
+test("close does not suppress unknown session on its first attempt", async () => {
+  let calls = 0;
+  const fetchStub: typeof fetch = async () => {
+    calls += 1;
+    return new Response(
+      JSON.stringify({
+        error: { code: "unknown_session", message: "session is missing" },
+      }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    );
+  };
+  const client = new VisualClient({
+    baseUrl: "https://visual.example",
+    apiToken: "host-token",
+    maxRetries: 1,
+    fetch: fetchStub,
+  });
+
+  await assert.rejects(
+    client.closeSession("session-1"),
+    (error: unknown) =>
+      error instanceof VisualServiceError &&
+      error.code === "unknown_session" &&
+      error.status === 404,
+  );
+  assert.equal(calls, 1);
 });
