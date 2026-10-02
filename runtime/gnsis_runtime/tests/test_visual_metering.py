@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import pytest
 
@@ -64,6 +65,8 @@ def test_http_usage_sink_retries_identical_event_ids() -> None:
     assert json.loads(calls[0]) == json.loads(calls[1])
     assert json.loads(calls[0])["reports"][0]["event_id"] == "session:1"
     assert sink.health()["failures"] == 1
+    assert sink.health()["delivery_failed"] is False
+    assert sink.health()["last_error"] is None
 
 
 def test_http_usage_sink_rejects_non_loopback_plain_http() -> None:
@@ -110,6 +113,44 @@ def test_http_usage_sink_sends_reports_in_bounded_batches() -> None:
     assert len(calls) == 3
     counts = [len(json.loads(call)["reports"]) for call in calls]
     assert counts == [500, 500, 1]
+    assert sink.health()["pending"] == 0
+
+
+def test_http_usage_sink_serializes_concurrent_flushes() -> None:
+    service = FakeService()
+    calls: list[bytes] = []
+    first_post_started = threading.Event()
+    release_first_post = threading.Event()
+
+    def post(payload, _headers):
+        calls.append(payload)
+        if len(calls) == 1:
+            first_post_started.set()
+            assert release_first_post.wait(timeout=2)
+
+    sink = HttpUsageSink(
+        "http://127.0.0.1:8791/internal/usage/visual",
+        "secret",
+        post=post,
+    )
+    sink._service = service
+    service.reports = [_report(index) for index in range(1000)]
+    first = threading.Thread(target=sink._flush)
+    second = threading.Thread(target=sink._flush)
+
+    first.start()
+    assert first_post_started.wait(timeout=2)
+    second.start()
+    time.sleep(0.05)
+    release_first_post.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert [len(json.loads(call)["reports"]) for call in calls] == [500, 500]
+    delivered = [
+        report["event_id"] for call in calls for report in json.loads(call)["reports"]
+    ]
+    assert len(delivered) == len(set(delivered)) == 1000
     assert sink.health()["pending"] == 0
 
 

@@ -292,6 +292,36 @@ def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> No
     assert service.collect_usage() == []
 
 
+def test_usage_reports_split_decisions_at_utc_day_boundaries(monkeypatch) -> None:
+    service = VisualService(FixedPolicy())
+    session_id = service.create_session(_tenant()).session_id
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    before_midnight = 1_799_971_199.0
+    after_midnight = before_midnight + 2
+    monkeypatch.setattr(
+        "gnsis_runtime.visual.service.time.time",
+        lambda: before_midnight,
+    )
+    service.decide(session_id, "request-1")
+    monkeypatch.setattr(
+        "gnsis_runtime.visual.service.time.time",
+        lambda: after_midnight,
+    )
+    service.publish_frame(session_id, _frame("f2", 1100))
+    service.decide(session_id, "request-2")
+
+    reports = service.collect_usage()
+    decision_reports = [report for report in reports if report.decisions]
+
+    assert len(decision_reports) == 2
+    assert [report.decisions for report in decision_reports] == [1, 1]
+    assert (
+        len({report.generated_at_ms // 86_400_000 for report in decision_reports}) == 2
+    )
+
+
 def test_set_task_is_idempotent_and_preserves_replay() -> None:
     service = VisualService(FixedPolicy())
     session_id = service.create_session().session_id

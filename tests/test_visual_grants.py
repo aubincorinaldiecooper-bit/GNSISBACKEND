@@ -237,6 +237,21 @@ class VisualGrantTests(unittest.TestCase):
         self.assertEqual(ingested.status_code, 200, ingested.text)
         self.assertEqual(granted.status_code, 200, granted.text)
 
+    def test_legacy_usage_without_generated_timestamp_uses_ingestion_time(self):
+        view, _ = self._create_key(["visual:host"])
+        report = self._usage_report(key_id=view.id)
+        report.pop("generated_at_ms")
+
+        ingested = self._post_usage([report])
+
+        self.assertEqual(ingested.status_code, 200, ingested.text)
+        from gnsis.service import orm
+        from gnsis.service.db import session_scope
+
+        with session_scope() as session:
+            row = session.query(orm.VisualUsageRecord).one()
+        self.assertIsNotNone(row.reported_at)
+
     def test_usage_callback_authentication_idempotency_and_validation(self):
         view, _ = self._create_key(["visual:host"])
         report = self._usage_report(key_id=view.id)
