@@ -67,6 +67,7 @@ class PanopticPolicy(Protocol):
         frames: Sequence[VisualFrame],
         motion: float,
         viewport: tuple[int, int],
+        focus: str | None = None,
     ) -> VisualPerception: ...
 
 
@@ -214,13 +215,18 @@ class JEVEngine:
         frames: Sequence[VisualFrame],
         motion: float,
         viewport: tuple[int, int],
+        focus: str | None = None,
     ) -> VisualPerception:
         selected = tuple(frames[-4:])
         if not selected:
             raise ValueError("Panoptic perception requires a current frame")
         raw = self._generate_perception(
             tuple(frame.image() for frame in selected),
-            build_perception_prompt(viewport, temporal=len(selected) > 1),
+            build_perception_prompt(
+                viewport,
+                temporal=len(selected) > 1,
+                focus=focus,
+            ),
         )
         return parse_perception(
             raw,

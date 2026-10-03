@@ -147,7 +147,11 @@ def test_perceive_retries_with_the_same_request_id(monkeypatch) -> None:
         transport=httpx.MockTransport(respond),
     )
     try:
-        result = client.perceive("session-1", "perception-1")
+        result = client.perceive(
+            "session-1",
+            "perception-1",
+            "What is inside the marker?",
+        )
     finally:
         client.close()
 
@@ -156,9 +160,15 @@ def test_perceive_retries_with_the_same_request_id(monkeypatch) -> None:
         "/v1/visual/sessions/session-1/perceptions",
         "/v1/visual/sessions/session-1/perceptions",
     ]
-    assert [json.loads(request.content)["request_id"] for request in requests] == [
-        "perception-1",
-        "perception-1",
+    assert [json.loads(request.content) for request in requests] == [
+        {
+            "request_id": "perception-1",
+            "focus": "What is inside the marker?",
+        },
+        {
+            "request_id": "perception-1",
+            "focus": "What is inside the marker?",
+        },
     ]
 
 

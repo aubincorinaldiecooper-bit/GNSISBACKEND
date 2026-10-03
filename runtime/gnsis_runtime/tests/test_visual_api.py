@@ -44,7 +44,8 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
-    def perceive(self, frames, motion, viewport):
+    def perceive(self, frames, motion, viewport, focus=None):
+        self.perception_focus = focus
         return VisualPerception(
             summary="A browser page is visible.",
             visible_text=("Example",),
@@ -153,13 +154,17 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
         perception = client.post(
             f"/v1/visual/sessions/{session_id}/perceptions",
             headers=AUTH,
-            json={"request_id": "perception-1"},
+            json={
+                "request_id": "perception-1",
+                "focus": "What is inside the magenta marker?",
+            },
         )
         assert perception.status_code == 200
         assert perception.json()["perception"]["summary"] == (
             "A browser page is visible."
         )
         assert perception.json()["perception"]["frame_id"] == "f1"
+        assert policy.perception_focus == "What is inside the magenta marker?"
 
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",

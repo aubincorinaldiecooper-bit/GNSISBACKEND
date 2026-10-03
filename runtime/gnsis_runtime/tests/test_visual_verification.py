@@ -350,10 +350,10 @@ def test_minicpmv_generator_uses_uniform_unsliced_temporal_images(monkeypatch):
 
     assert result == '{"summary":"screen"}'
     assert len(seen["messages"][0]["content"]) == 5
-    assert seen["processor_kwargs"]["downsample_mode"] == "16x"
+    assert seen["processor_kwargs"]["downsample_mode"] == "4x"
     assert seen["processor_kwargs"]["max_slice_nums"] == 1
     assert seen["processor_kwargs"]["use_image_id"] is True
-    assert seen["model_kwargs"]["downsample_mode"] == "16x"
+    assert seen["model_kwargs"]["downsample_mode"] == "4x"
 
 
 def test_vlm_judge_sees_before_and_after_and_is_validated_like_any_judge():

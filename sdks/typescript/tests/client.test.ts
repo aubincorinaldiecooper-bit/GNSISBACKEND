@@ -135,6 +135,7 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
   const perception = await plannerClient.perceive(
     session.sessionId,
     "sdk-perception-1",
+    "What is inside the marker?",
   );
   assert.equal(
     (perception.perception as { frame_id: string }).frame_id,

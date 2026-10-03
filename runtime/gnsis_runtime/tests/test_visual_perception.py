@@ -20,6 +20,17 @@ def test_perception_prompt_is_task_independent_and_bounds_visible_output() -> No
     assert "goal" not in prompt.lower()
 
 
+def test_perception_prompt_can_focus_on_a_visible_question() -> None:
+    prompt = build_perception_prompt(
+        (1280, 720),
+        temporal=True,
+        focus="What is inside the magenta marker?",
+    )
+
+    assert "Focus question: What is inside the magenta marker?" in prompt
+    assert "lower the confidence instead of guessing" in prompt
+
+
 def test_perception_parser_returns_agent_readable_scene_with_provenance() -> None:
     result = parse_perception(
         "```json\n"
