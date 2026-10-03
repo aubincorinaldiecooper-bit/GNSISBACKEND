@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from PIL import Image
 import pytest
 
@@ -87,6 +89,19 @@ class DecisionOnlyProvider:
         )
 
 
+class BlockingPerceptionPolicy(FixedPolicy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def perceive(self, frames, motion, viewport):
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("test did not release perception")
+        return super().perceive(frames, motion, viewport)
+
+
 def _service(policy=None, **kwargs):
     selected = policy if policy is not None else FixedPolicy()
     kwargs.setdefault("decision_provider", selected)
@@ -171,6 +186,41 @@ def test_service_perception_requires_a_frame_but_not_a_task() -> None:
         service.perceive(session_id, "perception-1")
 
     assert missing.value.code == "frame_required"
+
+
+def test_service_accepts_frames_while_perception_is_running() -> None:
+    policy = BlockingPerceptionPolicy()
+    service = _service(policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+    result = {}
+
+    perception_thread = threading.Thread(
+        target=lambda: result.update(service.perceive(session_id, "perception-1"))
+    )
+    perception_thread.start()
+    assert policy.started.wait(timeout=1)
+
+    published = threading.Event()
+
+    def publish_next_frame() -> None:
+        service.publish_frame(session_id, _frame("f2", 1250))
+        published.set()
+
+    publish_thread = threading.Thread(target=publish_next_frame)
+    publish_thread.start()
+    try:
+        assert published.wait(timeout=1)
+    finally:
+        policy.release.set()
+        publish_thread.join(timeout=1)
+        perception_thread.join(timeout=1)
+
+    assert not publish_thread.is_alive()
+    assert not perception_thread.is_alive()
+    assert result["perception"]["frame_id"] == "f1"
+    assert result["frame_seq"] == 1
+    assert result["current"] is False
 
 
 def test_service_accepts_a_separate_decision_only_provider() -> None:
