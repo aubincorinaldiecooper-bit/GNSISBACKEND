@@ -65,8 +65,8 @@ def build_perception_prompt(
 ) -> str:
     width, height = viewport
     temporal_context = (
-        "Image 1 is an earlier view and Image 2 is the current view. Describe "
-        "meaningful visible changes in the changes array."
+        "The images are ordered from earliest to latest. The final image is "
+        "the current view. Describe meaningful visible changes in the changes array."
         if temporal
         else "The image is the current view. Return an empty changes array."
     )
