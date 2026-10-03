@@ -237,6 +237,67 @@ def test_perception_generation_does_not_block_the_api_event_loop() -> None:
         assert response["value"].status_code == 200
 
 
+def test_decision_waiting_for_perception_does_not_block_api_event_loop() -> None:
+    policy = BlockingPerceptionPolicy()
+    service = _service(policy)
+    app = create_visual_api(
+        service,
+        VisualAPISettings(host_token="test-token"),
+    )
+    with TestClient(app) as client:
+        opened = _open(client)
+        session_id = opened["session_id"]
+        service.set_task(session_id, "click the control")
+        service.publish_frame(
+            session_id,
+            ScreenFrame(
+                frame_id="f1",
+                image=Image.new("RGB", (64, 32), "white"),
+                captured_at_ms=1000,
+                metadata={"width": 64, "height": 32},
+            ),
+        )
+        responses = {}
+
+        perception_thread = threading.Thread(
+            target=lambda: responses.update(
+                perception=client.post(
+                    f"/v1/visual/sessions/{session_id}/perceptions",
+                    headers=AUTH,
+                    json={"request_id": "perception-1"},
+                )
+            )
+        )
+        perception_thread.start()
+        assert policy.started.wait(timeout=1)
+
+        decision_thread = threading.Thread(
+            target=lambda: responses.update(
+                decision=client.post(
+                    f"/v1/visual/sessions/{session_id}/decisions",
+                    headers=AUTH,
+                    json={"request_id": "decision-1"},
+                )
+            )
+        )
+        decision_thread.start()
+        try:
+            state = client.get(
+                f"/v1/visual/sessions/{session_id}",
+                headers=AUTH,
+            )
+            assert state.status_code == 200
+        finally:
+            policy.release.set()
+            perception_thread.join(timeout=1)
+            decision_thread.join(timeout=1)
+
+        assert not perception_thread.is_alive()
+        assert not decision_thread.is_alive()
+        assert responses["perception"].status_code == 200
+        assert responses["decision"].status_code == 200
+
+
 def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:
     with TestClient(_app()) as client:
         opened = _open(client)

@@ -207,6 +207,19 @@ class GatedDecision:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class DecisionSnapshot:
+    view: RuntimeFrameView
+    goal: str
+    history: tuple[dict, ...]
+    motion: float
+    viewport: tuple[int, int]
+    allowed_actions: tuple[str, ...]
+    legal: LegalActionSet
+    last_attempt: Decision | None
+    change_since_last_action: float | None
+
+
 def _repeats(proposed: Decision, previous: Decision, radius_px: float) -> bool:
     if proposed.action != previous.action:
         return False
@@ -360,7 +373,7 @@ class PersistentPanopticSession:
             return None
         return screen_change(self._last_attempt[1], frame)
 
-    def decide_gated(self) -> GatedDecision:
+    def decision_snapshot(self) -> DecisionSnapshot:
         """One System-1 decision over the current consumed frame, gated.
 
         The legal set is generated from the goal and that frame before the
@@ -383,27 +396,46 @@ class PersistentPanopticSession:
         )
         recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
         motion = recent_motion(recent)
+        return DecisionSnapshot(
+            view=view,
+            goal=self.goal,
+            history=tuple(dict(item) for item in self.history),
+            motion=motion,
+            viewport=viewport,
+            allowed_actions=self.allowed_actions,
+            legal=legal,
+            last_attempt=self._last_attempt[0]
+            if self._last_attempt is not None
+            else None,
+            change_since_last_action=self.change_since_last_action(source),
+        )
+
+    def decide_gated(
+        self,
+        snapshot: DecisionSnapshot | None = None,
+    ) -> GatedDecision:
+        selected = snapshot or self.decision_snapshot()
+        if self.decision_provider is None:
+            raise RuntimeError("visual decisions are not configured")
         try:
             proposed: Any = self.decision_provider.decide(
-                view,
-                self.goal,
-                list(self.history),
-                motion,
-                viewport,
+                selected.view,
+                selected.goal,
+                list(selected.history),
+                selected.motion,
+                selected.viewport,
                 self.cache,
-                self.allowed_actions,
+                selected.allowed_actions,
             )
         except DecisionError as exc:
             proposed = exc
         return gate_decision(
             proposed,
-            legal,
-            motion=motion,
+            selected.legal,
+            motion=selected.motion,
             gate=self.gate,
-            last_attempt=self._last_attempt[0]
-            if self._last_attempt is not None
-            else None,
-            change_since_last_action=self.change_since_last_action(source),
+            last_attempt=selected.last_attempt,
+            change_since_last_action=selected.change_since_last_action,
         )
 
     def decide(self) -> Decision:
