@@ -22,6 +22,7 @@ from .contracts import (
 )
 from .coordination import TurnEnvelope
 from .delivery_gate import DeliveryGate
+from .foreground_session import ForegroundSession
 from .lean_realtime import TaskToolHandler, worker_delivery_response
 from .timeline import SessionTimeline
 
@@ -104,7 +105,7 @@ class TaskToolsRealtimeCoordinator:
         gateway: Any,
         owner_id: str,
         session_id: str,
-        session: Any,
+        session: ForegroundSession | None,
         *,
         provider_name: str | None = None,
         media_dir: str | Path | None = None,
@@ -753,7 +754,7 @@ class TaskToolsRealtimeCoordinator:
             fields={"tool": name, "correlated": call_id is not None},
         )
         try:
-            event = await self._call_session("feed_tool_response", response)
+            event = await asyncio.to_thread(self.session.feed_tool_response, response)
         except BaseException:
             # The model did not take it (too long, malformed): the call is
             # still waiting, and the client may answer it again.
@@ -838,8 +839,8 @@ class TaskToolsRealtimeCoordinator:
         )
         event = None
         try:
-            event = await self._call_session(
-                "feed_tool_response",
+            event = await asyncio.to_thread(
+                self.session.feed_tool_response,
                 {
                     "status": "timeout",
                     "tool": record.name,
@@ -864,7 +865,7 @@ class TaskToolsRealtimeCoordinator:
 
     async def inject_memory_episode(self, episode: Any) -> bool:
         self._ensure_open()
-        return bool(await self._call_session("feed_memory_episode", episode))
+        return bool(await asyncio.to_thread(self.session.feed_memory_episode, episode))
 
     def task_status(self) -> dict[str, Any]:
         entries = self.gateway.task_slate(self.owner_id)
@@ -1131,7 +1132,7 @@ class TaskToolsRealtimeCoordinator:
                 "status": "batch",
                 "results": responses,
             }
-            event = await self._call_session("feed_tool_response", response)
+            event = await asyncio.to_thread(self.session.feed_tool_response, response)
             if event is not None:
                 # Observed once, when the output loop emits it.
                 await self._outputs.put(TaskToolsOnlineOutput("model", event))
@@ -1171,8 +1172,8 @@ class TaskToolsRealtimeCoordinator:
                 return
             self._recovering_tool_error = True
         try:
-            event = await self._call_session(
-                "feed_tool_response",
+            event = await asyncio.to_thread(
+                self.session.feed_tool_response,
                 {
                     "status": "invalid_action",
                     "task_ids": [],
@@ -1226,7 +1227,7 @@ class TaskToolsRealtimeCoordinator:
                         # Worker interrupts stop current output without setting the
                         # persistent client break flag.
                         self.gate.interrupt(reason="delivery_interrupt")
-                        await self._call_session("interrupt_output")
+                        await asyncio.to_thread(self.session.interrupt_output)
                     self.gate.note_delivering(delivery.delivery_id)
                     response = worker_delivery_response(self.gateway, delivery)
                     key = (
@@ -1236,8 +1237,8 @@ class TaskToolsRealtimeCoordinator:
                     )
                     with self._state_lock:
                         self._delivery_outputs_pending.add(key)
-                    event = await self._call_session(
-                        "feed_runtime_event",
+                    event = await asyncio.to_thread(
+                        self.session.feed_runtime_event,
                         response,
                         delivery_id=delivery.delivery_id,
                         claim_token=delivery.claim_token,
@@ -1330,13 +1331,13 @@ class TaskToolsRealtimeCoordinator:
         with self._state_lock:
             if not force and slate == self._last_slate:
                 return False
-        changed = bool(await self._call_session("set_task_slate", slate))
+        changed = bool(await asyncio.to_thread(self.session.set_task_slate, slate))
         with self._state_lock:
             self._last_slate = slate
         return changed
 
     async def _safe_pause(self) -> bool:
-        state = await self._call_session("talker_state")
+        state = await asyncio.to_thread(self.session.talker_state)
         return not isinstance(state, Mapping) or (
             bool(state.get("drained", True))
             and bool(state.get("turn_ended", True))
@@ -1389,10 +1390,6 @@ class TaskToolsRealtimeCoordinator:
         error = task.exception()
         if error is not None:
             LOGGER.error("task-tools realtime job failed: %s", error)
-
-    async def _call_session(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        function = getattr(self.session, method)
-        return await asyncio.to_thread(function, *args, **kwargs)
 
     def _ensure_open(self) -> None:
         if self._closed:

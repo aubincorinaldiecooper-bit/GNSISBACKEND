@@ -30,17 +30,27 @@ model that sees and hears, the second picks the background action layer.
 - `gnsis-serve --check-config` reports the selected provider and validates a
   Venus URL at preflight.
 - `gnsis-serve` serves whichever provider the config names on the desktop
-  Host's own sockets. `thinker` keeps the existing `online_duplex` app
-  (Thinker/Talker split, task-tools coordinator, harness bridge, session
-  memory). Any other provider gets `native_duplex`: the same `/ws/duplex` and
-  `/ws/screen` wire protocol (`ready`, `audio.frame` + PCM16, `audio.chunk` /
-  `audio.done`, `playback.cancel`, `playback.ack`, `break` / `reset`,
-  `tool.call` / `tool.response`, `turn.final`, `host.event`, screen frames)
-  driven only through `RealtimeSession`, with one session timeline per
-  session. The Host does not learn which model it is talking to.
-- Not yet attached on the native path: the task-tools Gateway, the harness
-  bridge and durable session memory. The native app is the foreground model,
-  the timeline and the Host — the surface the matched comparison measures.
+  Host's own sockets through one app, `online_duplex`. `realtime.provider`
+  only decides what sits behind the `ForegroundSession` seam
+  (`runtime/gnsis_runtime/gnsis_runtime/foreground_session.py`): the
+  in-process Thinker/Talker bundle, or a native provider's remote session
+  (no Thinker is loaded). Everything above the seam is the same object for
+  both: `/ws/duplex` and `/ws/screen`, startup buffering, reconnect grace
+  and resume tokens, session expiry, capability negotiation, the bounded
+  screen history, `TaskToolsRealtimeCoordinator` with the task-tools
+  Gateway, harness bridge and durable session memory, the session timeline,
+  the delivery gate and playback acknowledgements, interruption/cancel and
+  teardown. The Host does not learn which model it is talking to.
+- Native providers additionally receive playback acknowledgements and
+  cancellations from the shared path, so they can keep their own output
+  epochs honest; tool responses, runtime events, memory episodes and the task
+  slate reach them through their control channel.
+- `tests/test_live_provider_parity.py` drives the same client against the
+  app with `thinker` and `venus` behind the seam and asserts the same
+  lifecycle contract, then checks the native path end to end with a scripted
+  provider: audio with capture timing, screen frames, speech output and
+  interruption, correlated and replay-safe tool calls, and coordinator /
+  timeline visibility of model text.
 - Each provider is opened with its own prompt
   (`docs/realtime-system-prompt.md`): the Thinker with the prompt it was
   fine-tuned on, a native model with the same guidance minus the unit

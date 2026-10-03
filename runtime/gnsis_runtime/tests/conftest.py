@@ -61,6 +61,9 @@ class StubThinker:
     def interrupt_output(self) -> None:
         self.interrupted += 1
 
+    def acknowledge_playback(self, output_id: str, *, phase: str, chunks_played: int) -> None:
+        return None
+
     def poll_output(self, _timeout: float) -> None:
         return None
 
@@ -71,6 +74,70 @@ class StubThinker:
         self.frames.append(frame)
 
     def set_media_mode(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+class ScriptedSession:
+    """A native provider's session: records every seam call, replays events."""
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+        self.calls: list[tuple[str, Any]] = []
+        self.events: asyncio.Queue[Any] = asyncio.Queue()
+        self.closed = False
+
+    @property
+    def session_id(self) -> str:
+        return self.config.session_id
+
+    async def push_audio(self, pcm16: bytes, *, capture_ts_ms: int | None = None) -> None:
+        self.calls.append(("audio", (pcm16, capture_ts_ms)))
+
+    async def push_video_frame(
+        self, data: bytes, *, mime_type: str = "image/jpeg", ts_ms: int | None = None
+    ) -> None:
+        self.calls.append(("video", (data, mime_type, ts_ms)))
+
+    async def push_control(self, control: dict[str, Any]) -> None:
+        self.calls.append(("control", control))
+
+    async def next_event(self, timeout_s: float | None = None) -> Any:
+        try:
+            return await asyncio.wait_for(self.events.get(), timeout_s)
+        except asyncio.TimeoutError:
+            raise TimeoutError from None
+
+    async def acknowledge_playback(self, output_id: str, *, chunks_played: int) -> bool:
+        self.calls.append(("ack", (output_id, chunks_played)))
+        return True
+
+    async def cancel_output(self, reason: str = "cancelled") -> None:
+        self.calls.append(("cancel", reason))
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def calls_of(self, kind: str) -> list[Any]:
+        return [value for name, value in self.calls if name == kind]
+
+
+class ScriptedProvider:
+    """Stands in for a remote native full-duplex model such as Venus."""
+
+    provider_name = "venus"
+
+    def __init__(self) -> None:
+        self.sessions: list[ScriptedSession] = []
+
+    async def open_session(self, config: Any) -> ScriptedSession:
+        session = ScriptedSession(config)
+        self.sessions.append(session)
+        return session
+
+    async def health(self) -> dict[str, Any]:
+        return {"status": "ok"}
+
+    async def close(self) -> None:
         return None
 
 
@@ -187,11 +254,19 @@ class Harness:
     open_gate: threading.Event | None = None
     # Where the server would write frames, so a test can look and find nothing.
     media_dir: Any = None
+    # The native provider behind the seam when foreground="venus".
+    native: ScriptedProvider | None = None
+    foreground: str = "thinker"
 
 
 @pytest.fixture
 def harness(monkeypatch, tmp_path):
-    """Build the duplex app with the Thinker and gateway stubbed out."""
+    """Build the duplex app with the Thinker and gateway stubbed out.
+
+    ``foreground="venus"`` builds the same app around a scripted native
+    provider instead of a Thinker: nothing else in the harness changes, which
+    is the point.
+    """
 
     def _build(
         *,
@@ -201,6 +276,8 @@ def harness(monkeypatch, tmp_path):
         # None models a lean server: no coordinator, no worker provider, and
         # so nothing downstream that would ever read a persisted frame.
         provider_name: str | None = "stub",
+        foreground: str = "thinker",
+        real_coordinator: bool = False,
         **settings_kwargs: Any,
     ) -> Harness:
         from gnsis_runtime import online_duplex
@@ -209,6 +286,7 @@ def harness(monkeypatch, tmp_path):
         gateway = StubGateway(provider)
         thinkers: list[StubThinker] = []
         coordinators: list[StubCoordinator] = []
+        native = ScriptedProvider() if foreground == "venus" else None
 
         def fake_build_session(_runtime, **_kwargs):
             if open_gate is not None:
@@ -223,23 +301,47 @@ def harness(monkeypatch, tmp_path):
             coordinators.append(coordinator)
             return coordinator
 
+        live_coordinator = online_duplex.TaskToolsRealtimeCoordinator
+
+        def recording_coordinator(*args: Any, **kwargs: Any) -> Any:
+            coordinator = live_coordinator(*args, **kwargs)
+            coordinators.append(coordinator)
+            return coordinator
+
+        def gateway_factory(_session_id: str) -> Any:
+            if not real_coordinator:
+                return gateway
+            from gnsis_runtime.gateway import GNSISGateway, ProviderRegistry
+            from gnsis_runtime.supervision import TaskLedger
+
+            return GNSISGateway(
+                coordinator=None,
+                providers=ProviderRegistry(()),
+                ledger=TaskLedger(":memory:"),
+                mode="lean",
+            )
+
         monkeypatch.setattr(online_duplex, "_build_session", fake_build_session)
         monkeypatch.setattr(
-            online_duplex, "TaskToolsRealtimeCoordinator", fake_coordinator
+            online_duplex,
+            "TaskToolsRealtimeCoordinator",
+            recording_coordinator if real_coordinator else fake_coordinator,
         )
         monkeypatch.setattr(
             online_duplex, "_prepare_static_prefix", lambda _runtime: None
         )
 
         app = online_duplex.create_online_duplex_app(
-            StubBundle(),
+            None if native is not None else StubBundle(),
             params=StubParams(),
-            gateway_factory=lambda _session_id: gateway,
+            gateway_factory=gateway_factory,
             provider_name=provider_name,
             settings=online_duplex.OnlineDuplexSettings(
                 **{"reconnect_grace_sec": 0.3, **settings_kwargs}
             ),
             media_dir=tmp_path / "media",
+            foreground_provider=native,
+            foreground_system_prompt="native prompt" if native is not None else None,
         )
         return Harness(
             app=app,
@@ -249,6 +351,8 @@ def harness(monkeypatch, tmp_path):
             thinkers=thinkers,
             coordinators=coordinators,
             open_gate=open_gate,
+            native=native,
+            foreground=foreground,
         )
 
     return _build
