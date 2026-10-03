@@ -102,6 +102,48 @@ class BlockingPerceptionPolicy(FixedPolicy):
         return super().perceive(frames, motion, viewport)
 
 
+class BlockingDecisionPolicy(FixedPolicy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def decide(
+        self,
+        frame,
+        goal,
+        history,
+        motion,
+        viewport,
+        cache,
+        allowed_actions=None,
+    ):
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("test did not release decision")
+        return super().decide(
+            frame,
+            goal,
+            history,
+            motion,
+            viewport,
+            cache,
+            allowed_actions,
+        )
+
+
+class FailingPerceptionPolicy(FixedPolicy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail = True
+
+    def perceive(self, frames, motion, viewport):
+        if self.fail:
+            self.fail = False
+            raise RuntimeError("perception failed")
+        return super().perceive(frames, motion, viewport)
+
+
 def _service(policy=None, **kwargs):
     selected = policy if policy is not None else FixedPolicy()
     kwargs.setdefault("decision_provider", selected)
@@ -221,6 +263,125 @@ def test_service_accepts_frames_while_perception_is_running() -> None:
     assert result["perception"]["frame_id"] == "f1"
     assert result["frame_seq"] == 1
     assert result["current"] is False
+
+
+def test_service_accepts_frames_while_decision_is_running() -> None:
+    policy = BlockingDecisionPolicy()
+    service = _service(policy)
+    session_id = service.create_session().session_id
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+    errors = []
+
+    def request_decision() -> None:
+        try:
+            service.decide(session_id, "decision-1")
+        except VisualServiceError as exc:
+            errors.append(exc)
+
+    decision_thread = threading.Thread(target=request_decision)
+    decision_thread.start()
+    assert policy.started.wait(timeout=1)
+
+    published = service.publish_frame(session_id, _frame("f2", 1250))
+    policy.release.set()
+    decision_thread.join(timeout=1)
+
+    assert published["frame_id"] == "f2"
+    assert not decision_thread.is_alive()
+    assert len(errors) == 1
+    assert errors[0].code == "stale_decision"
+
+
+def test_close_waits_for_perception_and_reports_its_usage() -> None:
+    policy = BlockingPerceptionPolicy()
+    service = _service(policy)
+    session_id = service.create_session(_tenant()).session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+    perception = {}
+
+    perception_thread = threading.Thread(
+        target=lambda: perception.update(
+            service.perceive(session_id, "perception-1")
+        )
+    )
+    perception_thread.start()
+    assert policy.started.wait(timeout=1)
+
+    closed = threading.Event()
+
+    def close_session() -> None:
+        service.close_session(session_id)
+        closed.set()
+
+    close_thread = threading.Thread(target=close_session)
+    close_thread.start()
+    assert not closed.wait(timeout=0.05)
+    policy.release.set()
+    perception_thread.join(timeout=1)
+    close_thread.join(timeout=1)
+
+    assert perception["perception"]["frame_id"] == "f1"
+    assert closed.is_set()
+    reports = service.collect_usage()
+    assert len(reports) == 1
+    assert reports[0].closed is True
+    assert reports[0].perceptions == 1
+
+
+def test_concurrent_perception_and_decision_share_inference_quota() -> None:
+    policy = BlockingPerceptionPolicy()
+    service = _service(policy)
+    session_id = service.create_session(
+        _tenant(max_decisions_per_session=1)
+    ).session_id
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+    perception = {}
+    decision_errors = []
+
+    perception_thread = threading.Thread(
+        target=lambda: perception.update(
+            service.perceive(session_id, "perception-1")
+        )
+    )
+    perception_thread.start()
+    assert policy.started.wait(timeout=1)
+
+    def request_decision() -> None:
+        try:
+            service.decide(session_id, "decision-1")
+        except VisualServiceError as exc:
+            decision_errors.append(exc)
+
+    decision_thread = threading.Thread(target=request_decision)
+    decision_thread.start()
+    policy.release.set()
+    perception_thread.join(timeout=1)
+    decision_thread.join(timeout=1)
+
+    assert perception["perception"]["frame_id"] == "f1"
+    assert len(decision_errors) == 1
+    assert decision_errors[0].code == "quota_exceeded"
+    usage = service.state(session_id)["usage"]
+    assert usage["perceptions"] == 1
+    assert usage["decisions"] == 0
+
+
+def test_failed_inference_releases_its_quota_reservation() -> None:
+    policy = FailingPerceptionPolicy()
+    service = _service(policy)
+    session_id = service.create_session(
+        _tenant(max_decisions_per_session=1)
+    ).session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    with pytest.raises(RuntimeError, match="perception failed"):
+        service.perceive(session_id, "perception-1")
+
+    response = service.perceive(session_id, "perception-2")
+    assert response["perception"]["frame_id"] == "f1"
+    assert service.state(session_id)["usage"]["perceptions"] == 1
 
 
 def test_service_accepts_a_separate_decision_only_provider() -> None:

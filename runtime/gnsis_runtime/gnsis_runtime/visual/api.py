@@ -220,7 +220,7 @@ def create_visual_api(
         "/v1/visual/sessions/{session_id}",
         dependencies=[Depends(require_session_close)],
     )
-    async def close_session(session_id: str) -> dict[str, bool]:
+    def close_session(session_id: str) -> dict[str, bool]:
         service.close_session(session_id)
         return {"closed": True}
 
@@ -251,7 +251,7 @@ def create_visual_api(
         "/v1/visual/sessions/{session_id}/decisions",
         dependencies=[Depends(require_session_bearer)],
     )
-    async def decide(
+    def decide(
         session_id: str,
         payload: DecisionRequest,
     ) -> dict[str, Any]:
