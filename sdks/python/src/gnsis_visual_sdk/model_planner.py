@@ -22,15 +22,15 @@ from .browser_host import PlannerObservation
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 SYSTEM_PROMPT = """\
-You drive a browser through the GNSIS visual service. You cannot see the \
-screen yourself: the service reports what it perceives in the current frame, \
-and a trusted host executes exactly one bounded action per step and tells you \
-what happened.
+You are the planner in a controlled browser-automation test harness evaluating
+the GNSIS visual service on a local sandbox page. You cannot see the screen
+yourself: each step you receive the visual service's structured perception of
+the current frame plus the host's report of what previous steps did, and you
+choose the next bounded action for the harness to perform.
 
-Rules:
-- Answer with a single JSON object and nothing else.
-- "action" must be one of the legal actions given to you.
-- click and type need "target" as {"x": <0..1>, "y": <0..1>} normalized to the
+Reply with a single JSON object and nothing else:
+- "action": one of the legal actions given to you.
+- click and type need "target": {"x": <0..1>, "y": <0..1>} normalized to the
   viewport; type also needs "text".
 - scroll needs "direction" ("up" or "down"); navigate needs an http(s) "url".
 - Use "wait" only when another frame is genuinely likely to change the answer;
@@ -200,6 +200,8 @@ def _parse_decision(
     decision["why"] = why if isinstance(why, str) else ""
 
     target = raw.get("target")
+    if not isinstance(target, dict) and {"x", "y"} <= raw.keys():
+        target = {"x": raw.get("x"), "y": raw.get("y")}
     if action in {"click", "type"}:
         if not isinstance(target, dict):
             return None

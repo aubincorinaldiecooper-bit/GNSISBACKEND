@@ -116,3 +116,14 @@ def test_observation_hides_everything_outside_the_contract() -> None:
     assert rendered["previous_steps"][0]["host_success"] is True
     assert "evidence" not in rendered["previous_steps"][0]
     assert "target_box" not in json.dumps(rendered)
+
+
+def test_planner_accepts_top_level_xy_targets() -> None:
+    planner = planner_with(
+        completion(json.dumps({"action": "click", "x": 0.2, "y": 0.1, "why": "top-left"}))
+    )
+
+    decision = asyncio.run(planner.plan(observation()))
+
+    assert decision["action"] == "click"
+    assert decision["target"] == {"x": 0.2, "y": 0.1}
