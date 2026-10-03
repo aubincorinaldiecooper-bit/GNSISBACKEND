@@ -209,6 +209,13 @@ class GNSISDuplexSession:
     def closed(self) -> bool:
         return bool(self.live.closed)
 
+    def acknowledge_playback(
+        self, output_id: str, *, phase: str, chunks_played: int
+    ) -> None:
+        # The Talker paces itself by generation id; device playback is
+        # accounted by the coordinator's delivery gate, not by the model.
+        return None
+
     def set_break(self) -> None:
         with self._model_lock:
             self.live.set_break()

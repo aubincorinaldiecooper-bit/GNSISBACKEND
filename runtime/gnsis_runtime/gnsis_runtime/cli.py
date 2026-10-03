@@ -10,7 +10,7 @@ import shutil
 import traceback
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 
@@ -23,6 +23,12 @@ from .asr_process import AsrConfig, AsrService, asr_base_url, validate_asr_confi
 from .host_tools import load_host_tool_catalog
 from .media_mode import VIDEO_SOURCES
 from .providers.foreground import RealtimeConfig, validate_realtime_config
+
+if TYPE_CHECKING:
+    from mcpmft.infer.online import DuplexParams
+
+    from .foreground_session import NativeForegroundParams
+    from .online_duplex import OnlineDuplexSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -538,7 +544,7 @@ def _duplex_params(config: DuplexConfig) -> DuplexParams:
     )
 
 
-def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
+def _duplex_settings(config: ReleaseConfig) -> OnlineDuplexSettings:
     """Map a loaded config onto the duplex runtime's settings.
 
     Split out of `build_app` so it can be tested without loading a model. A
@@ -694,30 +700,31 @@ def build_foreground_provider(config: ReleaseConfig):
     )
 
 
-def build_native_app(config: ReleaseConfig):
-    """Serve a native full-duplex provider on the Host's live sockets.
+def _native_foreground_params(config: DuplexConfig) -> NativeForegroundParams:
+    """The live runtime's model-clock knobs when no Thinker is in process."""
 
-    No Thinker is loaded: the model lives behind ``realtime.venus_url``.
-    """
+    from .foreground_session import NativeForegroundParams
 
-    from .native_duplex import create_native_duplex_app
-    from .providers.foreground import build_realtime_provider, foreground_system_prompt
-
-    runtime_dir = Path(config.server.runtime_dir).expanduser().resolve()
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    return create_native_duplex_app(
-        build_realtime_provider(config.realtime),
-        settings=_duplex_settings(config),
-        media_dir=runtime_dir / "media",
-        system_prompt=foreground_system_prompt(
-            config.realtime, thinker_prompt=config.duplex.system_prompt
-        ),
+    return NativeForegroundParams(
+        chunk_ms=1000,
+        generate_audio=config.generate_audio,
+        sliding_window_mode=config.sliding_window_mode,
+        context_max_units=config.context_max_units,
+        context_previous_max_tokens=config.context_previous_max_tokens,
+        speak_text_tokens_per_unit=config.speak_text_tokens_per_unit,
+        decode_mode=config.decode_mode,
     )
 
 
 def build_app(config: ReleaseConfig):
-    if config.realtime.provider != "thinker":
-        return build_native_app(config)
+    """The live GNSIS runtime for whichever foreground provider is configured.
+
+    ``realtime.provider`` only decides who answers the model calls: the
+    Thinker loaded here, or a native provider's remote sessions. Sockets,
+    Gateway, coordinator, harness bridge, memory, timeline and delivery are
+    the same objects either way.
+    """
+
     from .codex_coordinator import CodexCoordinator, CodexCoordinatorConfig
     from .contracts import storage_key
     from .gateway import GNSISGateway, ProviderRegistry
@@ -751,8 +758,23 @@ def build_app(config: ReleaseConfig):
         if needs_worker
         else None
     )
-    bundle, detached_talker = _load_thinker(config)
-    params = _duplex_params(duplex)
+    foreground_provider = None
+    foreground_prompt = None
+    if config.realtime.provider == "thinker":
+        bundle, detached_talker = _load_thinker(config)
+        params: Any = _duplex_params(duplex)
+    else:
+        from .providers.foreground import (
+            build_realtime_provider,
+            foreground_system_prompt,
+        )
+
+        bundle, detached_talker = None, None
+        params = _native_foreground_params(duplex)
+        foreground_provider = build_realtime_provider(config.realtime)
+        foreground_prompt = foreground_system_prompt(
+            config.realtime, thinker_prompt=duplex.system_prompt
+        )
     settings = _duplex_settings(config)
     memory_provider = (
         HttpMemoryProvider(
@@ -849,6 +871,8 @@ def build_app(config: ReleaseConfig):
         session_memory=session_memory,
         harness_client=harness_client,
         harness_poll_sec=config.harness.poll_sec,
+        foreground_provider=foreground_provider,
+        foreground_system_prompt=foreground_prompt,
     )
 
 

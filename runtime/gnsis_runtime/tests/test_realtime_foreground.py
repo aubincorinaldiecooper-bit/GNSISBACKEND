@@ -187,9 +187,13 @@ def test_the_worker_provider_and_the_foreground_provider_are_separate(tmp_path):
     assert config.realtime.provider == "venus"
 
 
-def test_serve_builds_the_native_app_for_venus_without_loading_the_thinker(
+def test_serve_builds_the_one_live_app_for_venus_without_loading_the_thinker(
     tmp_path, monkeypatch
 ):
+    """Venus is served by the same live app as the Thinker, not a reduced one."""
+
+    from starlette.testclient import TestClient
+
     from gnsis_runtime import cli
 
     def no_thinker(config):
@@ -203,8 +207,13 @@ def test_serve_builds_the_native_app_for_venus_without_loading_the_thinker(
     )
     app = cli.build_app(config)
     paths = {route.path for route in app.routes}
-    assert {"/ws/duplex", "/ws/screen", "/health"} <= paths
-    assert app.title == "GNSIS Native Duplex"
+    assert {"/ws/duplex", "/ws/screen", "/health", "/live"} <= paths
+    assert app.title == "GNSIS Online Duplex"
+    with TestClient(app) as client:
+        health = client.get("/health").json()
+    assert health["foreground_provider"] == "venus"
+    assert health["detached_talker"] is False
+    assert health["generate_audio"] is True
 
 
 def test_the_shipped_configs_select_their_providers():

@@ -22,6 +22,18 @@ from mcpmft.infer import startup_timing
 
 from .contracts import MediaRef, storage_key
 from .duplex_bridge import GNSISDuplexSession
+from .foreground_session import (
+    SPEECH_AUDIO_EVENT_NAMES,
+    SPEECH_CANCEL_EVENT_NAMES,
+    ForegroundModelEvent,
+    ForegroundSession,
+    NativeForegroundSession,
+    SpeechCancel,
+    SpeechChunk,
+    SpeechDone,
+    SpeechError,
+)
+from .realtime_provider import ProviderSessionConfig, RealtimeProvider
 from .host_tools import (
     HOST_TOOLS_PARAM,
     HOST_TOOLS_VERSION_PARAM,
@@ -255,7 +267,7 @@ class OnlineDuplexSettings:
 
 @dataclass
 class _ActiveSession:
-    duplex: GNSISDuplexSession
+    duplex: ForegroundSession
     screen_token: str
     codex_frame_gate: ScreenFrameRateGate
     # Per-session media state, initialized from settings.
@@ -316,13 +328,20 @@ def _session_timing_mark(
 
 @dataclass
 class _Runtime:
-    bundle: Any
+    # The Thinker's loaded model bundle, or None when a native foreground
+    # provider serves the sessions: then nothing is loaded in process.
+    bundle: Any | None
     params: Any
     settings: OnlineDuplexSettings
     media_dir: Path
     gateway_factory: Callable[[str], Any]
     provider_name: str | None
     detached_talker: Any | None = None
+    # A `RealtimeSession` provider (Venus, ...) standing in for the Thinker.
+    # Sessions are opened through it and adapted to ForegroundSession; every
+    # other part of the live stack is shared with the Thinker path.
+    foreground_provider: RealtimeProvider | None = None
+    foreground_system_prompt: str | None = None
     # Server-owned durable recall client (Omni-SimpleMem). None keeps the live
     # session memoryless; when set, each accepted turn.final is queried and
     # compact hits are injected through the memory.episode channel.
@@ -467,16 +486,7 @@ def _build_session(
             runtime.prefix_snapshots[tuple(host_tools)].token_count,
         )
     if screen_frames is None:
-        # Retain one frame per model unit across the full context window, and
-        # keep a bounded capture-time history of consumed frames over the
-        # configured codex recent-visual horizon.
-        screen_frames = LatestScreenFrameBuffer(
-            max_pending_frames=runtime.params.context_max_units,
-            max_history_frames=_max_recent_screen_frames(runtime),
-            history_window_ms=(
-                runtime.settings.codex_screen_history_seconds * 1000
-            ),
-        )
+        screen_frames = _new_screen_frame_buffer(runtime)
     return GNSISDuplexSession(
         live,
         decode_mode=runtime.settings.decode_mode,
@@ -650,13 +660,86 @@ def _prepare_static_prefix(runtime: _Runtime) -> None:
     )
 
 
-async def _open_session(
+def _new_screen_frame_buffer(runtime: _Runtime) -> LatestScreenFrameBuffer:
+    """Retain one frame per model unit across the context window, and a
+    bounded capture-time history of consumed frames over the configured codex
+    recent-visual horizon."""
+
+    return LatestScreenFrameBuffer(
+        max_pending_frames=runtime.params.context_max_units,
+        max_history_frames=_max_recent_screen_frames(runtime),
+        history_window_ms=runtime.settings.codex_screen_history_seconds * 1000,
+    )
+
+
+def _foreground_provider_name(runtime: _Runtime) -> str:
+    if runtime.foreground_provider is not None:
+        return runtime.foreground_provider.provider_name
+    return "thinker"
+
+
+def _thinker_model_attr(runtime: _Runtime, name: str) -> Any | None:
+    if runtime.bundle is None:
+        return None
+    return getattr(runtime.bundle.model, name, None)
+
+
+def _streams_speech(runtime: _Runtime) -> bool:
+    """Speech reaches the client through poll_output rather than unit events."""
+
+    return runtime.detached_talker is not None or runtime.foreground_provider is not None
+
+
+async def _open_native_session(
     runtime: _Runtime,
     *,
+    session_id: str,
     media_mode: str | None = None,
     screen_frames: LatestScreenFrameBuffer | None = None,
     host_tools: tuple[str, ...] = (),
-) -> GNSISDuplexSession:
+) -> NativeForegroundSession:
+    assert runtime.foreground_provider is not None
+    config = ProviderSessionConfig(
+        session_id=session_id,
+        input_sample_rate=runtime.settings.input_sample_rate,
+        output_sample_rate=runtime.settings.output_sample_rate,
+        system_prompt=runtime.foreground_system_prompt,
+        extra={
+            "tools": _model_tool_schemas(runtime, host_tools),
+            "media_mode": media_mode or runtime.settings.media_mode,
+            "chunk_ms": runtime.params.chunk_ms,
+        },
+    )
+    session = await runtime.foreground_provider.open_session(config)
+    return NativeForegroundSession(
+        session,
+        loop=asyncio.get_running_loop(),
+        screen_frames=(
+            screen_frames
+            if screen_frames is not None
+            else _new_screen_frame_buffer(runtime)
+        ),
+        media_mode=media_mode or runtime.settings.media_mode,
+        provider_name=runtime.foreground_provider.provider_name,
+    )
+
+
+async def _open_session(
+    runtime: _Runtime,
+    *,
+    session_id: str,
+    media_mode: str | None = None,
+    screen_frames: LatestScreenFrameBuffer | None = None,
+    host_tools: tuple[str, ...] = (),
+) -> ForegroundSession:
+    if runtime.foreground_provider is not None:
+        return await _open_native_session(
+            runtime,
+            session_id=session_id,
+            media_mode=media_mode,
+            screen_frames=screen_frames,
+            host_tools=host_tools,
+        )
     return await asyncio.to_thread(
         _build_session,
         runtime,
@@ -815,6 +898,10 @@ def _max_recent_screen_frames(runtime: _Runtime) -> int:
 
 
 def _vision_available(runtime: _Runtime) -> bool:
+    if runtime.bundle is None:
+        # A native Omni provider sees through its own model; the runtime only
+        # forwards frames to it.
+        return runtime.foreground_provider is not None
     return vision_available(runtime.bundle.model)
 
 
@@ -882,6 +969,70 @@ async def _send_chunk(
     event: Any,
     output_sample_rate: int,
 ) -> None:
+    audio = b""
+    if isinstance(event, SpeechCancel):
+        payload = {
+            "type": "playback.cancel",
+            "generation_id": event.generation_id,
+            "cancelled_generation_id": event.cancelled_generation_id,
+            "reason": event.reason,
+        }
+    elif isinstance(event, SpeechError):
+        payload = {
+            "type": "error",
+            "message": f"Foreground speech failed: {event.message}",
+            "generation_id": event.generation_id,
+            "unit_id": event.unit_id,
+        }
+    elif isinstance(event, SpeechDone):
+        payload = {
+            "type": "audio.done",
+            "generation_id": event.generation_id,
+            "unit_id": event.unit_id,
+            "end_of_turn": event.end_of_turn,
+            "metrics": event.metrics,
+        }
+    elif isinstance(event, SpeechChunk):
+        audio = event.pcm16
+        payload = {
+            "type": "audio.chunk",
+            "generation_id": event.generation_id,
+            "unit_id": event.unit_id,
+            "sequence": event.sequence,
+            "current_time": event.current_time,
+            "end_of_turn": event.end_of_turn,
+            "metrics": event.metrics,
+        }
+    elif isinstance(event, ForegroundModelEvent):
+        payload = event.to_payload()
+        call_id = getattr(event, "call_id", None)
+        if call_id:
+            payload.update(
+                call_id=call_id,
+                dispatch=getattr(event, "dispatch", "client"),
+                turn_id=getattr(event, "turn_id", None),
+            )
+    else:
+        await _send_thinker_chunk(websocket, event, output_sample_rate)
+        return
+    payload.update(
+        audio=bool(audio),
+        audio_bytes=len(audio),
+        audio_format="pcm16",
+        audio_sample_rate=output_sample_rate,
+    )
+    await websocket.send_text(_json(payload))
+    if audio:
+        await websocket.send_bytes(audio)
+
+
+async def _send_thinker_chunk(
+    websocket: WebSocket,
+    event: Any,
+    output_sample_rate: int,
+) -> None:
+    """Thinker/Talker wire events, as the in-process stack emits them."""
+
     from mcpmft.infer.detached_talker import (
         PlaybackCancel,
         SpeechSynthesisChunk,
@@ -1013,7 +1164,7 @@ class _WebSocketOutbox:
         wait_sent: bool = False,
     ) -> None:
         self._raise_if_failed()
-        if type(event).__name__ == "PlaybackCancel":
+        if type(event).__name__ in SPEECH_CANCEL_EVENT_NAMES:
             self.audio_generation_floor = max(
                 self.audio_generation_floor,
                 int(event.generation_id),
@@ -1078,12 +1229,7 @@ class _WebSocketOutbox:
 
     def _stale_audio(self, event: Any) -> bool:
         return (
-            type(event).__name__
-            in {
-                "SpeechSynthesisChunk",
-                "SpeechSynthesisDone",
-                "SpeechSynthesisError",
-            }
+            type(event).__name__ in SPEECH_AUDIO_EVENT_NAMES
             and int(event.generation_id) < self.audio_generation_floor
         )
 
@@ -1140,7 +1286,7 @@ class _WebSocketOutbox:
 
 
 async def _drain(
-    session: GNSISDuplexSession,
+    session: ForegroundSession,
     emit_model_event: Callable[[Any], Awaitable[None]],
     *,
     pending_unit_capture_start_ms: float | None = None,
@@ -1173,7 +1319,7 @@ _LIVE_ASSET_TYPES = {
 
 
 def create_online_duplex_app(
-    bundle: Any,
+    bundle: Any | None,
     *,
     params: Any,
     gateway_factory: Callable[[str], Any],
@@ -1184,11 +1330,25 @@ def create_online_duplex_app(
     session_memory: Any | None = None,
     harness_client: Any | None = None,
     harness_poll_sec: float = 2.0,
+    foreground_provider: RealtimeProvider | None = None,
+    foreground_system_prompt: str | None = None,
 ):
-    """Create the persistent MiniCPM, task-tools and screen endpoints."""
+    """Create the live duplex, task-tools and screen endpoints.
+
+    ``bundle`` is the Thinker loaded in process, or None with a
+    ``foreground_provider`` that opens native model sessions instead. Both
+    serve the same sockets, through the same coordinator, harness bridge,
+    memory, timeline and delivery gate.
+    """
 
     from mcpmft.infer.web import STATIC_DIR, request_json
 
+    if (bundle is None) == (foreground_provider is None):
+        raise ValueError(
+            "exactly one of a Thinker bundle or a foreground provider must be given"
+        )
+    if foreground_provider is not None and detached_talker is not None:
+        raise ValueError("a native foreground provider renders its own speech")
     runtime = _Runtime(
         bundle=bundle,
         params=_reserve_built_in_tools(params, bundle),
@@ -1200,6 +1360,8 @@ def create_online_duplex_app(
         session_memory=session_memory,
         harness_client=harness_client,
         harness_poll_sec=harness_poll_sec,
+        foreground_provider=foreground_provider,
+        foreground_system_prompt=foreground_system_prompt,
     )
     if not runtime.settings.edge_secret:
         LOGGER.warning(
@@ -1291,6 +1453,10 @@ def create_online_duplex_app(
     app = FastAPI(title="GNSIS Online Duplex", version="1.0.0")
 
     async def prepare_static_prefix() -> None:
+        if runtime.foreground_provider is not None:
+            # Nothing to prefill in process: the provider owns its prompt.
+            runtime.prefix_cache_status = "not_applicable"
+            return
         await asyncio.to_thread(_prepare_static_prefix, runtime)
 
     app.router.add_event_handler("startup", prepare_static_prefix)
@@ -1462,21 +1628,18 @@ def create_online_duplex_app(
             # tell "voice off by config" from "asked for and missing".
             "talker_checkpoint_configured": bool(runtime.settings.talker_checkpoint),
             "token2wav_configured": bool(runtime.settings.token2wav_dir),
-            "tts_loaded": getattr(runtime.bundle.model, "tts", None) is not None,
+            "tts_loaded": _thinker_model_attr(runtime, "tts") is not None,
             "token2wav_loaded": (
-                runtime.detached_talker is not None
-                or getattr(
-                    getattr(runtime.bundle.model, "tts", None),
-                    "audio_tokenizer",
-                    None,
-                )
+                _streams_speech(runtime)
+                or getattr(_thinker_model_attr(runtime, "tts"), "audio_tokenizer", None)
                 is not None
             ),
             "git_commit": os.environ.get("GNSIS_GIT_COMMIT") or None,
             "generate_audio": bool(
-                runtime.params.generate_audio or runtime.detached_talker is not None
+                runtime.params.generate_audio or _streams_speech(runtime)
             ),
             "detached_talker": runtime.detached_talker is not None,
+            "foreground_provider": _foreground_provider_name(runtime),
             "chunk_ms": runtime.params.chunk_ms,
             "sliding_window_mode": runtime.params.sliding_window_mode,
             "memory_episode_channel": (
@@ -1982,10 +2145,10 @@ def create_online_duplex_app(
         disconnect_reason = "closed"
         disconnect_code: Any = None
         slot_state = {"released": False}
-        session: GNSISDuplexSession | None = None
+        session: ForegroundSession | None = None
         coordinator: Any | None = None
         active: _ActiveSession | None = None
-        open_task: asyncio.Task[GNSISDuplexSession] | None = None
+        open_task: asyncio.Task[ForegroundSession] | None = None
         outbound_task: asyncio.Task[None] | None = None
         warmup_task: asyncio.Task[None] | None = None
         receive_watcher: asyncio.Task[dict[str, Any]] | None = None
@@ -2066,8 +2229,19 @@ def create_online_duplex_app(
         ) -> None:
             await websocket_outbox.send_event(event, wait_sent=wait_sent)
 
+        async def forward_pumped(event: Any) -> None:
+            if isinstance(event, ForegroundModelEvent):
+                # A native model's decisions arrive here, on its own clock;
+                # they take the same road as a Thinker unit (coordinator
+                # observation, haptic split, tool routing, timeline).
+                await emit_model_event(event)
+                return
+            await websocket_outbox.send_event(
+                event, audio=type(event).__name__ in SPEECH_AUDIO_EVENT_NAMES
+            )
+
         def start_speech_output_pump(
-            target: GNSISDuplexSession,
+            target: ForegroundSession,
         ) -> tuple[asyncio.Event, asyncio.Task[None]]:
             stop = asyncio.Event()
 
@@ -2075,11 +2249,7 @@ def create_online_duplex_app(
                 while True:
                     event = await asyncio.to_thread(target.poll_output, 0.05)
                     if event is not None:
-                        await websocket_outbox.send_event(
-                            event,
-                            audio=type(event).__name__
-                            in {"SpeechSynthesisChunk", "SpeechSynthesisDone"},
-                        )
+                        await forward_pumped(event)
                         if not stop.is_set():
                             continue
                         # Stop arrived mid-stream. Fall through to drain what
@@ -2087,16 +2257,7 @@ def create_online_duplex_app(
                         # for as long as it keeps producing.
                     if stop.is_set():
                         for remaining in target.drain_outputs():
-                            await websocket_outbox.send_event(
-                                remaining,
-                                audio=(
-                                    type(remaining).__name__
-                                    in {
-                                        "SpeechSynthesisChunk",
-                                        "SpeechSynthesisDone",
-                                    }
-                                ),
-                            )
+                            await forward_pumped(remaining)
                         return
 
             return stop, asyncio.create_task(
@@ -2194,7 +2355,7 @@ def create_online_duplex_app(
                     coordinator.acknowledge_output(output)
 
         async def build_coordinator(
-            model_session: GNSISDuplexSession,
+            model_session: ForegroundSession,
         ) -> TaskToolsRealtimeCoordinator:
             gateway = runtime.gateway_factory(session_id)
             from .timeline import SessionTimeline
@@ -2380,7 +2541,7 @@ def create_online_duplex_app(
                     timing_record["marks"] = active.session_marks
                     timing_record["t0"] = active.session_timing_t0
                     timing_record["startup_class"] = active.startup_class
-                    if runtime.detached_talker is not None:
+                    if _streams_speech(runtime):
                         speech_output_stop, speech_output_task = (
                             start_speech_output_pump(session)
                         )
@@ -2403,15 +2564,13 @@ def create_online_duplex_app(
                         )
                     open_task = asyncio.create_task(
                         _open_session(
-                            runtime, host_tools=offered_host_tools.accepted
+                            runtime,
+                            session_id=session_id,
+                            host_tools=offered_host_tools.accepted,
                         ),
                         name=f"gnsis-model-open-{session_id}",
                     )
                     session = await asyncio.shield(open_task)
-                    if runtime.detached_talker is not None:
-                        speech_output_stop, speech_output_task = (
-                            start_speech_output_pump(session)
-                        )
                     active = _ActiveSession(
                         duplex=session,
                         screen_token=secrets.token_urlsafe(32),
@@ -2433,6 +2592,12 @@ def create_online_duplex_app(
                     runtime.sessions[session_id] = active
                     coordinator = await build_coordinator(session)
                     active.coordinator = coordinator
+                    # Pumped output may be a native model's decision, which
+                    # needs the coordinator: only start once it exists.
+                    if _streams_speech(runtime):
+                        speech_output_stop, speech_output_task = (
+                            start_speech_output_pump(session)
+                        )
 
                 async def forward_tool_outputs() -> None:
                     assert coordinator is not None
@@ -2489,9 +2654,10 @@ def create_online_duplex_app(
                         },
                         "generate_audio": bool(
                             runtime.params.generate_audio
-                            or runtime.detached_talker is not None
+                            or _streams_speech(runtime)
                         ),
                         "detached_talker": runtime.detached_talker is not None,
+                        "foreground_provider": _foreground_provider_name(runtime),
                         "generation_id": int(
                             session.talker_state().get("generation_id", 0)
                         ),
@@ -2565,10 +2731,7 @@ def create_online_duplex_app(
                     active.media_mode,
                     runtime.params.context_max_units,
                     _vision_available(runtime),
-                    bool(
-                        runtime.params.generate_audio
-                        or runtime.detached_talker is not None
-                    ),
+                    bool(runtime.params.generate_audio or _streams_speech(runtime)),
                 )
 
                 async def warm_back_brain() -> None:
@@ -2783,8 +2946,8 @@ def create_online_duplex_app(
                 elif event_type == "reset":
                     pending_audio_header = None
                     audio_timeline.reset()
-                    if runtime.detached_talker is not None:
-                        # Cancel Talker generation before resetting the conversation.
+                    if _streams_speech(runtime):
+                        # Cancel speech generation before resetting the conversation.
                         await asyncio.to_thread(session.interrupt_output)
                     await stop_speech_output_pump()
                     if outbound_task is not None:
@@ -2802,17 +2965,18 @@ def create_online_duplex_app(
                     await asyncio.to_thread(session.close)
                     session = await _open_session(
                         runtime,
+                        session_id=session_id,
                         media_mode=active.media_mode,
                         screen_frames=screen_frames,
                         host_tools=active.host_tools.accepted,
                     )
-                    if runtime.detached_talker is not None:
-                        speech_output_stop, speech_output_task = (
-                            start_speech_output_pump(session)
-                        )
                     coordinator = await build_coordinator(session)
                     active.duplex = session
                     active.coordinator = coordinator
+                    if _streams_speech(runtime):
+                        speech_output_stop, speech_output_task = (
+                            start_speech_output_pump(session)
+                        )
                     outbound_task = asyncio.create_task(
                         forward_tool_outputs(),
                         name=f"gnsis-native-tool-output-{session_id}",
@@ -3021,6 +3185,21 @@ def create_online_duplex_app(
                     except (TypeError, ValueError) as exc:
                         await send_text({"type": "error", "message": str(exc)})
                         continue
+                    if fresh and session is not None and not session.closed:
+                        # The device's word on what was heard also reaches
+                        # the model: a native full-duplex model paces its
+                        # own output on it.
+                        chunks_played = control.get("chunks_played")
+                        await asyncio.to_thread(
+                            session.acknowledge_playback,
+                            str(control.get("delivery_id") or control.get("playback_id")),
+                            phase=str(control["phase"]),
+                            chunks_played=(
+                                int(chunks_played)
+                                if isinstance(chunks_played, int)
+                                else 0
+                            ),
+                        )
                     await send_text(
                         {
                             "type": "playback.ack.done",
@@ -3163,7 +3342,7 @@ def create_online_duplex_app(
                 """Stop everything tied to this socket, keeping the session."""
 
                 if (
-                    runtime.detached_talker is not None
+                    _streams_speech(runtime)
                     and session is not None
                     and not session.closed
                 ):
