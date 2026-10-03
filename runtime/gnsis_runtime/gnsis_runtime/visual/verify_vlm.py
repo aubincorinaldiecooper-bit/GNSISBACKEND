@@ -26,7 +26,7 @@ from .verification import VerificationRequest, clean_text
 
 MAX_GOAL = 400
 DEFAULT_MAX_NEW_TOKENS = 96
-MINICPMV_DOWNSAMPLE_MODE = "16x"
+MINICPMV_DOWNSAMPLE_MODE = "4x"
 MINICPMV_MAX_SLICE_NUMS = 1
 
 # (images, prompt) -> the model's raw text answer.

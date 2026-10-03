@@ -53,6 +53,7 @@ class PanopticPolicy(Protocol):
         frames: tuple[Any, ...],
         motion: float,
         viewport: tuple[int, int],
+        focus: str | None = None,
     ) -> VisualPerception: ...
 
 
@@ -466,13 +467,13 @@ class PersistentPanopticSession:
         self,
         snapshot: tuple[tuple[RuntimeFrameView, ...], float, tuple[int, int]]
         | None = None,
+        *,
+        focus: str | None = None,
     ) -> VisualPerception:
         views, motion, viewport = snapshot or self.perception_snapshot()
-        return self.policy.perceive(
-            views,
-            motion,
-            viewport,
-        )
+        if focus is None:
+            return self.policy.perceive(views, motion, viewport)
+        return self.policy.perceive(views, motion, viewport, focus)
 
     def _attempt_frame(self, decision: Decision) -> ScreenFrame | None:
         if decision.frame_id is not None:

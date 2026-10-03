@@ -433,7 +433,12 @@ class VisualService:
                 self._record_usage(session, **decision_usage)
                 return dict(response)
 
-    def perceive(self, session_id: str, request_id: str) -> dict[str, Any]:
+    def perceive(
+        self,
+        session_id: str,
+        request_id: str,
+        focus: str | None = None,
+    ) -> dict[str, Any]:
         request_id = str(request_id).strip()
         if not request_id or len(request_id) > 256:
             raise VisualServiceError(
@@ -465,7 +470,10 @@ class VisualService:
                 self._reserve_inference(session)
             started = time.monotonic()
             try:
-                perception = session.panoptic_session.perceive(snapshot)
+                perception = session.panoptic_session.perceive(
+                    snapshot,
+                    focus=focus,
+                )
             except ValueError as exc:
                 with session.lock:
                     session.reserved_inferences -= 1

@@ -82,8 +82,15 @@ class VisualAPIClient:
     def decide(self, request_id: str) -> dict[str, object]:
         return self._request("POST", "/decisions", {"request_id": request_id})
 
-    def perceive(self, request_id: str) -> dict[str, object]:
-        return self._request("POST", "/perceptions", {"request_id": request_id})
+    def perceive(
+        self,
+        request_id: str,
+        focus: str | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {"request_id": request_id}
+        if focus is not None:
+            payload["focus"] = focus
+        return self._request("POST", "/perceptions", payload)
 
     def state(self) -> dict[str, object]:
         return self._request("GET", "")
@@ -163,13 +170,17 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         return client.decide(request_id)
 
     @server.tool()
-    def visual_perceive(request_id: str) -> dict[str, object]:
+    def visual_perceive(
+        request_id: str,
+        focus: str | None = None,
+    ) -> dict[str, object]:
         """Describe the current visible screen and recent visible changes.
 
-        This does not require a task. Reuse the same request_id when retrying.
+        Optionally focus the description on one visible question. This does not
+        require a task. Reuse the same request_id when retrying.
         """
 
-        return client.perceive(request_id)
+        return client.perceive(request_id, focus)
 
     @server.tool()
     def visual_state() -> dict[str, object]:

@@ -24,6 +24,7 @@ class FixedPolicy:
         self.allowed_actions = None
         self.confidence = confidence
         self.perception_frames = ()
+        self.perception_focus = None
 
     def decide(
         self,
@@ -44,8 +45,9 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
-    def perceive(self, frames, motion, viewport):
+    def perceive(self, frames, motion, viewport, focus=None):
         self.perception_frames = tuple(frame.frame_id for frame in frames)
+        self.perception_focus = focus
         return VisualPerception(
             summary="A settings window is visible.",
             visible_text=("Settings", "Save"),
@@ -217,6 +219,23 @@ def test_service_perception_is_task_independent_temporal_and_idempotent() -> Non
     assert policy.perception_frames == ("f1", "f2", "f3", "f4")
     assert service.state(session_id)["goal"] is None
     assert service.state(session_id)["usage"]["perceptions"] == 1
+
+
+def test_service_passes_optional_perception_focus_without_setting_a_task() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    result = service.perceive(
+        session_id,
+        "perception-1",
+        "What is inside the magenta marker?",
+    )
+
+    assert result["perception"]["frame_id"] == "f1"
+    assert policy.perception_focus == "What is inside the magenta marker?"
+    assert service.state(session_id)["goal"] is None
 
 
 def test_service_perception_requires_a_frame_but_not_a_task() -> None:

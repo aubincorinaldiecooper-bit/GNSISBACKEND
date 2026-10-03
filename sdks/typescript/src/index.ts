@@ -195,12 +195,19 @@ export class VisualClient {
     );
   }
 
-  async perceive(sessionId: string, requestId?: string): Promise<JsonObject> {
+  async perceive(
+    sessionId: string,
+    requestId?: string,
+    focus?: string,
+  ): Promise<JsonObject> {
     const stableRequestId = requestId ?? crypto.randomUUID();
     return this.#request(
       "POST",
       `${this.#sessionPath(sessionId)}/perceptions`,
-      { request_id: stableRequestId },
+      {
+        request_id: stableRequestId,
+        ...(focus === undefined ? {} : { focus }),
+      },
       true,
       true,
     );

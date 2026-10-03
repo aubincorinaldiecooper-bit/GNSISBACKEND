@@ -39,6 +39,10 @@ class DecisionRequest(BaseModel):
     request_id: str = Field(min_length=1, max_length=256)
 
 
+class PerceptionRequest(DecisionRequest):
+    focus: str | None = Field(default=None, min_length=1, max_length=1_000)
+
+
 class AttemptRequest(BaseModel):
     decision_id: str = Field(min_length=1, max_length=256)
 
@@ -263,9 +267,9 @@ def create_visual_api(
     )
     def perceive(
         session_id: str,
-        payload: DecisionRequest,
+        payload: PerceptionRequest,
     ) -> dict[str, Any]:
-        return service.perceive(session_id, payload.request_id)
+        return service.perceive(session_id, payload.request_id, payload.focus)
 
     @app.post(
         "/v1/visual/sessions/{session_id}/attempts",
