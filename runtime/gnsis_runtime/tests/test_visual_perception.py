@@ -68,3 +68,24 @@ def test_perception_parser_rejects_unstructured_model_output() -> None:
             motion=0.0,
             viewport=(1280, 720),
         )
+
+
+def test_perception_parser_normalizes_scalar_and_missing_text_fields() -> None:
+    result = parse_perception(
+        json.dumps(
+            {
+                "summary": "A product listing is visible.",
+                "visible_text": "ESSENTIALS",
+                "elements": [],
+                "changes": None,
+                "confidence": 0.8,
+            }
+        ),
+        frame_id="frame-4",
+        observed_frame_ids=("frame-1", "frame-2", "frame-3", "frame-4"),
+        motion=0.0,
+        viewport=(1280, 942),
+    )
+
+    assert result.visible_text == ("ESSENTIALS",)
+    assert result.changes == ()

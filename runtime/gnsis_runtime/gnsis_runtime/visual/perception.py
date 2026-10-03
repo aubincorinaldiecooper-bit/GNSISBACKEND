@@ -177,6 +177,10 @@ def _text(value: Any, limit: int) -> str:
 
 
 def _text_list(value: Any, count: int, limit: int) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
     if not isinstance(value, list):
         raise ValueError("Panoptic perception text fields must be arrays")
     return tuple(text for item in value[:count] if (text := _text(item, limit)))
