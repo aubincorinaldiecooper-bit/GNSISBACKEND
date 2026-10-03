@@ -136,6 +136,19 @@ class VisualClient:
             retry=True,
         )
 
+    def perceive(
+        self,
+        session_id: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        stable_request_id = request_id if request_id is not None else uuid.uuid4().hex
+        return self._request(
+            "POST",
+            f"/v1/visual/sessions/{quote(session_id, safe='')}/perceptions",
+            json={"request_id": stable_request_id},
+            retry=True,
+        )
+
     def record_attempt(
         self,
         session_id: str,

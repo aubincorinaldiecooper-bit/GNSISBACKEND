@@ -16,6 +16,7 @@ from gnsis_runtime.visual.api import (
     create_visual_api,
 )
 from gnsis_runtime.visual.grants import GrantVerifier
+from gnsis_runtime.visual.perception import PerceivedElement, VisualPerception
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.service import VisualService
 
@@ -40,6 +41,28 @@ class FixedPolicy:
             0.9,
             Target(10, 10),
             frame_id=frame.frame_id,
+        )
+
+    def perceive(self, frames, motion, viewport):
+        return VisualPerception(
+            summary="A browser page is visible.",
+            visible_text=("Example",),
+            elements=(
+                PerceivedElement(
+                    "Example heading",
+                    "text",
+                    "Example",
+                    (0, 0, 64, 20),
+                    "",
+                    0.9,
+                ),
+            ),
+            changes=(),
+            confidence=0.9,
+            frame_id=str(frames[-1].frame_id),
+            observed_frame_ids=tuple(str(frame.frame_id) for frame in frames),
+            motion=motion,
+            viewport=viewport,
         )
 
 
@@ -106,6 +129,17 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
         assert accepted["frame_seq"] == 1
         assert service.state(session_id)["usage"]["frame_bytes"] == len(frame_body)
 
+        perception = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=AUTH,
+            json={"request_id": "perception-1"},
+        )
+        assert perception.status_code == 200
+        assert perception.json()["perception"]["summary"] == (
+            "A browser page is visible."
+        )
+        assert perception.json()["perception"]["frame_id"] == "f1"
+
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",
             headers=AUTH,
@@ -160,6 +194,14 @@ def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:
             websocket.send_bytes(_jpeg())
             assert websocket.receive_json()["type"] == "screen.frame.accepted"
 
+        perception = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=planner_auth,
+            json={"request_id": "planner-perception"},
+        )
+        assert perception.status_code == 200
+        assert perception.json()["perception"]["frame_id"] == "planner-frame"
+
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",
             headers=planner_auth,
@@ -205,6 +247,13 @@ def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:
         )
         assert other_session.status_code == 403
         assert other_session.json()["error"]["code"] == "forbidden"
+        other_perception = client.post(
+            f"/v1/visual/sessions/{second['session_id']}/perceptions",
+            headers=planner_auth,
+            json={"request_id": "other-perception"},
+        )
+        assert other_perception.status_code == 403
+        assert other_perception.json()["error"]["code"] == "forbidden"
 
         unknown_session = client.get(
             "/v1/visual/sessions/missing",

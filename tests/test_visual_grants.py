@@ -111,6 +111,7 @@ class VisualGrantTests(unittest.TestCase):
             "decisions": 1,
             "decisions_act": 1,
             "decisions_abstain": 0,
+            "perceptions": 0,
             "attempts_recorded": 1,
             "inference_ms": 25,
             "session_ms": 1000,
@@ -217,6 +218,27 @@ class VisualGrantTests(unittest.TestCase):
         self.assertEqual(blocked.json()["error"]["code"], "quota_exceeded")
         self.assertEqual(allowed.status_code, 200, allowed.text)
 
+    def test_daily_quota_counts_panoptic_perceptions(self):
+        view, secret = self._create_key(["visual:host"])
+        os.environ["GNSIS_VISUAL_DAILY_DECISION_QUOTA"] = "3"
+        from gnsis.service import settings as settings_mod
+
+        settings_mod._settings = None
+        self.settings = settings_mod.get_settings()
+        report = self._usage_report(
+            key_id=view.id,
+            decisions=1,
+            decisions_act=1,
+            perceptions=2,
+        )
+
+        ingested = self._post_usage([report])
+        blocked = self._grant(secret)
+
+        self.assertEqual(ingested.status_code, 200, ingested.text)
+        self.assertEqual(blocked.status_code, 429, blocked.text)
+        self.assertEqual(blocked.json()["error"]["code"], "quota_exceeded")
+
     def test_delayed_usage_attributes_to_report_day_not_ingest_day(self):
         view, secret = self._create_key(["visual:host"])
         os.environ["GNSIS_VISUAL_DAILY_DECISION_QUOTA"] = "3"
@@ -241,6 +263,7 @@ class VisualGrantTests(unittest.TestCase):
         view, _ = self._create_key(["visual:host"])
         report = self._usage_report(key_id=view.id)
         report.pop("generated_at_ms")
+        report.pop("perceptions")
 
         ingested = self._post_usage([report])
 
@@ -251,6 +274,7 @@ class VisualGrantTests(unittest.TestCase):
         with session_scope() as session:
             row = session.query(orm.VisualUsageRecord).one()
         self.assertIsNotNone(row.reported_at)
+        self.assertEqual(row.perceptions, 0)
 
     def test_usage_callback_authentication_idempotency_and_validation(self):
         view, _ = self._create_key(["visual:host"])

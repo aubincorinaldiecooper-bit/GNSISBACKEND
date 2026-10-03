@@ -1,8 +1,9 @@
-# Smaller GNSIS visual execution service
+# Panoptic visual understanding and decision service
 
-Smaller GNSIS is a model-independent visual decision service. An agent supplies a
-goal and asks for the next bounded decision. A trusted host supplies the live
-screen stream and remains solely responsible for permissions, confirmation,
+Panoptic is an integrated visual understanding and grounded decision service.
+An agent can ask what is currently visible without setting a task, or supply a
+goal and ask for the next bounded decision. A trusted host supplies the rolling
+live screen stream and remains solely responsible for permissions, confirmation,
 execution, and verification.
 
 ## Trust boundary
@@ -11,6 +12,7 @@ The service:
 
 - consumes a host-owned persistent screen stream;
 - keeps bounded temporal visual and action history;
+- describes visible text, elements, locations, state, and recent changes;
 - selects one action from the task's code-generated legal action set;
 - abstains with `wait` when the policy is uncertain;
 - returns a decision tied to the frame that produced it;
@@ -30,10 +32,11 @@ All control-plane calls except `/health` require a bearer token. The host
 credential is required to create and close sessions and to record attempts.
 `POST /v1/visual/sessions` returns a host-only stream token and a session-scoped
 planner token. The planner token can set/reset the task, request decisions, and
-read state for that session only; it cannot create/close sessions or record
-attempts. A planner token used for another session or a host-only operation
-returns 403. Invalid credentials return 401; unknown sessions return 404 to
-hosts and 401 to planners. The host token can also perform planner operations.
+request task-independent perception and read state for that session only; it
+cannot create/close sessions or record attempts. A planner token used for
+another session or a host-only operation returns 403. Invalid credentials
+return 401; unknown sessions return 404 to hosts and 401 to planners. The host
+token can also perform planner operations.
 
 ```text
 Authorization: Bearer <host token or session-scoped planner token>
@@ -45,15 +48,19 @@ Authorization: Bearer <host token or session-scoped planner token>
    `/v1/visual/sessions/{session_id}/stream?token={stream_token}`.
 3. For each frame, the host sends one `screen.frame` JSON header followed by one
    JPEG, WebP, or PNG binary message.
-4. `PUT /v1/visual/sessions/{session_id}/task`
+4. `POST /v1/visual/sessions/{session_id}/perceptions`
+   returns the current visible scene and recent visible changes without requiring
+   a task. The response includes a summary, visible text, visible elements with
+   pixel boxes and confidence, the current frame ID, and the observed frame IDs.
+5. `PUT /v1/visual/sessions/{session_id}/task`
    binds the goal and legal action set.
-5. `POST /v1/visual/sessions/{session_id}/decisions`
+6. `POST /v1/visual/sessions/{session_id}/decisions`
    returns the next decision and a single-use `decision_id`.
-6. The host checks that the decision is still current, applies its own authority,
+7. The host checks that the decision is still current, applies its own authority,
    permission, and confirmation policy, then executes or rejects it.
-7. `POST /v1/visual/sessions/{session_id}/attempts`
+8. `POST /v1/visual/sessions/{session_id}/attempts`
    records that the decision was attempted. It never performs the action.
-8. Reset or close the session when the task ends.
+9. Reset or close the session when the task ends.
 
 ## Running the service
 
@@ -86,11 +93,13 @@ increments on every accepted frame and is the authoritative currentness key.
 Both state and decision responses include it so the host can reject decisions
 from an older frame generation.
 
-Decision replay retention is bounded to the most recent 128 request IDs per
-task, with at most 32 outstanding decisions. Repeating a request ID in that
-window returns the original decision. Once evicted, its request ID is retained
-in a bounded 4096-entry expired-ID window and returns `request_expired`; use a
-new request ID rather than retrying an expired one.
+Decision and perception replay retention are each bounded to the most recent
+128 request IDs. Repeating a request ID in that window returns the original
+result. Once evicted, its request ID is retained in a bounded 4096-entry
+expired-ID window and returns `request_expired`; use a new request ID rather
+than retrying an expired one. The current frame must remain unchanged while a
+perception response is generated, otherwise the request returns
+`stale_perception`.
 
 ## Client SDKs
 
@@ -100,8 +109,8 @@ captured by the trusted host; they do not capture screens, grant permissions,
 or execute decisions. The host remains responsible for its own authority and
 permission policy and for carrying out any permitted action.
 
-The clients retry health, state, session close, task setup/reset, and decision
-requests after transport failures or HTTP 502/503/504 responses. Session
+The clients retry health, state, session close, task setup/reset, perception,
+and decision requests after transport failures or HTTP 502/503/504 responses. Session
 creation is not retried to avoid accidentally creating multiple sessions, and
 `record_attempt` is not retried because attempts are single-use. MCP remains the
 adapter for MCP-capable agents; these SDKs provide direct client integrations
@@ -141,9 +150,11 @@ visual API's host bearer credential. Grants bind a workspace, key, project,
 environment, and bounded concurrent-session, frame, and decision limits; the
 runtime verifies them offline. Sessions from different workspaces cannot access
 each other's state. Usage callbacks meter accepted frames, frame bytes,
-decisions (including act/abstain), recorded attempts, inference milliseconds,
-session milliseconds, and closed sessions. Pricing, charging, and billing are
-intentionally not implemented.
+perceptions, decisions (including act/abstain), recorded attempts, inference
+milliseconds, session milliseconds, and closed sessions. Perceptions have their
+own usage count so billing can price screen understanding separately from
+grounded decisions. Pricing, charging, and billing are intentionally not
+implemented.
 Grants remain valid until expiry (up to the configured TTL, 300 seconds by
 default) after a key is disabled or rotated. The daily decision quota is checked
 when issuing grants against ingested usage, so it is a soft limit that can lag
@@ -155,6 +166,7 @@ The local stdio adapter uses the official open-source MCP Python SDK. It exposes
 
 - `visual_set_task`
 - `visual_decide`
+- `visual_perceive`
 - `visual_state`
 - `visual_reset`
 

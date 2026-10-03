@@ -195,6 +195,17 @@ export class VisualClient {
     );
   }
 
+  async perceive(sessionId: string, requestId?: string): Promise<JsonObject> {
+    const stableRequestId = requestId ?? crypto.randomUUID();
+    return this.#request(
+      "POST",
+      `${this.#sessionPath(sessionId)}/perceptions`,
+      { request_id: stableRequestId },
+      true,
+      true,
+    );
+  }
+
   /** Record an execution attempt with the host token. */
   async recordAttempt(
     sessionId: string,
