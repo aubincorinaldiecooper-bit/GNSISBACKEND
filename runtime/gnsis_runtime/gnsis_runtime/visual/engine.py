@@ -28,7 +28,7 @@ from .perception import (
     TargetGrounding,
     VisualPerception,
     build_perception_prompt,
-    parse_perception,
+    parse_perception_or_grounding,
     validate_target_point,
 )
 from .prompt import build_layout
@@ -252,8 +252,9 @@ class JEVEngine:
                 target=point,
             ),
         )
-        perception = parse_perception(
+        perception = parse_perception_or_grounding(
             raw,
+            None if grounding is None else lambda: self._grounding_result(grounding, point),
             frame_id=str(selected[-1].frame_id),
             observed_frame_ids=tuple(str(frame.frame_id) for frame in selected),
             motion=motion,
@@ -266,8 +267,15 @@ class JEVEngine:
                 perception,
                 grounding=ground_from_elements(perception.elements, point, self.name),
             )
+        if perception.grounding is not None:
+            return perception
+        return replace(perception, grounding=self._grounding_result(grounding, point))
+
+    def _grounding_result(
+        self, grounding: Future[TargetGrounding], point: tuple[int, int]
+    ) -> TargetGrounding:
         try:
-            return replace(perception, grounding=grounding.result())
+            return grounding.result()
         except Exception:
             log.exception("target grounding failed at %s", point)
-            return replace(perception, grounding=failed(point, self.grounder.name))
+            return failed(point, self.grounder.name)

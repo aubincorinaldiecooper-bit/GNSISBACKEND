@@ -56,6 +56,9 @@ GROUNDER_REVISION = "26b734a54fdfbf9c398351eedfabb7f27fc470b7"
 # minute of warm idle covers a connector's inter-request gaps without paying
 # for five.
 SCALEDOWN_WINDOW_SEC = 60
+# L40S is the measured production tier; override (e.g. GNSIS_VISUAL_GPU=L4) only
+# for a cost/latency measurement run, never silently in a deploy.
+GPU = os.environ.get("GNSIS_VISUAL_GPU") or "L40S"
 
 host_secret = modal.Secret.from_dict(
     {"GNSIS_VISUAL_HOST_TOKEN": os.environ.get("GNSIS_VISUAL_HOST_TOKEN", "")}
@@ -144,7 +147,7 @@ def _serve() -> subprocess.Popen[bytes]:
 
 
 @app.function(
-    gpu="L40S",
+    gpu=GPU,
     volumes={"/visual": visual_data, "/hf-cache": hf_cache},
     secrets=[host_secret],
     timeout=24 * 60 * 60,
@@ -164,7 +167,7 @@ def gnsis_visual_server() -> None:
 
 
 @app.function(
-    gpu="L40S",
+    gpu=GPU,
     volumes={"/visual": visual_data, "/hf-cache": hf_cache},
     secrets=[host_secret],
     timeout=24 * 60 * 60,

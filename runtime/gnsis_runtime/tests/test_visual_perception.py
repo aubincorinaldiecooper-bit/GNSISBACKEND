@@ -9,6 +9,8 @@ from gnsis_runtime.visual.perception import (
     TargetGrounding,
     build_perception_prompt,
     parse_perception,
+    parse_perception_or_grounding,
+    perception_from_grounding,
     validate_target_point,
 )
 
@@ -159,3 +161,124 @@ def test_perception_json_carries_target_grounding_with_provenance() -> None:
         "confidence": 0.7,
         "source": "florence-2-large-ft",
     }
+
+
+def test_perception_prompt_tells_the_model_not_to_echo_the_template() -> None:
+    prompt = build_perception_prompt((1280, 720), temporal=False)
+
+    assert "never return the placeholder words" in prompt
+
+
+def test_grounded_target_can_stand_in_for_an_unparseable_perception() -> None:
+    grounding = TargetGrounding(
+        point=(175, 387),
+        status="grounded",
+        label="navy sweatpants",
+        text="",
+        box=(125, 123, 191, 370),
+        confidence=0.7,
+        source="florence-2-large-ft",
+    )
+
+    result = perception_from_grounding(
+        grounding,
+        frame_id="frame-4",
+        observed_frame_ids=("frame-1", "frame-4"),
+        motion=0.1,
+        viewport=(1280, 942),
+    )
+
+    assert "Only the target point (175, 387) was resolved" in result.summary
+    assert "rest of the frame was not described" in result.summary
+    assert result.elements[0].box == (125, 123, 191, 370)
+    assert result.confidence == 0.7
+    assert result.frame_id == "frame-4"
+    assert result.observed_frame_ids == ("frame-1", "frame-4")
+    assert result.grounding is grounding
+    assert result.to_json()["grounding"]["status"] == "grounded"
+
+
+def test_unresolved_grounding_cannot_stand_in_for_a_perception() -> None:
+    grounding = TargetGrounding(
+        point=(5, 5),
+        status="unresolved",
+        label="",
+        text="",
+        box=None,
+        confidence=0.0,
+        source="florence-2-large-ft",
+    )
+
+    with pytest.raises(ValueError, match="only a grounded target"):
+        perception_from_grounding(
+            grounding,
+            frame_id="frame-1",
+            observed_frame_ids=("frame-1",),
+            motion=0.0,
+            viewport=(100, 100),
+        )
+
+
+def test_grounded_target_survives_a_template_echo_from_the_continuous_model() -> None:
+    grounded = TargetGrounding(
+        point=(5, 5),
+        status="grounded",
+        label="save button",
+        text="Save",
+        box=(0, 0, 10, 10),
+        confidence=0.8,
+        source="stub",
+    )
+    calls = 0
+
+    def grounding() -> TargetGrounding:
+        nonlocal calls
+        calls += 1
+        return grounded
+
+    result = parse_perception_or_grounding(
+        '{"summary":"plain-language overview","box":[x,y,width,height]}',
+        grounding,
+        frame_id="f2",
+        observed_frame_ids=("f1", "f2"),
+        motion=0.0,
+        viewport=(64, 64),
+    )
+
+    assert calls == 1
+    assert result.grounding == grounded
+    assert result.elements[0].text == "Save"
+    assert result.observed_frame_ids == ("f1", "f2")
+    assert "Only the target point (5, 5) was resolved" in result.summary
+
+
+def test_parse_failure_propagates_without_a_grounded_target() -> None:
+    unresolved = TargetGrounding((5, 5), "unresolved", "", "", None, 0.0, "stub")
+    provenance = {
+        "frame_id": "f1",
+        "observed_frame_ids": ("f1",),
+        "motion": 0.0,
+        "viewport": (64, 64),
+    }
+
+    with pytest.raises(ValueError, match="invalid perception JSON"):
+        parse_perception_or_grounding("not json", lambda: unresolved, **provenance)
+    with pytest.raises(ValueError, match="invalid perception JSON"):
+        parse_perception_or_grounding("not json", None, **provenance)
+
+
+def test_valid_perception_does_not_consult_the_grounding_fallback() -> None:
+    def grounding() -> TargetGrounding:
+        raise AssertionError("fallback must not run")
+
+    result = parse_perception_or_grounding(
+        json.dumps({"summary": "A page.", "visible_text": [], "elements": [], "changes": [], "confidence": 0.5}),
+        grounding,
+        frame_id="f1",
+        observed_frame_ids=("f1",),
+        motion=0.0,
+        viewport=(64, 64),
+    )
+
+    assert result.summary == "A page."
+    assert result.grounding is None

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 MAX_ELEMENTS = 80
 MAX_VISIBLE_TEXT = 120
 MAX_CHANGES = 40
+RAW_LOG_CHARS = 400
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +137,8 @@ def build_perception_prompt(
             'window|menu|other","text":"visible text or empty","box":[x,y,width,height],'
             '"state":"visible state or empty","confidence":0.0}],'
             '"changes":["visible change"],"confidence":0.0}',
+            "That shape is a template: replace every placeholder with values read from "
+            "the screen and never return the placeholder words themselves.",
             "List meaningful visible elements, including controls, text regions, windows, "
             "dialogs, menus, and status indicators.",
             "Boxes use current-viewport pixel coordinates and must stay inside the viewport.",
@@ -163,6 +169,94 @@ def build_perception_prompt(
             ]
         )
     return "\n".join(lines)
+
+
+def parse_perception_or_grounding(
+    raw: str,
+    grounding: Callable[[], TargetGrounding] | None,
+    *,
+    frame_id: str,
+    observed_frame_ids: Sequence[str],
+    motion: float,
+    viewport: tuple[int, int],
+) -> VisualPerception:
+    """Parse the continuous model's reply; fall back to a grounded target.
+
+    ``grounding`` yields the focused grounder's result on demand. When the
+    continuous reply is unusable and that result is ``grounded``, the caller
+    still gets an answer for the point it asked about; otherwise the parse
+    error propagates. The unusable reply is logged, bounded, for diagnosis.
+    """
+
+    provenance = {
+        "frame_id": frame_id,
+        "observed_frame_ids": observed_frame_ids,
+        "motion": motion,
+        "viewport": viewport,
+    }
+    try:
+        return parse_perception(raw, **provenance)
+    except ValueError as exc:
+        log.warning(
+            "%s (%d chars); head=%r tail=%r",
+            exc,
+            len(raw),
+            raw[:RAW_LOG_CHARS],
+            raw[-RAW_LOG_CHARS:],
+        )
+        if grounding is None:
+            raise
+        resolved = grounding()
+        if resolved.status != "grounded" or resolved.box is None:
+            raise
+        return perception_from_grounding(resolved, **provenance)
+
+
+def perception_from_grounding(
+    grounding: TargetGrounding,
+    *,
+    frame_id: str,
+    observed_frame_ids: Sequence[str],
+    motion: float,
+    viewport: tuple[int, int],
+) -> VisualPerception:
+    """A perception that covers only a validated target grounding.
+
+    Used when the continuous model returned nothing parseable but the focused
+    grounder found the element under the caller's point; the summary says so
+    plainly rather than describing the rest of the frame.
+    """
+
+    if grounding.status != "grounded" or grounding.box is None:
+        raise ValueError("only a grounded target can stand in for a perception")
+    x, y = grounding.point
+    found = grounding.label or "an element"
+    if grounding.text:
+        found = f"{found} reading {grounding.text!r}"
+    summary = (
+        f"Only the target point ({x}, {y}) was resolved: {found}. "
+        "The rest of the frame was not described."
+    )
+    element = PerceivedElement(
+        label=grounding.label or "target",
+        role="text" if grounding.text and not grounding.label else "other",
+        text=grounding.text,
+        box=grounding.box,
+        state="",
+        confidence=grounding.confidence,
+    )
+    return VisualPerception(
+        summary=summary,
+        visible_text=(grounding.text,) if grounding.text else (),
+        elements=(element,),
+        changes=(),
+        confidence=grounding.confidence,
+        frame_id=frame_id,
+        observed_frame_ids=tuple(observed_frame_ids),
+        motion=motion,
+        viewport=viewport,
+        grounding=grounding,
+    )
 
 
 def parse_perception(
