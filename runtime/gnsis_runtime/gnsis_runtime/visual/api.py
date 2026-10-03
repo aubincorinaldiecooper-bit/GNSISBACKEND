@@ -261,7 +261,7 @@ def create_visual_api(
         "/v1/visual/sessions/{session_id}/perceptions",
         dependencies=[Depends(require_session_bearer)],
     )
-    async def perceive(
+    def perceive(
         session_id: str,
         payload: DecisionRequest,
     ) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import threading
 import time
 
 import jwt
@@ -64,6 +65,18 @@ class FixedPolicy:
             motion=motion,
             viewport=viewport,
         )
+
+
+class BlockingPerceptionPolicy(FixedPolicy):
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def perceive(self, frames, motion, viewport):
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("test did not release perception")
+        return super().perceive(frames, motion, viewport)
 
 
 def _jpeg() -> bytes:
@@ -177,6 +190,51 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
         )
         assert reset.status_code == 200
         assert reset.json()["goal"] is None
+
+
+def test_perception_generation_does_not_block_the_api_event_loop() -> None:
+    policy = BlockingPerceptionPolicy()
+    service = _service(policy)
+    app = create_visual_api(
+        service,
+        VisualAPISettings(host_token="test-token"),
+    )
+    with TestClient(app) as client:
+        opened = _open(client)
+        session_id = opened["session_id"]
+        service.publish_frame(
+            session_id,
+            ScreenFrame(
+                frame_id="f1",
+                image=Image.new("RGB", (64, 32), "white"),
+                captured_at_ms=1000,
+                metadata={"width": 64, "height": 32},
+            ),
+        )
+        response = {}
+
+        def request_perception() -> None:
+            response["value"] = client.post(
+                f"/v1/visual/sessions/{session_id}/perceptions",
+                headers=AUTH,
+                json={"request_id": "perception-1"},
+            )
+
+        request_thread = threading.Thread(target=request_perception)
+        request_thread.start()
+        assert policy.started.wait(timeout=1)
+        try:
+            state = client.get(
+                f"/v1/visual/sessions/{session_id}",
+                headers=AUTH,
+            )
+            assert state.status_code == 200
+        finally:
+            policy.release.set()
+            request_thread.join(timeout=1)
+
+        assert not request_thread.is_alive()
+        assert response["value"].status_code == 200
 
 
 def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:

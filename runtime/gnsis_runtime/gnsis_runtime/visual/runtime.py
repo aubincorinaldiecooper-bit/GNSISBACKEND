@@ -418,7 +418,9 @@ class PersistentPanopticSession:
             raise IllegalDecision(gated.reason or "illegal decision")
         return gated.decision
 
-    def perceive(self) -> VisualPerception:
+    def perception_snapshot(
+        self,
+    ) -> tuple[tuple[RuntimeFrameView, ...], float, tuple[int, int]]:
         source = self.latest_frame()
         recent = self.screen_frames.recent_frames(
             limit=MAX_PERCEPTION_FRAMES,
@@ -426,10 +428,18 @@ class PersistentPanopticSession:
         )
         selected = tuple(reversed(recent)) if recent else (source,)
         views = tuple(RuntimeFrameView.from_screen_frame(frame) for frame in selected)
+        return views, recent_motion(recent), views[-1].image().size
+
+    def perceive(
+        self,
+        snapshot: tuple[tuple[RuntimeFrameView, ...], float, tuple[int, int]]
+        | None = None,
+    ) -> VisualPerception:
+        views, motion, viewport = snapshot or self.perception_snapshot()
         return self.policy.perceive(
             views,
-            recent_motion(recent),
-            views[-1].image().size,
+            motion,
+            viewport,
         )
 
     def _attempt_frame(self, decision: Decision) -> ScreenFrame | None:
