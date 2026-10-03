@@ -204,7 +204,7 @@ class BrowserHostConfig:
     task: str
     allowed_actions: tuple[str, ...] = BROWSER_ACTIONS
     max_steps: int = 40
-    capture_fps: float = 2
+    capture_fps: float = 4
     capture_max_edge: int = 1280
     capture_quality: float = 0.82
     turn_id: str = ""
@@ -496,7 +496,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=8766)
     parser.add_argument("--max-steps", type=int, default=40)
-    parser.add_argument("--fps", type=float, default=2)
+    parser.add_argument("--fps", type=float, default=4)
     parser.add_argument("--max-edge", type=int, default=1280)
     parser.add_argument("--quality", type=float, default=0.82)
     return parser

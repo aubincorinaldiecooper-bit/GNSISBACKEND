@@ -9,6 +9,7 @@
 /** Max encoded frame dimension, matching the training contract in video.js. */
 export const FRAME_FIT_PX = 448;
 export const FRAME_JPEG_QUALITY = 0.7;
+export const PANOPTIC_FRAME_RATE_HZ = 4;
 
 /**
  * Bounded transport-reconnect policy, mirroring video.js
@@ -41,6 +42,13 @@ export function resolveFrameRate(
 ): number {
   const rate = Number(recommendedHz);
   return Number.isFinite(rate) && rate > 0 ? rate : fallbackHz;
+}
+
+export function resolvePanopticFrameRate(recommendedHz: unknown): number {
+  return Math.max(
+    resolveFrameRate(recommendedHz, PANOPTIC_FRAME_RATE_HZ),
+    PANOPTIC_FRAME_RATE_HZ,
+  );
 }
 
 /** Milliseconds to wait before reconnect attempt `n`, or null when the budget is spent. */

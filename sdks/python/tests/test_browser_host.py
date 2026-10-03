@@ -231,6 +231,12 @@ def test_browser_connector_streams_decides_executes_and_records() -> None:
     assert clients["host-token"].closed_session == "session-1"
     assert stream.closed is True
     assert [message["type"] for message in socket.sent].count("capture.start") == 1
+    assert (
+        next(message for message in socket.sent if message["type"] == "capture.start")[
+            "fps"
+        ]
+        == 4
+    )
     assert [message["type"] for message in socket.sent].count("capture.stop") == 1
 
 

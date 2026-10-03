@@ -112,8 +112,9 @@ for hosts and applications.
 The browser connector uses the existing GNSIS Browser Hub rather than adding a
 second actuator. Run `gnsis-visual-browser-host`, then open the extension Hub at
 `hub.html?ws=8766`. It keeps one capture session active for the task, forwards
-the Hub's live tab frames while decisions and actions are in progress, requests
-bounded decisions, routes them through `BrowserActionBridge`, records
+the Hub's live tab frames at four frames per second while decisions and actions
+are in progress, requests bounded decisions, routes them through
+`BrowserActionBridge`, records
 correlated attempts, and starts each action from a fresh frame.
 
 The desktop connector is part of the existing Electron Host. It is enabled only
