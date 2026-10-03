@@ -1,6 +1,6 @@
 # Packaging GNSIS for macOS
 
-Produces an installable `GNSIS-<version>-<arch>.dmg` from the existing Electron
+Produces an installable `GNSIS for Mac.dmg` from the existing Electron
 Host. The packaged app is the same code as `npm start` — packaging adds no
 architecture, only distribution.
 
@@ -9,11 +9,11 @@ architecture, only distribution.
 ```bash
 cd desktop
 npm ci
-npm run package:mac        # GNSIS-<version>-universal.dmg in release/
+npm run package:mac        # "GNSIS for Mac.dmg" in release/
 npm run package:mac:dir    # unpacked GNSIS.app only (faster smoke check)
 ```
 
-Artifact: `desktop/release/GNSIS-<version>-universal.dmg` — a universal app
+Artifact: `desktop/release/GNSIS for Mac.dmg` — a universal app
 that runs natively on Apple Silicon and Intel; users never pick a CPU
 architecture.
 
@@ -77,6 +77,12 @@ on a Mac yet.
 
 To pass one to the installed app, run its executable from Terminal, e.g.
 `GNSIS_SCALE=0.8 /Applications/GNSIS.app/Contents/MacOS/GNSIS`.
+
+## Quitting and updating
+
+The floating window stays on every desktop and over full-screen apps, which makes macOS treat GNSIS as a background app: no running dot in the Dock, no app menu with Quit, and no entry in Force Quit. GNSIS therefore has its own **Quit GNSIS**, at the bottom of the dock's ≡ menu and on a right-click of the menu bar icon.
+
+To update, quit GNSIS first, then drag the new GNSIS into Applications and choose Replace. The Mac will not replace an app that is running ("the item is in use"), and opening GNSIS while an older copy runs only brings that copy forward. Builds from before Quit existed can only be closed from Terminal: `pkill -f GNSIS.app`.
 
 ## Signing / notarization
 

@@ -39,6 +39,17 @@ export interface HostCapabilities {
    * inside an ordinary window and draws its own backdrop.
    */
   overlay: boolean;
+  /**
+   * The host has an icon in the Mac menu bar that GNSIS can tuck itself into
+   * and come back from ("Hide to menu bar").
+   */
+  menuBar: boolean;
+  /**
+   * The host can close GNSIS entirely ("Quit GNSIS" in the ≡ menu). The Mac
+   * app floats over full-screen apps, which leaves it without the Dock and
+   * app menu a Mac app is normally quit from, so GNSIS offers its own.
+   */
+  quit: boolean;
 }
 
 export type LinkState = "connecting" | "ready" | "closed" | "error";
@@ -73,6 +84,8 @@ export type LiveEvent =
       state: "working" | "waiting" | "done" | "failed" | "declined" | "needs_permission";
       text: string;
     }
+  /** The menu bar icon was clicked: GNSIS should tuck itself into it, or come back. */
+  | { type: "menubar"; want: "hide" | "show" }
   /** The visual sense. `on` is sent only once the runtime has accepted a frame. */
   | {
       type: "vision";
@@ -117,6 +130,18 @@ export interface LiveHost {
    * the UI to use the browser's own confirm box.
    */
   confirm?(message: string, confirmLabel: string): Promise<boolean>;
+  /**
+   * GNSIS has finished tucking itself into the menu bar icon: hide it until
+   * the icon is clicked. Hosts whose capabilities say `menuBar: false` need
+   * not implement it.
+   */
+  hideToMenuBar?(): void;
+  /** Where the menu bar icon is, in window pixels (it can be above the window), so GNSIS shrinks toward it. */
+  menuBarIcon?(): { x: number; y: number } | null;
+  /** The face to show as the menu bar icon: GNSIS's own face in one colour, as SVG (see lib/menuBarFace.ts). */
+  menuBarFace?(svg: string): void;
+  /** Close GNSIS entirely. Hosts whose capabilities say `quit: false` need not implement it. */
+  quit?(): void;
 }
 
 export interface Identity {

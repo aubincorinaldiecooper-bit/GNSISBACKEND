@@ -2,7 +2,7 @@ import { AGENT_ANSWER, AGENT_STEPS, APPROVAL, STEP_TICKS, type Conv, type Turn }
 import { useState } from "react";
 import { actions, activity, getState, isWorking, liveTurnsFor, phrase, presence, setState, useStore, type State } from "../store/store";
 import { liveThinking } from "../store/live";
-import { AgentFace, Face, ThinkingDots } from "../lib/face";
+import { AgentFace, Face, ThinkingDots, GNSIS_ICON_NAME } from "../lib/face";
 import * as I from "./Icons";
 
 export function ChatWindow({ height }: { height: number | "auto" }) {
@@ -37,7 +37,7 @@ function Tabs({ s }: { s: State }) {
           const on = id === s.active;
           const home = id === "gnsis";
           const p = home ? undefined : presence(c, s);
-          const face = home ? <Face name={s.identity?.publicId ?? "GNSIS"} gnsis size={22} /> : <AgentFace name={c.title} size={22} p={p} markSize="sm" pop={!!c.bornT && s.t - c.bornT < 8} />;
+          const face = home ? <Face name={s.identity?.publicId ?? GNSIS_ICON_NAME} gnsis size={22} /> : <AgentFace name={c.title} size={22} p={p} markSize="sm" pop={!!c.bornT && s.t - c.bornT < 8} />;
           return on ? (
             <div key={id} className="tab on">
               <span className="tab-label">{face}<span className="ellipsis">{c.title}</span></span>

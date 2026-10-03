@@ -42,6 +42,14 @@ class FakeBridge implements GnsisBridge {
   onScreen = (fn: (u: ScreenUpdate) => void) => { this.handlers.screen = fn; };
   onInterrupted = (fn: () => void) => { this.handlers.interrupted = fn; };
   onAction = (fn: (update: import("./bridge.js").ActionUpdate) => void) => { this.handlers.action = fn as (u: unknown) => void; };
+  menuBar = false;
+  faces: string[] = [];
+  hides = 0;
+  setMenuBarFace = (png: string) => { this.faces.push(png); };
+  hideToMenuBar = () => { this.hides++; };
+  quits = 0;
+  quit?: () => void;
+  onMenuBar = (fn: (m: unknown) => void) => { this.handlers.menubar = fn; };
   // the main process talking to us
   control(c: unknown) { this.handlers.control?.(c); }
   audio(pcm: Uint8Array) { this.handlers.audio?.(pcm); }
@@ -49,6 +57,7 @@ class FakeBridge implements GnsisBridge {
   screen(u: ScreenUpdate) { this.handlers.screen?.(u); }
   interrupted() { this.handlers.interrupted?.(); }
   action(u: import("./bridge.js").ActionUpdate) { this.handlers.action?.(u); }
+  menubar(m: unknown) { this.handlers.menubar?.(m); }
 }
 
 function fakeDevices(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void> } = {}) {
@@ -89,8 +98,10 @@ function fakeDevices(opts: { micError?: Error; visionError?: Error; micGate?: Pr
   return devices;
 }
 
-function harness(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void>; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number } = {}) {
+function harness(opts: { micError?: Error; visionError?: Error; micGate?: Promise<void>; now?: () => number; ready?: boolean; state?: LinkState; readyTimeoutMs?: number; menuBar?: boolean; quit?: boolean } = {}) {
   const bridge = new FakeBridge();
+  bridge.menuBar = opts.menuBar === true;
+  if (opts.quit) bridge.quit = () => { bridge.quits++; };
   if (opts.ready === false) bridge.state = { ready: null, connected: false, closed: false };
   if (opts.state) bridge.state = opts.state;
   const devices = fakeDevices(opts);
@@ -509,4 +520,35 @@ test("a yes/no question goes to the Mac app's own alert, and only its confirming
   assert.equal(await host.confirm("Erase your GNSIS?", "Erase"), true);
   assert.equal(await host.confirm("Erase your GNSIS?", "Erase"), false, "anything but true is a no");
   assert.deepEqual(asked, ["Erase: Erase your GNSIS?", "Erase: Erase your GNSIS?"]);
+});
+
+test("the menu bar icon: main's clicks become tuck-away and come-back events, and its place is kept", async () => {
+  const plain = harness();
+  assert.equal(plain.host.capabilities().menuBar, false, "no icon, no tucking away");
+  const { bridge, events, host } = harness({ menuBar: true });
+  await tick();
+  assert.equal(host.capabilities().menuBar, true);
+  assert.equal(host.menuBarIcon(), null);
+  bridge.menubar({ at: { x: 1390, y: -16 } });
+  assert.deepEqual(host.menuBarIcon(), { x: 1390, y: -16 });
+  assert.equal(events.filter((e) => e.type === "menubar").length, 0, "knowing where the icon is asks for nothing");
+  bridge.menubar({ want: "hide", at: { x: 1392, y: -16 } });
+  bridge.menubar({ want: "show" });
+  assert.deepEqual(events.filter((e) => e.type === "menubar"), [{ type: "menubar", want: "hide" }, { type: "menubar", want: "show" }]);
+  assert.deepEqual(host.menuBarIcon(), { x: 1392, y: -16 });
+  bridge.menubar({ want: "explode", at: { x: "1", y: Number.NaN } });
+  bridge.menubar(null);
+  assert.equal(events.filter((e) => e.type === "menubar").length, 2, "nothing else is taken as a click");
+  assert.deepEqual(host.menuBarIcon(), { x: 1392, y: -16 });
+  host.hideToMenuBar();
+  assert.equal(bridge.hides, 1);
+});
+
+test("Quit GNSIS: offered only when main can close GNSIS, and it asks main to", () => {
+  assert.equal(harness().host.capabilities().quit, false);
+  const { bridge, host } = harness({ quit: true });
+  assert.equal(host.capabilities().quit, true);
+  host.quit();
+  assert.equal(bridge.quits, 1);
+  assert.ok(bridge.logs.some((l) => l.includes("quit")));
 });
