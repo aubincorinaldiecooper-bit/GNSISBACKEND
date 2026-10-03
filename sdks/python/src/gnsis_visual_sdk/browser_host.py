@@ -6,6 +6,7 @@ import base64
 import binascii
 import json
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
@@ -29,6 +30,173 @@ class BrowserHubSocket(Protocol):
     async def send(self, message: str) -> None: ...
 
 
+class _BrowserCapturePump:
+    def __init__(
+        self,
+        socket: BrowserHubSocket,
+        stream: FrameStream,
+        decode_frame: Callable[[dict[str, Any]], bytes],
+    ) -> None:
+        self.socket = socket
+        self.stream = stream
+        self.decode_frame = decode_frame
+        self.frame_seq = 0
+        self.latest_frame: dict[str, Any] | None = None
+        self._recent_frame_ids: deque[str] = deque(maxlen=64)
+        self._recent_frames: dict[str, dict[str, Any]] = {}
+        self._condition = asyncio.Condition()
+        self._action_results: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._failure: BrowserHubError | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    def start(self) -> None:
+        if self._task is not None:
+            raise RuntimeError("browser capture pump is already started")
+        self._task = asyncio.create_task(self._run())
+
+    async def close(self) -> None:
+        task = self._task
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        for future in self._action_results.values():
+            if not future.done():
+                future.cancel()
+        self._action_results.clear()
+        self._task = None
+
+    async def next_frame(self, after_seq: int) -> tuple[int, dict[str, Any]]:
+        async with self._condition:
+            await self._condition.wait_for(
+                lambda: self.frame_seq > after_seq or self._failure is not None
+            )
+            self._raise_failure()
+            assert self.latest_frame is not None
+            return self.frame_seq, self.latest_frame
+
+    def expect_action(self, call_id: str) -> asyncio.Future[dict[str, Any]]:
+        self._raise_failure()
+        if call_id in self._action_results:
+            raise BrowserHubError(f"duplicate browser action call {call_id}")
+        future = asyncio.get_running_loop().create_future()
+        self._action_results[call_id] = future
+        return future
+
+    def frame(self, frame_id: str) -> dict[str, Any]:
+        frame = self._recent_frames.get(frame_id)
+        if frame is None:
+            raise BrowserHubError(
+                f"visual decision references unavailable frame {frame_id!r}"
+            )
+        return frame
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                message = await BrowserHubConnector._receive(self.socket)
+                message_type = message.get("type")
+                if message_type == "capture.frame":
+                    await self._publish_frame(message)
+                    continue
+                if message_type == "capture.started":
+                    continue
+                if message_type == "browser.action.result":
+                    call_id = message.get("call_id")
+                    future = (
+                        self._action_results.pop(call_id, None)
+                        if isinstance(call_id, str)
+                        else None
+                    )
+                    if future is not None and not future.done():
+                        future.set_result(message)
+                    continue
+                if message_type == "capture.stopped":
+                    reason = str(message.get("reason", "failed"))
+                    detail = str(
+                        message.get("message", "browser capture stopped unexpectedly")
+                    )
+                    if reason == "failed":
+                        raise BrowserHubError(detail)
+                    raise BrowserHubError("browser capture stopped unexpectedly")
+                if message_type == "error":
+                    call_id = message.get("call_id")
+                    error = BrowserHubError(
+                        str(message.get("message", "browser hub error"))
+                    )
+                    future = (
+                        self._action_results.pop(call_id, None)
+                        if isinstance(call_id, str)
+                        else None
+                    )
+                    if future is not None and not future.done():
+                        future.set_exception(error)
+                        continue
+                    raise error
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failure = (
+                exc if isinstance(exc, BrowserHubError) else BrowserHubError(str(exc))
+            )
+            async with self._condition:
+                self._failure = failure
+                self._condition.notify_all()
+            for future in self._action_results.values():
+                if not future.done():
+                    future.set_exception(failure)
+            self._action_results.clear()
+
+    async def _publish_frame(self, frame: dict[str, Any]) -> None:
+        source = BrowserHubConnector._required_mapping(frame, "source")
+        await self.stream.send_frame(
+            BrowserHubConnector._required_string(frame, "frame_id"),
+            BrowserHubConnector._required_non_negative_int(
+                frame,
+                "captured_at_ms",
+            ),
+            self.decode_frame(frame),
+            encoding=str(frame.get("encoding", "jpeg")),
+            video_source="screen",
+            metadata={
+                "source_kind": "browser_tab",
+                "source_tab_id": BrowserHubConnector._required_positive_int(
+                    source,
+                    "tab_id",
+                ),
+                "capture_session_id": BrowserHubConnector._required_string(
+                    source,
+                    "capture_session_id",
+                ),
+                "source_width": BrowserHubConnector._required_positive_int(
+                    source,
+                    "width",
+                ),
+                "source_height": BrowserHubConnector._required_positive_int(
+                    source,
+                    "height",
+                ),
+            },
+        )
+        async with self._condition:
+            frame_id = BrowserHubConnector._required_string(frame, "frame_id")
+            if len(self._recent_frame_ids) == self._recent_frame_ids.maxlen:
+                expired_id = self._recent_frame_ids.popleft()
+                self._recent_frames.pop(expired_id, None)
+            self._recent_frame_ids.append(frame_id)
+            self._recent_frames[frame_id] = frame
+            self.frame_seq += 1
+            self.latest_frame = frame
+            self._condition.notify_all()
+
+    def _raise_failure(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserHostConfig:
     base_url: str
@@ -36,7 +204,7 @@ class BrowserHostConfig:
     task: str
     allowed_actions: tuple[str, ...] = BROWSER_ACTIONS
     max_steps: int = 40
-    capture_fps: float = 2
+    capture_fps: float = 4
     capture_max_edge: int = 1280
     capture_quality: float = 0.82
     turn_id: str = ""
@@ -93,6 +261,7 @@ class BrowserHubConnector:
         host = self._client_factory(self.config.host_token)
         planner: VisualClient | None = None
         stream: FrameStream | None = None
+        pump: _BrowserCapturePump | None = None
         session: VisualSession | None = None
         capture_active = False
         try:
@@ -106,55 +275,31 @@ class BrowserHubConnector:
                 self.config.allowed_actions,
             )
 
-            for step in range(1, self.config.max_steps + 1):
-                await self._send(
-                    socket,
-                    {
-                        "type": "capture.start",
-                        "fps": self.config.capture_fps,
-                        "max_edge": self.config.capture_max_edge,
-                        "quality": self.config.capture_quality,
-                    },
-                )
-                capture_active = True
-                frame = await self._next_frame(socket)
-                await self._send(socket, {"type": "capture.stop"})
-                await self._wait_for_capture_stop(socket)
-                capture_active = False
+            await self._send(
+                socket,
+                {
+                    "type": "capture.start",
+                    "fps": self.config.capture_fps,
+                    "max_edge": self.config.capture_max_edge,
+                    "quality": self.config.capture_quality,
+                },
+            )
+            capture_active = True
+            pump = _BrowserCapturePump(socket, stream, self._decode_frame)
+            pump.start()
+            observed_seq = 0
 
-                image = self._decode_frame(frame)
-                await stream.send_frame(
-                    str(frame["frame_id"]),
-                    int(frame["captured_at_ms"]),
-                    image,
-                    encoding=str(frame.get("encoding", "jpeg")),
-                    video_source="screen",
-                    metadata={
-                        "source_kind": "browser_tab",
-                        "source_tab_id": self._required_positive_int(
-                            self._required_mapping(frame, "source"),
-                            "tab_id",
-                        ),
-                        "capture_session_id": self._required_string(
-                            self._required_mapping(frame, "source"),
-                            "capture_session_id",
-                        ),
-                        "source_width": self._required_positive_int(
-                            self._required_mapping(frame, "source"),
-                            "width",
-                        ),
-                        "source_height": self._required_positive_int(
-                            self._required_mapping(frame, "source"),
-                            "height",
-                        ),
-                    },
-                )
+            for step in range(1, self.config.max_steps + 1):
+                observed_seq, _ = await pump.next_frame(observed_seq)
                 response = await asyncio.to_thread(planner.decide, session.session_id)
                 decision_id = self._required_string(response, "decision_id")
+                decision = self._required_mapping(response, "decision")
+                frame = pump.frame(self._required_string(decision, "frame_id"))
                 request = self._browser_action(response, frame)
+                action_result = pump.expect_action(request["call_id"])
                 await self._send(socket, request)
                 try:
-                    result = await self._wait_for_action(socket, request["call_id"])
+                    result = await action_result
                 finally:
                     await asyncio.to_thread(
                         host.record_attempt,
@@ -171,6 +316,7 @@ class BrowserHubConnector:
                     raise BrowserHubError(
                         str(result.get("message", "browser action failed"))
                     )
+                observed_seq = pump.frame_seq
 
             return BrowserTaskResult(
                 success=False,
@@ -181,63 +327,23 @@ class BrowserHubConnector:
             if capture_active:
                 await self._send_best_effort(socket, {"type": "capture.stop"})
             try:
-                if stream is not None:
-                    await stream.close()
+                if pump is not None:
+                    await pump.close()
             finally:
                 try:
-                    if session is not None:
-                        await asyncio.to_thread(
-                            host.close_session,
-                            session.session_id,
-                        )
+                    if stream is not None:
+                        await stream.close()
                 finally:
-                    if planner is not None:
-                        planner.close()
-                    host.close()
-
-    async def _next_frame(self, socket: BrowserHubSocket) -> dict[str, Any]:
-        while True:
-            message = await self._receive(socket)
-            message_type = message.get("type")
-            if message_type == "capture.frame":
-                return message
-            if message_type == "capture.stopped" and message.get("reason") == "failed":
-                raise BrowserHubError(
-                    str(message.get("message", "browser capture failed"))
-                )
-            if message_type == "error":
-                raise BrowserHubError(str(message.get("message", "browser hub error")))
-
-    async def _wait_for_capture_stop(self, socket: BrowserHubSocket) -> None:
-        while True:
-            message = await self._receive(socket)
-            message_type = message.get("type")
-            if message_type == "capture.stopped":
-                if message.get("reason") == "failed":
-                    raise BrowserHubError(
-                        str(message.get("message", "browser capture failed"))
-                    )
-                return
-            if message_type == "error":
-                raise BrowserHubError(str(message.get("message", "browser hub error")))
-
-    async def _wait_for_action(
-        self,
-        socket: BrowserHubSocket,
-        call_id: str,
-    ) -> dict[str, Any]:
-        while True:
-            message = await self._receive(socket)
-            message_type = message.get("type")
-            if (
-                message_type == "browser.action.result"
-                and message.get("call_id") == call_id
-            ):
-                return message
-            if message_type == "error" and message.get("call_id") in {None, call_id}:
-                raise BrowserHubError(
-                    str(message.get("message", "browser action failed"))
-                )
+                    try:
+                        if session is not None:
+                            await asyncio.to_thread(
+                                host.close_session,
+                                session.session_id,
+                            )
+                    finally:
+                        if planner is not None:
+                            planner.close()
+                        host.close()
 
     def _browser_action(
         self,
@@ -347,6 +453,13 @@ class BrowserHubConnector:
             raise BrowserHubError(f"{key} must be a positive integer")
         return item
 
+    @staticmethod
+    def _required_non_negative_int(value: dict[str, Any], key: str) -> int:
+        item = value.get(key)
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            raise BrowserHubError(f"{key} must be a non-negative integer")
+        return item
+
 
 async def run_server(
     config: BrowserHostConfig,
@@ -383,7 +496,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=8766)
     parser.add_argument("--max-steps", type=int, default=40)
-    parser.add_argument("--fps", type=float, default=2)
+    parser.add_argument("--fps", type=float, default=4)
     parser.add_argument("--max-edge", type=int, default=1280)
     parser.add_argument("--quality", type=float, default=0.82)
     return parser
