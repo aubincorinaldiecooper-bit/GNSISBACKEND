@@ -35,6 +35,7 @@ from .stream import FrameStream
 DESKTOP_ACTIONS = ("click", "type", "scroll", "navigate", "back", "wait", "done")
 SCROLL_CLICKS = 10
 WAIT_SECONDS = 0.5
+MAX_CONSECUTIVE_WAITS = 3
 
 
 def capture_frame(max_edge: int = 1280) -> tuple[Screen, bytes]:
@@ -184,6 +185,7 @@ async def run_scenario(
         )
         stream = await FrameStream.connect(base_url, session)
 
+        consecutive_waits = 0
         for step in range(1, scenario.max_steps + 1):
             screen, image = await asyncio.to_thread(capture_frame)
             await stream.send_frame(
@@ -254,6 +256,18 @@ async def run_scenario(
                 entry["planner"] = plan_trace
             trace.append(entry)
             record["trace"] = [dict(item) for item in trace]
+
+            if action == "wait":
+                consecutive_waits += 1
+            else:
+                consecutive_waits = 0
+            if consecutive_waits >= MAX_CONSECUTIVE_WAITS:
+                record["success"] = False
+                record["steps"] = step
+                record["message"] = (
+                    f"stalled: {consecutive_waits} consecutive waits without progress"
+                )
+                break
 
             if result.get("done") is True:
                 record["success"] = True

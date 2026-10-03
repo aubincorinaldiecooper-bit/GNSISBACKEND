@@ -333,3 +333,50 @@ def test_planner_cannot_widen_the_legal_action_set() -> None:
         asyncio.run(connector.run(socket))
 
     assert all(message["type"] != "browser.action" for message in socket.sent)
+
+
+def test_consecutive_waits_stall_the_scenario() -> None:
+    messages = [{"type": "ready", "session_id": "hub-1"}]
+    for i in range(1, 4):
+        messages.extend(
+            [
+                {
+                    "type": "capture.started",
+                    "capture_session_id": "capture-1",
+                    "tab_id": 17,
+                },
+                frame(),
+                {"type": "capture.stopped", "reason": "requested"},
+                {
+                    "type": "browser.action.result",
+                    "call_id": f"decision-{i}",
+                    "frame_id": "frame-1",
+                    "success": True,
+                    "done": False,
+                    "message": "waited",
+                    "evidence": {},
+                },
+            ]
+        )
+    decisions = deque(
+        {
+            "decision_id": f"decision-{i}",
+            "decision": {"action": "wait", "confidence": 0.9},
+        }
+        for i in range(1, 4)
+    )
+    connector = BrowserHubConnector(
+        BrowserHostConfig(
+            base_url="http://127.0.0.1:8765",
+            host_token="host-token",
+            task="Click the marker",
+        ),
+        client_factory=lambda token: FakeClient(token, decisions),
+        stream_factory=lambda _session: asyncio.sleep(0, result=FakeStream()),
+    )
+
+    result = asyncio.run(connector.run(FakeSocket(messages)))
+
+    assert result.success is False
+    assert "stalled" in result.message
+    assert result.steps == 3

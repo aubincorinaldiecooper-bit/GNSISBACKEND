@@ -45,6 +45,7 @@ class BrowserHostConfig:
     capture_max_edge: int = 1280
     capture_quality: float = 0.82
     turn_id: str = ""
+    max_consecutive_waits: int = 3
 
     def __post_init__(self) -> None:
         task = self.task.strip()
@@ -65,6 +66,8 @@ class BrowserHostConfig:
             raise ValueError("capture_quality must be within (0, 1]")
         if not self.turn_id:
             object.__setattr__(self, "turn_id", uuid.uuid4().hex)
+        if self.max_consecutive_waits < 1:
+            raise ValueError("max_consecutive_waits must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +140,7 @@ class BrowserHubConnector:
             )
 
             trace: list[dict[str, Any]] = []
+            consecutive_waits = 0
             for step in range(1, self.config.max_steps + 1):
                 await self._send(
                     socket,
@@ -219,6 +223,20 @@ class BrowserHubConnector:
                 if plan_trace is not None:
                     entry["planner"] = plan_trace
                 trace.append(entry)
+                if request["decision"]["action"] == "wait":
+                    consecutive_waits += 1
+                else:
+                    consecutive_waits = 0
+                if consecutive_waits >= self.config.max_consecutive_waits:
+                    return BrowserTaskResult(
+                        success=False,
+                        message=(
+                            f"stalled: {consecutive_waits} consecutive waits "
+                            "without progress"
+                        ),
+                        steps=step,
+                        trace=tuple(trace),
+                    )
                 if result.get("done") is True:
                     return BrowserTaskResult(
                         success=True,
