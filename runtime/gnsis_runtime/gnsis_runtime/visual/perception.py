@@ -111,9 +111,11 @@ def parse_perception(
         raise ValueError("Panoptic perception summary is empty")
     visible_text = _text_list(value.get("visible_text"), MAX_VISIBLE_TEXT, 500)
     changes = _text_list(value.get("changes"), MAX_CHANGES, 500)
-    elements_value = value.get("elements")
-    if not isinstance(elements_value, list):
-        raise ValueError("Panoptic perception elements must be an array")
+    elements_value = _array_field(
+        value.get("elements"),
+        scalar_type=dict,
+        field_name="elements",
+    )
     elements: list[PerceivedElement] = []
     for item in elements_value[:MAX_ELEMENTS]:
         if not isinstance(item, dict):
@@ -177,13 +179,23 @@ def _text(value: Any, limit: int) -> str:
 
 
 def _text_list(value: Any, count: int, limit: int) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list):
-        raise ValueError("Panoptic perception text fields must be arrays")
+    value = _array_field(value, scalar_type=str, field_name="text fields")
     return tuple(text for item in value[:count] if (text := _text(item, limit)))
+
+
+def _array_field(
+    value: Any,
+    *,
+    scalar_type: type,
+    field_name: str,
+) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, scalar_type):
+        return [value]
+    if isinstance(value, list):
+        return value
+    raise ValueError(f"Panoptic perception {field_name} must be an array")
 
 
 def _confidence(value: Any) -> float:

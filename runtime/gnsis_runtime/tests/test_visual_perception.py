@@ -70,13 +70,20 @@ def test_perception_parser_rejects_unstructured_model_output() -> None:
         )
 
 
-def test_perception_parser_normalizes_scalar_and_missing_text_fields() -> None:
+def test_perception_parser_normalizes_scalar_and_missing_array_fields() -> None:
     result = parse_perception(
         json.dumps(
             {
                 "summary": "A product listing is visible.",
                 "visible_text": "ESSENTIALS",
-                "elements": [],
+                "elements": {
+                    "label": "Essentials item",
+                    "role": "link",
+                    "text": "ESSENTIALS",
+                    "box": [10, 20, 300, 400],
+                    "state": "visible",
+                    "confidence": 0.7,
+                },
                 "changes": None,
                 "confidence": 0.8,
             }
@@ -89,3 +96,5 @@ def test_perception_parser_normalizes_scalar_and_missing_text_fields() -> None:
 
     assert result.visible_text == ("ESSENTIALS",)
     assert result.changes == ()
+    assert len(result.elements) == 1
+    assert result.elements[0].label == "Essentials item"
