@@ -25,6 +25,8 @@ class FixedPolicy:
         self.confidence = confidence
         self.perception_frames = ()
         self.perception_focus = None
+        self.perception_target = None
+        self.perceptions = 0
 
     def decide(
         self,
@@ -45,9 +47,11 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
-    def perceive(self, frames, motion, viewport, focus=None):
+    def perceive(self, frames, motion, viewport, focus=None, target=None):
+        self.perceptions += 1
         self.perception_frames = tuple(frame.frame_id for frame in frames)
         self.perception_focus = focus
+        self.perception_target = target
         return VisualPerception(
             summary="A settings window is visible.",
             visible_text=("Settings", "Save"),
@@ -152,12 +156,17 @@ def _service(policy=None, **kwargs):
     return VisualService(selected, **kwargs)
 
 
-def _frame(frame_id: str, captured_at_ms: int) -> ScreenFrame:
+def _frame(
+    frame_id: str,
+    captured_at_ms: int,
+    color: str = "white",
+    size: tuple[int, int] = (64, 32),
+) -> ScreenFrame:
     return ScreenFrame(
         frame_id=frame_id,
-        image=Image.new("RGB", (64, 32), "white"),
+        image=Image.new("RGB", size, color),
         captured_at_ms=captured_at_ms,
-        metadata={"video_source": "screen", "width": 64, "height": 32},
+        metadata={"video_source": "screen", "width": size[0], "height": size[1]},
     )
 
 
@@ -236,6 +245,25 @@ def test_service_passes_optional_perception_focus_without_setting_a_task() -> No
     assert result["perception"]["frame_id"] == "f1"
     assert policy.perception_focus == "What is inside the magenta marker?"
     assert service.state(session_id)["goal"] is None
+
+
+def test_service_grounds_a_target_point_only_inside_the_current_viewport() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    result = service.perceive(session_id, "perception-1", None, (10, 20))
+
+    assert result["perception"]["frame_id"] == "f1"
+    assert policy.perception_target == (10, 20)
+    assert policy.perception_focus is None
+
+    with pytest.raises(VisualServiceError) as excinfo:
+        service.perceive(session_id, "perception-2", None, (64, 0))
+    assert excinfo.value.code == "invalid_target"
+    assert excinfo.value.status_code == 400
+    assert service.state(session_id)["usage"]["perceptions"] == 1
 
 
 def test_service_perception_requires_a_frame_but_not_a_task() -> None:
@@ -667,3 +695,92 @@ def test_set_task_is_idempotent_and_preserves_replay() -> None:
     service.set_task(session_id, "different goal")
     replacement = service.decide(session_id, "request-1")
     assert replacement["decision_id"] != first["decision_id"]
+
+
+def test_service_reuses_a_still_screen_perception_without_re_inferring() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+    service.publish_frame(session_id, _frame("f2", 1250))
+
+    first = service.perceive(session_id, "p1")
+    inference_ms = service.state(session_id)["usage"]["inference_ms"]
+    service.publish_frame(session_id, _frame("f3", 1500))
+    reused = service.perceive(session_id, "p2")
+
+    assert policy.perceptions == 1
+    assert first["reused_from"] is None
+    assert reused["reused_from"] == "p1"
+    assert reused["current"] is True
+    assert reused["frame_seq"] == 3
+    assert reused["perception"]["frame_id"] == "f2"
+    assert reused["perception"]["observed_frame_ids"] == ["f1", "f2"]
+    assert service.perceive(session_id, "p2") == reused
+    usage = service.state(session_id)["usage"]
+    assert usage["perceptions"] == 2
+    assert usage["inference_ms"] == inference_ms
+
+
+def test_service_re_infers_when_the_screen_focus_target_or_viewport_changes() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+    service.perceive(session_id, "p1")
+
+    service.perceive(session_id, "focus", "What is highlighted?")
+    service.perceive(session_id, "target", None, (10, 20))
+    service.perceive(session_id, "both", "What is highlighted?", (10, 20))
+    assert policy.perceptions == 4
+
+    assert service.perceive(session_id, "p1-again")["reused_from"] == "p1"
+    focused_again = service.perceive(session_id, "focus-again", "What is highlighted?")
+    assert focused_again["reused_from"] == "focus"
+    assert policy.perceptions == 4
+
+    service.publish_frame(session_id, _frame("f2", 1250, "black"))
+    changed = service.perceive(session_id, "p2")
+    assert changed["reused_from"] is None
+    assert changed["perception"]["frame_id"] == "f2"
+    assert policy.perceptions == 5
+
+    service.publish_frame(session_id, _frame("f3", 3000, "black", (128, 64)))
+    assert service.perceive(session_id, "p3")["reused_from"] is None
+    assert policy.perceptions == 6
+
+
+def test_service_never_reuses_a_perception_of_a_changing_window() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000, "white"))
+    service.publish_frame(session_id, _frame("f2", 1250, "black"))
+    service.perceive(session_id, "p1")
+
+    service.publish_frame(session_id, _frame("f3", 2500, "black"))
+    service.publish_frame(session_id, _frame("f4", 2750, "black"))
+    service.perceive(session_id, "p2")
+    assert policy.perceptions == 2
+    assert policy.perception_frames == ("f3", "f4")
+
+    service.publish_frame(session_id, _frame("f5", 3000, "black"))
+    assert service.perceive(session_id, "p3")["reused_from"] == "p2"
+    assert policy.perceptions == 2
+
+
+def test_service_reuse_cache_is_bounded_and_cleared_on_close() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+    for index in range(12):
+        service.perceive(session_id, f"p{index}", f"question {index}")
+
+    session = service._session(session_id)
+    assert len(session.perception_reuse) == 8
+    assert service.perceive(session_id, "old", "question 0")["reused_from"] is None
+    assert service.perceive(session_id, "new", "question 11")["reused_from"] == "p11"
+
+    service.close_session(session_id)
+    assert session.perception_reuse == {}

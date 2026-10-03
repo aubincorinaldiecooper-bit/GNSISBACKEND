@@ -4,6 +4,9 @@ Serves `gnsis_runtime.visual.serve` — the authenticated frame-stream +
 bounded-decision API that host connectors (browser Hub, desktop Host) call.
 The JEV engine runs on one GPU: a frozen MiniCPM-V 4.6 backbone (from the HF
 cache volume) plus the JEV decision head checkpoint on `gnsis-visual-data`.
+Florence-2 (focused target grounding/OCR) shares the same container and GPU; it
+loads lazily on the first target request, so idle cold starts pay nothing for
+it. The Qwen3-VL fallback stays off unless GNSIS_VISUAL_FALLBACK_GROUNDER=qwen.
 
 One container on purpose: VisualService keeps sessions, frame buffers and
 replay state in process memory, so every request for a session must land in
@@ -47,6 +50,15 @@ hf_cache = modal.Volume.from_name(HF_CACHE_VOLUME_NAME, create_if_missing=False)
 # the BackboneConfig defaults; the .json sidecar records the training config).
 JEV_HEAD_PATH = "/visual/heads/jev-896-16x.pt"
 BACKBONE_REPO = "openbmb/MiniCPM-V-4.6"
+GROUNDER_REPO = "florence-community/Florence-2-large-ft"
+GROUNDER_REVISION = "26b734a54fdfbf9c398351eedfabb7f27fc470b7"
+# Container seconds are billed whether or not a request is in flight; one
+# minute of warm idle covers a connector's inter-request gaps without paying
+# for five.
+SCALEDOWN_WINDOW_SEC = 60
+# L40S is the measured production tier; override (e.g. GNSIS_VISUAL_GPU=L4) only
+# for a cost/latency measurement run, never silently in a deploy.
+GPU = os.environ.get("GNSIS_VISUAL_GPU") or "L40S"
 
 host_secret = modal.Secret.from_dict(
     {"GNSIS_VISUAL_HOST_TOKEN": os.environ.get("GNSIS_VISUAL_HOST_TOKEN", "")}
@@ -84,13 +96,22 @@ app = modal.App(APP_NAME, image=image, include_source=True)
 
 @app.function(volumes={"/visual": visual_data, "/hf-cache": hf_cache}, timeout=600)
 def cache_gnsis_visual() -> dict[str, str]:
-    """Validate that both volumes hold the assets this service loads."""
+    """Validate the volumes hold the assets this service loads; cache Florence-2."""
     from pathlib import Path
 
+    from huggingface_hub import snapshot_download
+
+    grounder_path = snapshot_download(
+        GROUNDER_REPO,
+        revision=GROUNDER_REVISION,
+        cache_dir="/hf-cache/hub",
+    )
+    hf_cache.commit()
     required = {
         "jev_head": Path(JEV_HEAD_PATH),
         "jev_head_config": Path("/visual/heads/jev-896-16x.json"),
         "backbone_cache": Path("/hf-cache/hub/models--openbmb--MiniCPM-V-4.6"),
+        "grounder_cache": Path(grounder_path),
     }
     for label, path in required.items():
         if not path.exists():
@@ -102,6 +123,8 @@ def _serve() -> subprocess.Popen[bytes]:
     env = os.environ.copy()
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     env["HF_HUB_CACHE"] = "/hf-cache/hub"
+    env.setdefault("GNSIS_VISUAL_GROUNDER", "florence")
+    env.setdefault("GNSIS_VISUAL_FALLBACK_GROUNDER", "none")
     return subprocess.Popen(
         [
             "smaller-gnsis-serve",
@@ -124,12 +147,12 @@ def _serve() -> subprocess.Popen[bytes]:
 
 
 @app.function(
-    gpu="L40S",
+    gpu=GPU,
     volumes={"/visual": visual_data, "/hf-cache": hf_cache},
     secrets=[host_secret],
     timeout=24 * 60 * 60,
     min_containers=0,
-    scaledown_window=300,
+    scaledown_window=SCALEDOWN_WINDOW_SEC,
     max_containers=1,
 )
 # Session state is process-local, so all of a session's requests must reach
@@ -144,7 +167,7 @@ def gnsis_visual_server() -> None:
 
 
 @app.function(
-    gpu="L40S",
+    gpu=GPU,
     volumes={"/visual": visual_data, "/hf-cache": hf_cache},
     secrets=[host_secret],
     timeout=24 * 60 * 60,

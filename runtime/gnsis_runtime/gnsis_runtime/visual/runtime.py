@@ -8,19 +8,22 @@ structured decisions for an environment adapter to execute.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, Sequence
 
 from PIL import Image, ImageChops, ImageStat
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .legal import IllegalDecision, LegalActionSet, legal_actions
-from .perception import VisualPerception
+from .perception import VisualPerception, validate_target_point
 from .schema import ACTIONS, Decision, DecisionError, bounded_actions
 
 MAX_HISTORY = 6
 MOTION_WINDOW_MS = 800
 PERCEPTION_WINDOW_MS = 1_000
 MAX_PERCEPTION_FRAMES = 4
+# Mean grayscale difference (0..1) under which two 48x30 thumbnails are the same
+# screen; about one gray level, so JPEG re-encoding of a still screen passes.
+PERCEPTION_REUSE_DISTANCE = 0.004
 _SIGNATURE_SIZE = (48, 30)
 DEFAULT_MIN_CONFIDENCE = 0.5
 DEFAULT_UNSETTLED_MOTION = 0.35
@@ -54,6 +57,7 @@ class PanopticPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> VisualPerception: ...
 
 
@@ -68,6 +72,7 @@ class RuntimeFrameView:
     frame_id: str
     _image: Image.Image
     _signature: Any | None = None
+    _thumbnail: Image.Image | None = None
 
     @classmethod
     def from_screen_frame(cls, frame: ScreenFrame) -> "RuntimeFrameView":
@@ -78,6 +83,13 @@ class RuntimeFrameView:
 
     def image(self) -> Image.Image:
         return self._image
+
+    def thumbnail(self) -> Image.Image:
+        if self._thumbnail is None:
+            self._thumbnail = self._image.convert("L").resize(
+                _SIGNATURE_SIZE, Image.BILINEAR
+            )
+        return self._thumbnail
 
     @property
     def signature(self) -> Any:
@@ -99,6 +111,25 @@ def _thumbnail(frame: ScreenFrame) -> Image.Image:
     if not isinstance(image, Image.Image):
         raise TypeError("visual decision frame must contain a PIL image")
     return image.convert("L").resize(_SIGNATURE_SIZE, Image.BILINEAR)
+
+
+def thumbnail_distance(a: Image.Image, b: Image.Image) -> float:
+    """Mean absolute grayscale difference between two thumbnails, in 0..1."""
+
+    return float(ImageStat.Stat(ImageChops.difference(a, b)).mean[0]) / 255.0
+
+
+def unchanged_window(
+    views: Sequence[RuntimeFrameView],
+    reference: Image.Image,
+    *,
+    tolerance: float = PERCEPTION_REUSE_DISTANCE,
+) -> bool:
+    """Whether every frame in the window shows the same screen as ``reference``."""
+
+    return bool(views) and all(
+        thumbnail_distance(view.thumbnail(), reference) <= tolerance for view in views
+    )
 
 
 def recent_motion(
@@ -469,11 +500,15 @@ class PersistentPanopticSession:
         | None = None,
         *,
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> VisualPerception:
         views, motion, viewport = snapshot or self.perception_snapshot()
-        if focus is None:
-            return self.policy.perceive(views, motion, viewport)
-        return self.policy.perceive(views, motion, viewport, focus)
+        options: dict[str, Any] = {}
+        if focus is not None:
+            options["focus"] = focus
+        if target is not None:
+            options["target"] = validate_target_point(target, viewport)
+        return self.policy.perceive(views, motion, viewport, **options)
 
     def _attempt_frame(self, decision: Decision) -> ScreenFrame | None:
         if decision.frame_id is not None:

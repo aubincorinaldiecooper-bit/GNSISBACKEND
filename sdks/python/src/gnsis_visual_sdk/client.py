@@ -141,11 +141,16 @@ class VisualClient:
         session_id: str,
         request_id: str | None = None,
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> dict[str, Any]:
+        """Describe the current screen; ``target`` is a viewport pixel (x, y) to ground."""
+
         stable_request_id = request_id if request_id is not None else uuid.uuid4().hex
-        payload = {"request_id": stable_request_id}
+        payload: dict[str, Any] = {"request_id": stable_request_id}
         if focus is not None:
             payload["focus"] = focus
+        if target is not None:
+            payload["target"] = {"x": int(target[0]), "y": int(target[1])}
         return self._request(
             "POST",
             f"/v1/visual/sessions/{quote(session_id, safe='')}/perceptions",

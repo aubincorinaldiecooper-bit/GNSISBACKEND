@@ -86,10 +86,13 @@ class VisualAPIClient:
         self,
         request_id: str,
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> dict[str, object]:
         payload: dict[str, object] = {"request_id": request_id}
         if focus is not None:
             payload["focus"] = focus
+        if target is not None:
+            payload["target"] = {"x": int(target[0]), "y": int(target[1])}
         return self._request("POST", "/perceptions", payload)
 
     def state(self) -> dict[str, object]:
@@ -173,14 +176,21 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
     def visual_perceive(
         request_id: str,
         focus: str | None = None,
+        target_x: int | None = None,
+        target_y: int | None = None,
     ) -> dict[str, object]:
         """Describe the current visible screen and recent visible changes.
 
-        Optionally focus the description on one visible question. This does not
-        require a task. Reuse the same request_id when retrying.
+        Optionally focus the description on one visible question, and/or supply
+        a viewport pixel (target_x, target_y) to ground: the response then
+        includes what is visibly at that point with a validated box. This does
+        not require a task. Reuse the same request_id when retrying.
         """
 
-        return client.perceive(request_id, focus)
+        if (target_x is None) != (target_y is None):
+            raise ValueError("target_x and target_y must be supplied together")
+        target = None if target_x is None or target_y is None else (target_x, target_y)
+        return client.perceive(request_id, focus, target)
 
     @server.tool()
     def visual_state() -> dict[str, object]:

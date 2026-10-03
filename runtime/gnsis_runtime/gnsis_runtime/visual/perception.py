@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 MAX_ELEMENTS = 80
 MAX_VISIBLE_TEXT = 120
 MAX_CHANGES = 40
+RAW_LOG_CHARS = 400
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +34,37 @@ class PerceivedElement:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetGrounding:
+    """What a focused grounder found at one caller-supplied viewport point.
+
+    ``box`` is ``(x, y, width, height)`` in current-viewport pixels and, when
+    present, always contains ``point``. ``status`` is ``grounded`` when a
+    validated box was found, ``unresolved`` when the grounder ran but nothing
+    visible contained the point, and ``failed`` when the grounder raised.
+    ``confidence`` is a validated structural score, not a raw model probability.
+    """
+
+    point: tuple[int, int]
+    status: str
+    label: str
+    text: str
+    box: tuple[int, int, int, int] | None
+    confidence: float
+    source: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "point": {"x": self.point[0], "y": self.point[1]},
+            "status": self.status,
+            "label": self.label,
+            "text": self.text,
+            "box": None if self.box is None else list(self.box),
+            "confidence": self.confidence,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VisualPerception:
     summary: str
     visible_text: tuple[str, ...]
@@ -40,6 +75,7 @@ class VisualPerception:
     observed_frame_ids: tuple[str, ...]
     motion: float
     viewport: tuple[int, int]
+    grounding: TargetGrounding | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -55,7 +91,26 @@ class VisualPerception:
                 "width": self.viewport[0],
                 "height": self.viewport[1],
             },
+            "grounding": None if self.grounding is None else self.grounding.to_json(),
         }
+
+
+def validate_target_point(
+    target: tuple[int, int],
+    viewport: tuple[int, int],
+) -> tuple[int, int]:
+    """Reject a target point that is not an integer pixel inside the viewport."""
+
+    try:
+        x, y = (int(value) for value in target)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("target point must contain two integers") from exc
+    width, height = viewport
+    if not (0 <= x < width and 0 <= y < height):
+        raise ValueError(
+            f"target point ({x}, {y}) is outside the {width}x{height} viewport"
+        )
+    return x, y
 
 
 def build_perception_prompt(
@@ -63,6 +118,7 @@ def build_perception_prompt(
     *,
     temporal: bool,
     focus: str | None = None,
+    target: tuple[int, int] | None = None,
 ) -> str:
     width, height = viewport
     temporal_context = (
@@ -81,6 +137,8 @@ def build_perception_prompt(
             'window|menu|other","text":"visible text or empty","box":[x,y,width,height],'
             '"state":"visible state or empty","confidence":0.0}],'
             '"changes":["visible change"],"confidence":0.0}',
+            "That shape is a template: replace every placeholder with values read from "
+            "the screen and never return the placeholder words themselves.",
             "List meaningful visible elements, including controls, text regions, windows, "
             "dialogs, menus, and status indicators.",
             "Boxes use current-viewport pixel coordinates and must stay inside the viewport.",
@@ -90,6 +148,16 @@ def build_perception_prompt(
             "Do not infer hidden content, DOM data, credentials, or off-screen elements.",
     ]
     focused = " ".join(str(focus or "").split())[:1_000]
+    if target is not None:
+        x, y = validate_target_point(target, viewport)
+        lines.extend(
+            [
+                f"The caller is pointing at viewport pixel ({x}, {y}) in the current "
+                "view. Nothing is drawn there; locate it from the coordinates.",
+                "Describe the visible element under that point in the summary and "
+                "include it in elements with a box that contains the point.",
+            ]
+        )
     if focused:
         lines.extend(
             [
@@ -101,6 +169,94 @@ def build_perception_prompt(
             ]
         )
     return "\n".join(lines)
+
+
+def parse_perception_or_grounding(
+    raw: str,
+    grounding: Callable[[], TargetGrounding] | None,
+    *,
+    frame_id: str,
+    observed_frame_ids: Sequence[str],
+    motion: float,
+    viewport: tuple[int, int],
+) -> VisualPerception:
+    """Parse the continuous model's reply; fall back to a grounded target.
+
+    ``grounding`` yields the focused grounder's result on demand. When the
+    continuous reply is unusable and that result is ``grounded``, the caller
+    still gets an answer for the point it asked about; otherwise the parse
+    error propagates. The unusable reply is logged, bounded, for diagnosis.
+    """
+
+    provenance = {
+        "frame_id": frame_id,
+        "observed_frame_ids": observed_frame_ids,
+        "motion": motion,
+        "viewport": viewport,
+    }
+    try:
+        return parse_perception(raw, **provenance)
+    except ValueError as exc:
+        log.warning(
+            "%s (%d chars); head=%r tail=%r",
+            exc,
+            len(raw),
+            raw[:RAW_LOG_CHARS],
+            raw[-RAW_LOG_CHARS:],
+        )
+        if grounding is None:
+            raise
+        resolved = grounding()
+        if resolved.status != "grounded" or resolved.box is None:
+            raise
+        return perception_from_grounding(resolved, **provenance)
+
+
+def perception_from_grounding(
+    grounding: TargetGrounding,
+    *,
+    frame_id: str,
+    observed_frame_ids: Sequence[str],
+    motion: float,
+    viewport: tuple[int, int],
+) -> VisualPerception:
+    """A perception that covers only a validated target grounding.
+
+    Used when the continuous model returned nothing parseable but the focused
+    grounder found the element under the caller's point; the summary says so
+    plainly rather than describing the rest of the frame.
+    """
+
+    if grounding.status != "grounded" or grounding.box is None:
+        raise ValueError("only a grounded target can stand in for a perception")
+    x, y = grounding.point
+    found = grounding.label or "an element"
+    if grounding.text:
+        found = f"{found} reading {grounding.text!r}"
+    summary = (
+        f"Only the target point ({x}, {y}) was resolved: {found}. "
+        "The rest of the frame was not described."
+    )
+    element = PerceivedElement(
+        label=grounding.label or "target",
+        role="text" if grounding.text and not grounding.label else "other",
+        text=grounding.text,
+        box=grounding.box,
+        state="",
+        confidence=grounding.confidence,
+    )
+    return VisualPerception(
+        summary=summary,
+        visible_text=(grounding.text,) if grounding.text else (),
+        elements=(element,),
+        changes=(),
+        confidence=grounding.confidence,
+        frame_id=frame_id,
+        observed_frame_ids=tuple(observed_frame_ids),
+        motion=motion,
+        viewport=viewport,
+        grounding=grounding,
+    )
 
 
 def parse_perception(

@@ -151,6 +151,7 @@ def test_perceive_retries_with_the_same_request_id(monkeypatch) -> None:
             "session-1",
             "perception-1",
             "What is inside the marker?",
+            target=(175, 387),
         )
     finally:
         client.close()
@@ -164,10 +165,12 @@ def test_perceive_retries_with_the_same_request_id(monkeypatch) -> None:
         {
             "request_id": "perception-1",
             "focus": "What is inside the marker?",
+            "target": {"x": 175, "y": 387},
         },
         {
             "request_id": "perception-1",
             "focus": "What is inside the marker?",
+            "target": {"x": 175, "y": 387},
         },
     ]
 

@@ -54,6 +54,14 @@ Authorization: Bearer <host token or session-scoped planner token>
    a task. The response includes a summary, visible text, visible elements with
    pixel boxes and confidence, the current frame ID, and up to four ordered frame
    IDs from the latest one-second rolling visual window.
+   An optional `focus` question narrows the description. An optional
+   `target: {"x", "y"}` (current-viewport pixel, nothing is drawn on the frame)
+   adds a `grounding` object: what is visibly at that point, with `status`
+   (`grounded`, `unresolved`, or `failed`), `label`, `text`, a `box` that is
+   only present when it contains the point, a validated `confidence`, and the
+   `source` model. MiniCPM keeps describing the rolling scene; a lazily loaded
+   Florence-2 sidecar grounds the point, with an optional Qwen3-VL fallback
+   (`GNSIS_VISUAL_FALLBACK_GROUNDER=qwen`, off by default).
 5. `PUT /v1/visual/sessions/{session_id}/task`
    binds the goal and legal action set.
 6. `POST /v1/visual/sessions/{session_id}/decisions`
@@ -102,6 +110,14 @@ expired-ID window and returns `request_expired`; use a new request ID rather
 than retrying an expired one. The current frame must remain unchanged while a
 perception response is generated, otherwise the request returns
 `stale_perception`.
+
+A still screen is not re-inferred. When every frame in the rolling window shows
+the same screen as a perception already produced for the same `focus`, `target`
+and viewport, the response reuses that perception and names the original request
+in `reused_from` (otherwise `null`); its `frame_id` and `observed_frame_ids`
+still identify the frames that were actually examined, and `current` is true
+because the current frame is visually the same. Only perceptions of a still
+window are kept for reuse, at most eight per session, as 48x30 thumbnails.
 
 ## Client SDKs
 
