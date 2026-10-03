@@ -120,7 +120,9 @@ def test_observation_hides_everything_outside_the_contract() -> None:
 
 def test_planner_accepts_top_level_xy_targets() -> None:
     planner = planner_with(
-        completion(json.dumps({"action": "click", "x": 0.2, "y": 0.1, "why": "top-left"}))
+        completion(
+            json.dumps({"action": "click", "x": 0.2, "y": 0.1, "why": "top-left"})
+        )
     )
 
     decision = asyncio.run(planner.plan(observation()))
