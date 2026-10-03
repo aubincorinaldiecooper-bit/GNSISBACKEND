@@ -7,15 +7,36 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from PIL import Image
+
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .metering import UsageReport
-from .perception import validate_target_point
+from .perception import VisualPerception, validate_target_point
 from .runtime import (
     PanopticPolicy,
     PersistentPanopticSession,
     VisualDecisionProvider,
+    unchanged_window,
 )
 from .schema import Decision, bounded_actions
+
+
+MAX_PERCEPTION_REUSE_ENTRIES = 8
+
+PerceptionKey = tuple[str | None, tuple[int, int] | None, tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class ReusablePerception:
+    """A perception of a still screen, kept so the same screen is not re-inferred.
+
+    Only the 48x30 thumbnail of the frame it described is retained, never the
+    frame itself; the perception keeps its original frame provenance.
+    """
+
+    request_id: str
+    thumbnail: Image.Image
+    perception: VisualPerception
 
 
 class VisualServiceError(RuntimeError):
@@ -73,6 +94,9 @@ class VisualServiceSession:
         default_factory=OrderedDict
     )
     expired_perception_requests: OrderedDict[str, None] = field(
+        default_factory=OrderedDict
+    )
+    perception_reuse: OrderedDict[PerceptionKey, ReusablePerception] = field(
         default_factory=OrderedDict
     )
     outstanding: OrderedDict[str, tuple[Decision, int]] = field(
@@ -198,6 +222,7 @@ class VisualService:
                 session.expired_requests.clear()
                 session.perception_replay.clear()
                 session.expired_perception_requests.clear()
+                session.perception_reuse.clear()
                 session.outstanding.clear()
 
     def authorize_tenant(self, session_id: str, tenant: SessionTenant) -> None:
@@ -469,11 +494,26 @@ class VisualService:
                     )
                 seq = session.frame_seq
                 snapshot = session.panoptic_session.perception_snapshot()
+                views, _motion, viewport = snapshot
                 if target is not None:
                     try:
-                        target = validate_target_point(target, snapshot[2])
+                        target = validate_target_point(target, viewport)
                     except ValueError as exc:
                         raise VisualServiceError("invalid_target", str(exc)) from exc
+                key: PerceptionKey = (focus, target, viewport)
+                reusable = session.perception_reuse.get(key)
+                if reusable is not None and unchanged_window(views, reusable.thumbnail):
+                    session.perception_reuse.move_to_end(key)
+                    response = self._remember_perception(
+                        session,
+                        request_id,
+                        reusable.perception,
+                        seq,
+                        current=True,
+                        reused_from=reusable.request_id,
+                    )
+                    self._record_usage(session, perceptions=1)
+                    return dict(response)
                 self._reserve_inference(session)
             started = time.monotonic()
             try:
@@ -501,27 +541,53 @@ class VisualService:
                 current = (
                     session.frame_seq == seq and perception.frame_id == latest.frame_id
                 )
-                response = {
-                    "request_id": request_id,
-                    "perception": perception.to_json(),
-                    "frame_seq": seq,
-                    "current": current,
-                }
-                session.perception_replay[request_id] = response
-                while len(session.perception_replay) > self.max_replay_entries:
-                    expired_request_id, _ = session.perception_replay.popitem(last=False)
-                    session.expired_perception_requests[expired_request_id] = None
-                    while (
-                        len(session.expired_perception_requests)
-                        > self.max_expired_requests
-                    ):
-                        session.expired_perception_requests.popitem(last=False)
+                response = self._remember_perception(
+                    session, request_id, perception, seq, current=current
+                )
+                if unchanged_window(views, views[-1].thumbnail()):
+                    session.perception_reuse[key] = ReusablePerception(
+                        request_id, views[-1].thumbnail(), perception
+                    )
+                    session.perception_reuse.move_to_end(key)
+                    while len(session.perception_reuse) > MAX_PERCEPTION_REUSE_ENTRIES:
+                        session.perception_reuse.popitem(last=False)
                 self._record_usage(
                     session,
                     perceptions=1,
                     inference_ms=inference_ms,
                 )
                 return dict(response)
+
+    def _remember_perception(
+        self,
+        session: VisualServiceSession,
+        request_id: str,
+        perception: VisualPerception,
+        seq: int,
+        *,
+        current: bool,
+        reused_from: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the perception response and enter it in the replay window.
+
+        ``reused_from`` names the request whose inference this response reuses;
+        the perception's own frame IDs still say which frames were examined.
+        """
+
+        response = {
+            "request_id": request_id,
+            "perception": perception.to_json(),
+            "frame_seq": seq,
+            "current": current,
+            "reused_from": reused_from,
+        }
+        session.perception_replay[request_id] = response
+        while len(session.perception_replay) > self.max_replay_entries:
+            expired_request_id, _ = session.perception_replay.popitem(last=False)
+            session.expired_perception_requests[expired_request_id] = None
+            while len(session.expired_perception_requests) > self.max_expired_requests:
+                session.expired_perception_requests.popitem(last=False)
+        return response
 
     def record_attempt(self, session_id: str, decision_id: str) -> dict[str, Any]:
         session = self._session(session_id)
