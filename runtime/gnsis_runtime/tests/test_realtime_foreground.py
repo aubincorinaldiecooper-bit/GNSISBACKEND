@@ -187,19 +187,24 @@ def test_the_worker_provider_and_the_foreground_provider_are_separate(tmp_path):
     assert config.realtime.provider == "venus"
 
 
-def test_serve_refuses_a_provider_its_sockets_do_not_drive_yet():
-    from gnsis_runtime.cli import require_live_foreground_provider
+def test_serve_builds_the_native_app_for_venus_without_loading_the_thinker(
+    tmp_path, monkeypatch
+):
+    from gnsis_runtime import cli
 
-    class Config:
-        realtime = RealtimeConfig(provider="venus", venus_url="http://v:1")
+    def no_thinker(config):
+        raise AssertionError("the Thinker must not load for realtime.provider: venus")
 
-    with pytest.raises(ValueError, match="gnsis-realtime-bench"):
-        require_live_foreground_provider(Config())  # type: ignore[arg-type]
-
-    class Thinker:
-        realtime = RealtimeConfig()
-
-    require_live_foreground_provider(Thinker())  # type: ignore[arg-type]
+    monkeypatch.setattr(cli, "_load_thinker", no_thinker)
+    config = cli.load_config("runtime/configs/gnsis-venus-bench.yaml")
+    config = replace(
+        config,
+        server=replace(config.server, runtime_dir=str(tmp_path / "rt")),
+    )
+    app = cli.build_app(config)
+    paths = {route.path for route in app.routes}
+    assert {"/ws/duplex", "/ws/screen", "/health"} <= paths
+    assert app.title == "GNSIS Native Duplex"
 
 
 def test_the_shipped_configs_select_their_providers():
@@ -582,3 +587,33 @@ def test_bench_inputs_load_from_wav_and_a_frame_directory(tmp_path):
     ]
     with pytest.raises(ValueError):
         load_frames(frames_dir, fps=0)
+
+
+def test_each_provider_is_asked_for_the_same_behaviour_in_its_own_form():
+    from mcpmft.prompts import GNSIS_DUPLEX_SYSTEM_PROMPT
+    from gnsis_runtime.providers.foreground import foreground_system_prompt
+
+    thinker = foreground_system_prompt(
+        RealtimeConfig(), thinker_prompt=GNSIS_DUPLEX_SYSTEM_PROMPT
+    )
+    venus = foreground_system_prompt(
+        RealtimeConfig(provider="venus", venus_url="http://v:1"),
+        thinker_prompt=GNSIS_DUPLEX_SYSTEM_PROMPT,
+    )
+    # The Thinker keeps the prompt it was trained on, unit protocol included.
+    assert thinker is GNSIS_DUPLEX_SYSTEM_PROMPT
+    assert "<listen>" in thinker and "<tool_call>" in thinker
+    # A native full-duplex model owns turn-taking: same guidance, no protocol.
+    assert "<listen>" not in venus and "<speak>" not in venus
+    assert "<tool_call>" not in venus
+    for shared in (
+        "RECENT VISUAL CONTEXT",
+        "Do not invent continuity",
+        "task_start",
+        "Toronto, Canada",
+    ):
+        assert shared in thinker and shared in venus
+    assert "混元" not in thinker
+    # An explicit prompt wins for either provider.
+    override = RealtimeConfig(system_prompt="say less")
+    assert foreground_system_prompt(override, thinker_prompt="x") == "say less"

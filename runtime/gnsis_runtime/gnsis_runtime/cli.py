@@ -694,29 +694,35 @@ def build_foreground_provider(config: ReleaseConfig):
     )
 
 
-def require_live_foreground_provider(config: ReleaseConfig) -> None:
-    """The live sockets still drive the Thinker directly.
+def build_native_app(config: ReleaseConfig):
+    """Serve a native full-duplex provider on the Host's live sockets.
 
-    ``realtime.provider`` selects the model behind the provider seam, which is
-    what ``gnsis-realtime-bench`` drives; ``gnsis-serve`` has not moved its
-    sockets onto that seam yet, so it refuses any other provider instead of
-    booting a Thinker the config said not to use.
+    No Thinker is loaded: the model lives behind ``realtime.venus_url``.
     """
 
-    if config.realtime.provider != "thinker":
-        raise ValueError(
-            f"realtime.provider {config.realtime.provider!r} is not served by "
-            "gnsis-serve yet: /ws/duplex drives the Thinker directly. Drive "
-            "it through gnsis-realtime-bench, or set realtime.provider: thinker."
-        )
+    from .native_duplex import create_native_duplex_app
+    from .providers.foreground import build_realtime_provider, foreground_system_prompt
+
+    runtime_dir = Path(config.server.runtime_dir).expanduser().resolve()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return create_native_duplex_app(
+        build_realtime_provider(config.realtime),
+        settings=_duplex_settings(config),
+        media_dir=runtime_dir / "media",
+        system_prompt=foreground_system_prompt(
+            config.realtime, thinker_prompt=config.duplex.system_prompt
+        ),
+    )
 
 
 def build_app(config: ReleaseConfig):
+    if config.realtime.provider != "thinker":
+        return build_native_app(config)
     from .codex_coordinator import CodexCoordinator, CodexCoordinatorConfig
     from .contracts import storage_key
     from .gateway import GNSISGateway, ProviderRegistry
     from .memory_provider import HttpMemoryProvider
-    from .online_duplex import OnlineDuplexSettings, create_online_duplex_app
+    from .online_duplex import create_online_duplex_app
     from .providers import ProviderBuildContext, builtin_provider_registry
     from .supervision import TaskLedger
 
@@ -892,7 +898,6 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
-    require_live_foreground_provider(config)
     with AsrService(config.asr):
         if config.server.cuda_visible_devices:
             os.environ["CUDA_VISIBLE_DEVICES"] = config.server.cuda_visible_devices

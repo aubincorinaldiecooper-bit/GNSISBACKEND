@@ -10,6 +10,7 @@ from .foreground import (
     FOREGROUND_PROVIDERS,
     RealtimeConfig,
     build_realtime_provider,
+    foreground_system_prompt,
     validate_realtime_config,
 )
 from .registry import (
@@ -37,6 +38,7 @@ __all__ = [
     "ProviderRegistration",
     "RealtimeConfig",
     "build_realtime_provider",
+    "foreground_system_prompt",
     "builtin_provider_registry",
     "validate_realtime_config",
 ]

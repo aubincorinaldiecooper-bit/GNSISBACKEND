@@ -335,7 +335,10 @@ def main(argv: list[str] | None = None) -> None:
         if config.server.cuda_visible_devices:
             os.environ["CUDA_VISIBLE_DEVICES"] = config.server.cuda_visible_devices
     else:
-        from .providers.foreground import validate_realtime_config
+        from .providers.foreground import (
+            foreground_system_prompt,
+            validate_realtime_config,
+        )
 
         validate_realtime_config(config.realtime)
 
@@ -353,7 +356,9 @@ def main(argv: list[str] | None = None) -> None:
     session_config = ProviderSessionConfig(
         session_id=session_id,
         input_sample_rate=sample_rate,
-        system_prompt=config.duplex.system_prompt,
+        system_prompt=foreground_system_prompt(
+            config.realtime, thinker_prompt=config.duplex.system_prompt
+        ),
         ref_audio_path=config.duplex.ref_audio_path,
         extra={"media_mode": "omni" if frames else "voice"},
     )

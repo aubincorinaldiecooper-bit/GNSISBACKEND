@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
+from mcpmft.prompts import GNSIS_NATIVE_DUPLEX_SYSTEM_PROMPT
+
 from ..realtime_provider import ProviderSessionConfig, RealtimeProvider
 from .thinker import ThinkerRealtimeProvider
 from .venus import VenusRealtimeProvider
@@ -33,6 +35,24 @@ class RealtimeConfig:
     # Venus runs as its own model server; the runtime stays a thin client.
     venus_url: str | None = None
     venus_timeout_sec: float = 30.0
+    # Overrides the provider's own default prompt (see foreground_system_prompt).
+    system_prompt: str | None = None
+
+
+def foreground_system_prompt(config: RealtimeConfig, *, thinker_prompt: str) -> str:
+    """The system prompt a provider session is opened with.
+
+    The Thinker gets the prompt it was fine-tuned on (``duplex.system_prompt``,
+    with its unit protocol and control tokens). A native full-duplex model owns
+    turn-taking itself, so it gets the same behavioural guidance without that
+    protocol. ``realtime.system_prompt`` overrides either.
+    """
+
+    if config.system_prompt:
+        return config.system_prompt
+    if config.provider == "thinker":
+        return thinker_prompt
+    return GNSIS_NATIVE_DUPLEX_SYSTEM_PROMPT
 
 
 def validate_realtime_config(config: RealtimeConfig) -> None:

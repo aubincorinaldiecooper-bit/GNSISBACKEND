@@ -29,10 +29,22 @@ model that sees and hears, the second picks the background action layer.
   report per run (`runtime/gnsis_runtime/gnsis_runtime/realtime_bench.py`).
 - `gnsis-serve --check-config` reports the selected provider and validates a
   Venus URL at preflight.
-- `gnsis-serve` itself still drives the Thinker directly on `/ws/duplex` and
-  refuses `realtime.provider: venus` with a message pointing at the bench.
-  Moving the live sockets onto the provider seam is the step after the
-  measured comparison, not before it (root `AGENTS.md`, locked decisions 4–5).
+- `gnsis-serve` serves whichever provider the config names on the desktop
+  Host's own sockets. `thinker` keeps the existing `online_duplex` app
+  (Thinker/Talker split, task-tools coordinator, harness bridge, session
+  memory). Any other provider gets `native_duplex`: the same `/ws/duplex` and
+  `/ws/screen` wire protocol (`ready`, `audio.frame` + PCM16, `audio.chunk` /
+  `audio.done`, `playback.cancel`, `playback.ack`, `break` / `reset`,
+  `tool.call` / `tool.response`, `turn.final`, `host.event`, screen frames)
+  driven only through `RealtimeSession`, with one session timeline per
+  session. The Host does not learn which model it is talking to.
+- Not yet attached on the native path: the task-tools Gateway, the harness
+  bridge and durable session memory. The native app is the foreground model,
+  the timeline and the Host — the surface the matched comparison measures.
+- Each provider is opened with its own prompt
+  (`docs/realtime-system-prompt.md`): the Thinker with the prompt it was
+  fine-tuned on, a native model with the same guidance minus the unit
+  protocol. `realtime.system_prompt` overrides either.
 
 ## Matched test plan (not yet run)
 

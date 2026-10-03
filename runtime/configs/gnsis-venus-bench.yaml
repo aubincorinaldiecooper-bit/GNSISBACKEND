@@ -9,8 +9,9 @@
 #   gnsis-realtime-bench --config runtime/configs/gnsis-voice.yaml \
 #     --audio scenario.wav --frames scenario-frames/ --fps 1 --out thinker.json
 #
-# gnsis-serve refuses this provider until the live sockets move onto the
-# provider seam; the bench is the only consumer today.
+# gnsis-serve with this config serves the same /ws/duplex and /ws/screen
+# sockets the desktop Host uses, driven through the provider seam; no
+# Thinker is loaded.
 realtime:
   provider: venus
   venus_url: http://127.0.0.1:8000
