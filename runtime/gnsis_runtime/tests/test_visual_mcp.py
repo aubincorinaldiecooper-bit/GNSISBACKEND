@@ -132,12 +132,14 @@ def test_mcp_client_requests_task_independent_perception(monkeypatch) -> None:
     result = VisualAPIClient(_config()).perceive(
         "perception-1",
         "What is inside the marker?",
+        (175, 387),
     )
 
     assert captured["url"].endswith("/v1/visual/sessions/session-1/perceptions")
     assert captured["body"] == {
         "request_id": "perception-1",
         "focus": "What is inside the marker?",
+        "target": {"x": 175, "y": 387},
     }
     assert result["perception"]["frame_id"] == "frame-1"
 

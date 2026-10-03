@@ -25,6 +25,7 @@ class FixedPolicy:
         self.confidence = confidence
         self.perception_frames = ()
         self.perception_focus = None
+        self.perception_target = None
 
     def decide(
         self,
@@ -45,9 +46,10 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
-    def perceive(self, frames, motion, viewport, focus=None):
+    def perceive(self, frames, motion, viewport, focus=None, target=None):
         self.perception_frames = tuple(frame.frame_id for frame in frames)
         self.perception_focus = focus
+        self.perception_target = target
         return VisualPerception(
             summary="A settings window is visible.",
             visible_text=("Settings", "Save"),
@@ -236,6 +238,25 @@ def test_service_passes_optional_perception_focus_without_setting_a_task() -> No
     assert result["perception"]["frame_id"] == "f1"
     assert policy.perception_focus == "What is inside the magenta marker?"
     assert service.state(session_id)["goal"] is None
+
+
+def test_service_grounds_a_target_point_only_inside_the_current_viewport() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    result = service.perceive(session_id, "perception-1", None, (10, 20))
+
+    assert result["perception"]["frame_id"] == "f1"
+    assert policy.perception_target == (10, 20)
+    assert policy.perception_focus is None
+
+    with pytest.raises(VisualServiceError) as excinfo:
+        service.perceive(session_id, "perception-2", None, (64, 0))
+    assert excinfo.value.code == "invalid_target"
+    assert excinfo.value.status_code == 400
+    assert service.state(session_id)["usage"]["perceptions"] == 1
 
 
 def test_service_perception_requires_a_frame_but_not_a_task() -> None:

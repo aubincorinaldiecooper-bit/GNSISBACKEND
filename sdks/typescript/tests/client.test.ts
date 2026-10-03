@@ -136,11 +136,13 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
     session.sessionId,
     "sdk-perception-1",
     "What is inside the marker?",
+    { x: 4, y: 4 },
   );
   assert.equal(
     (perception.perception as { frame_id: string }).frame_id,
     "sdk-frame-1",
   );
+  assert.equal((perception.perception as { grounding: null }).grounding, null);
   const first = await plannerClient.decide(session.sessionId, "sdk-request-1");
   const repeated = await plannerClient.decide(session.sessionId, "sdk-request-1");
   assert.equal(first.decision_id, repeated.decision_id);

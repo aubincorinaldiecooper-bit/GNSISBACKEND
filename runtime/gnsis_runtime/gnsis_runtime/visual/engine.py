@@ -7,9 +7,11 @@ Environment-specific capture and execution are deliberately outside this module.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -20,17 +22,21 @@ from PIL import Image
 from .backbone import BackboneConfig, MiniCPMVBackbone, VisualTokens
 from .batching import HEAD_INPUTS, collate
 from .decode import decode
+from .grounding import TargetGrounder, failed, ground_from_elements
 from .head import HeadConfig, JEVDecisionHead
 from .perception import (
+    TargetGrounding,
     VisualPerception,
     build_perception_prompt,
     parse_perception,
+    validate_target_point,
 )
 from .prompt import build_layout
 from .schema import Decision, validate_decision
 from .verify_vlm import minicpmv_generator
 
 REUSE_DISTANCE = 0.002
+log = logging.getLogger(__name__)
 
 
 class VisualFrame(Protocol):
@@ -68,6 +74,7 @@ class PanopticPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> VisualPerception: ...
 
 
@@ -138,7 +145,12 @@ class RuntimeVisualFrame:
 class JEVEngine:
     name = "minicpm-v-4.6+jev-head"
 
-    def __init__(self, backbone: BackboneConfig, head_path: str):
+    def __init__(
+        self,
+        backbone: BackboneConfig,
+        head_path: str,
+        grounder: TargetGrounder | None = None,
+    ):
         self.backbone = MiniCPMVBackbone(backbone)
         ckpt = torch.load(head_path, map_location="cpu", weights_only=False)
         self.head = JEVDecisionHead(HeadConfig(**ckpt["config"])).eval()
@@ -148,6 +160,10 @@ class JEVEngine:
             self.backbone,
             lock=self._lock,
             max_new_tokens=640,
+        )
+        self.grounder = grounder
+        self._grounding_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="panoptic-grounding"
         )
 
     def encode(self, frame: VisualFrame, cache: VisualCache) -> None:
@@ -216,22 +232,42 @@ class JEVEngine:
         motion: float,
         viewport: tuple[int, int],
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> VisualPerception:
         selected = tuple(frames[-4:])
         if not selected:
             raise ValueError("Panoptic perception requires a current frame")
+        point = None if target is None else validate_target_point(target, viewport)
+        grounding: Future[TargetGrounding] | None = None
+        if point is not None and self.grounder is not None:
+            grounding = self._grounding_pool.submit(
+                self.grounder.ground, selected[-1].image(), point, focus
+            )
         raw = self._generate_perception(
             tuple(frame.image() for frame in selected),
             build_perception_prompt(
                 viewport,
                 temporal=len(selected) > 1,
                 focus=focus,
+                target=point,
             ),
         )
-        return parse_perception(
+        perception = parse_perception(
             raw,
             frame_id=str(selected[-1].frame_id),
             observed_frame_ids=tuple(str(frame.frame_id) for frame in selected),
             motion=motion,
             viewport=viewport,
         )
+        if point is None:
+            return perception
+        if grounding is None:
+            return replace(
+                perception,
+                grounding=ground_from_elements(perception.elements, point, self.name),
+            )
+        try:
+            return replace(perception, grounding=grounding.result())
+        except Exception:
+            log.exception("target grounding failed at %s", point)
+            return replace(perception, grounding=failed(point, self.grounder.name))

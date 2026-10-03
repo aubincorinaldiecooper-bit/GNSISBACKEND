@@ -29,7 +29,7 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
-    def perceive(self, frames, motion, viewport, focus=None):
+    def perceive(self, frames, motion, viewport, focus=None, target=None):
         return VisualPerception(
             summary="A red test frame is visible.",
             visible_text=(),

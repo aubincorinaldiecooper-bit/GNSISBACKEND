@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .metering import UsageReport
+from .perception import validate_target_point
 from .runtime import (
     PanopticPolicy,
     PersistentPanopticSession,
@@ -438,6 +439,7 @@ class VisualService:
         session_id: str,
         request_id: str,
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> dict[str, Any]:
         request_id = str(request_id).strip()
         if not request_id or len(request_id) > 256:
@@ -467,12 +469,18 @@ class VisualService:
                     )
                 seq = session.frame_seq
                 snapshot = session.panoptic_session.perception_snapshot()
+                if target is not None:
+                    try:
+                        target = validate_target_point(target, snapshot[2])
+                    except ValueError as exc:
+                        raise VisualServiceError("invalid_target", str(exc)) from exc
                 self._reserve_inference(session)
             started = time.monotonic()
             try:
                 perception = session.panoptic_session.perceive(
                     snapshot,
                     focus=focus,
+                    target=target,
                 )
             except ValueError as exc:
                 with session.lock:

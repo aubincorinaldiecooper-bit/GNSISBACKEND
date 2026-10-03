@@ -44,8 +44,9 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
-    def perceive(self, frames, motion, viewport, focus=None):
+    def perceive(self, frames, motion, viewport, focus=None, target=None):
         self.perception_focus = focus
+        self.perception_target = target
         return VisualPerception(
             summary="A browser page is visible.",
             visible_text=("Example",),
@@ -165,6 +166,30 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
         )
         assert perception.json()["perception"]["frame_id"] == "f1"
         assert policy.perception_focus == "What is inside the magenta marker?"
+
+        targeted = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=AUTH,
+            json={"request_id": "perception-2", "target": {"x": 3, "y": 2}},
+        )
+        assert targeted.status_code == 200
+        assert policy.perception_target == (3, 2)
+        assert targeted.json()["perception"]["grounding"] is None
+
+        outside = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=AUTH,
+            json={"request_id": "perception-3", "target": {"x": 5000, "y": 2}},
+        )
+        assert outside.status_code == 400
+        assert outside.json()["error"]["code"] == "invalid_target"
+
+        malformed = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=AUTH,
+            json={"request_id": "perception-4", "target": {"x": -1, "y": 2}},
+        )
+        assert malformed.status_code == 422
 
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",

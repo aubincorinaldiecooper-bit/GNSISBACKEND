@@ -19,6 +19,12 @@ export interface VisualSession {
   protocol: string;
 }
 
+/** A current-viewport pixel to ground; nothing is drawn onto the frame. */
+export interface TargetPoint {
+  x: number;
+  y: number;
+}
+
 export interface VisualClientOptions {
   baseUrl: string;
   apiToken: string;
@@ -199,6 +205,7 @@ export class VisualClient {
     sessionId: string,
     requestId?: string,
     focus?: string,
+    target?: TargetPoint,
   ): Promise<JsonObject> {
     const stableRequestId = requestId ?? crypto.randomUUID();
     return this.#request(
@@ -207,6 +214,7 @@ export class VisualClient {
       {
         request_id: stableRequestId,
         ...(focus === undefined ? {} : { focus }),
+        ...(target === undefined ? {} : { target }),
       },
       true,
       true,

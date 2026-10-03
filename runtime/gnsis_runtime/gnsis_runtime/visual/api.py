@@ -18,6 +18,7 @@ from .service import OPERATOR, SessionTenant, VisualService, VisualServiceError
 MAX_FRAME_HEADER_BYTES = 4096
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_FRAME_PIXELS = 16_777_216
+MAX_TARGET_COORDINATE = 16_384
 
 
 @dataclass(frozen=True)
@@ -39,8 +40,16 @@ class DecisionRequest(BaseModel):
     request_id: str = Field(min_length=1, max_length=256)
 
 
+class TargetPointRequest(BaseModel):
+    """A current-viewport pixel the caller is pointing at; nothing is drawn there."""
+
+    x: int = Field(ge=0, le=MAX_TARGET_COORDINATE)
+    y: int = Field(ge=0, le=MAX_TARGET_COORDINATE)
+
+
 class PerceptionRequest(DecisionRequest):
     focus: str | None = Field(default=None, min_length=1, max_length=1_000)
+    target: TargetPointRequest | None = None
 
 
 class AttemptRequest(BaseModel):
@@ -269,7 +278,12 @@ def create_visual_api(
         session_id: str,
         payload: PerceptionRequest,
     ) -> dict[str, Any]:
-        return service.perceive(session_id, payload.request_id, payload.focus)
+        return service.perceive(
+            session_id,
+            payload.request_id,
+            payload.focus,
+            None if payload.target is None else (payload.target.x, payload.target.y),
+        )
 
     @app.post(
         "/v1/visual/sessions/{session_id}/attempts",

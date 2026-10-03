@@ -15,6 +15,12 @@ from .api import (
     create_visual_api,
 )
 from .grants import GrantVerifier
+from .grounding import (
+    Florence2Grounder,
+    GroundingRouter,
+    Qwen3VLGrounder,
+    TargetGrounder,
+)
 from .metering import HttpUsageSink, UsageSink
 from .runtime import PanopticPolicy, VisualDecisionProvider
 from .service import VisualService
@@ -58,6 +64,26 @@ def build_app(
     return app
 
 
+def build_grounder(
+    primary: str,
+    fallback: str,
+    *,
+    device: str,
+    dtype: str,
+) -> TargetGrounder | None:
+    """Compose the focused grounding sidecar; models load on first target request."""
+
+    if primary == "none":
+        return None
+    secondary: TargetGrounder | None = None
+    if fallback == "qwen":
+        secondary = Qwen3VLGrounder(device=device, dtype=dtype)
+    return GroundingRouter(
+        Florence2Grounder(device=device, dtype=dtype),
+        secondary,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve the Smaller GNSIS visual API.")
     parser.add_argument("--model", required=True, help="MiniCPM-V backbone path")
@@ -67,6 +93,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8790, type=int)
     parser.add_argument("--max-sessions", default=32, type=int)
+    parser.add_argument(
+        "--grounder",
+        default=os.environ.get("GNSIS_VISUAL_GROUNDER", "florence"),
+        choices=("florence", "none"),
+        help="focused target grounder loaded lazily beside MiniCPM",
+    )
+    parser.add_argument(
+        "--fallback-grounder",
+        default=os.environ.get("GNSIS_VISUAL_FALLBACK_GROUNDER", "none"),
+        choices=("qwen", "none"),
+        help="heavier fallback for points the primary grounder cannot resolve",
+    )
     args = parser.parse_args(argv)
 
     host_token = os.environ.get("GNSIS_VISUAL_HOST_TOKEN") or None
@@ -103,6 +141,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     engine = JEVEngine(
         BackboneConfig(model_dir=args.model, dtype=args.dtype, device=args.device),
         args.head,
+        build_grounder(
+            args.grounder,
+            args.fallback_grounder,
+            device=args.device,
+            dtype=args.dtype,
+        ),
     )
     usage_sink_factory = (
         (lambda _service: HttpUsageSink(usage_url, usage_secret))

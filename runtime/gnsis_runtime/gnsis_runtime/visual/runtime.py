@@ -14,7 +14,7 @@ from PIL import Image, ImageChops, ImageStat
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .legal import IllegalDecision, LegalActionSet, legal_actions
-from .perception import VisualPerception
+from .perception import VisualPerception, validate_target_point
 from .schema import ACTIONS, Decision, DecisionError, bounded_actions
 
 MAX_HISTORY = 6
@@ -54,6 +54,7 @@ class PanopticPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> VisualPerception: ...
 
 
@@ -469,11 +470,15 @@ class PersistentPanopticSession:
         | None = None,
         *,
         focus: str | None = None,
+        target: tuple[int, int] | None = None,
     ) -> VisualPerception:
         views, motion, viewport = snapshot or self.perception_snapshot()
-        if focus is None:
-            return self.policy.perceive(views, motion, viewport)
-        return self.policy.perceive(views, motion, viewport, focus)
+        options: dict[str, Any] = {}
+        if focus is not None:
+            options["focus"] = focus
+        if target is not None:
+            options["target"] = validate_target_point(target, viewport)
+        return self.policy.perceive(views, motion, viewport, **options)
 
     def _attempt_frame(self, decision: Decision) -> ScreenFrame | None:
         if decision.frame_id is not None:

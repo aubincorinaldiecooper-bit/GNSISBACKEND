@@ -30,6 +30,37 @@ class PerceivedElement:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetGrounding:
+    """What a focused grounder found at one caller-supplied viewport point.
+
+    ``box`` is ``(x, y, width, height)`` in current-viewport pixels and, when
+    present, always contains ``point``. ``status`` is ``grounded`` when a
+    validated box was found, ``unresolved`` when the grounder ran but nothing
+    visible contained the point, and ``failed`` when the grounder raised.
+    ``confidence`` is a validated structural score, not a raw model probability.
+    """
+
+    point: tuple[int, int]
+    status: str
+    label: str
+    text: str
+    box: tuple[int, int, int, int] | None
+    confidence: float
+    source: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "point": {"x": self.point[0], "y": self.point[1]},
+            "status": self.status,
+            "label": self.label,
+            "text": self.text,
+            "box": None if self.box is None else list(self.box),
+            "confidence": self.confidence,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VisualPerception:
     summary: str
     visible_text: tuple[str, ...]
@@ -40,6 +71,7 @@ class VisualPerception:
     observed_frame_ids: tuple[str, ...]
     motion: float
     viewport: tuple[int, int]
+    grounding: TargetGrounding | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -55,7 +87,26 @@ class VisualPerception:
                 "width": self.viewport[0],
                 "height": self.viewport[1],
             },
+            "grounding": None if self.grounding is None else self.grounding.to_json(),
         }
+
+
+def validate_target_point(
+    target: tuple[int, int],
+    viewport: tuple[int, int],
+) -> tuple[int, int]:
+    """Reject a target point that is not an integer pixel inside the viewport."""
+
+    try:
+        x, y = (int(value) for value in target)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("target point must contain two integers") from exc
+    width, height = viewport
+    if not (0 <= x < width and 0 <= y < height):
+        raise ValueError(
+            f"target point ({x}, {y}) is outside the {width}x{height} viewport"
+        )
+    return x, y
 
 
 def build_perception_prompt(
@@ -63,6 +114,7 @@ def build_perception_prompt(
     *,
     temporal: bool,
     focus: str | None = None,
+    target: tuple[int, int] | None = None,
 ) -> str:
     width, height = viewport
     temporal_context = (
@@ -90,6 +142,16 @@ def build_perception_prompt(
             "Do not infer hidden content, DOM data, credentials, or off-screen elements.",
     ]
     focused = " ".join(str(focus or "").split())[:1_000]
+    if target is not None:
+        x, y = validate_target_point(target, viewport)
+        lines.extend(
+            [
+                f"The caller is pointing at viewport pixel ({x}, {y}) in the current "
+                "view. Nothing is drawn there; locate it from the coordinates.",
+                "Describe the visible element under that point in the summary and "
+                "include it in elements with a box that contains the point.",
+            ]
+        )
     if focused:
         lines.extend(
             [

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from gnsis_runtime.visual.perception import (
+    TargetGrounding,
     build_perception_prompt,
     parse_perception,
+    validate_target_point,
 )
 
 
@@ -109,3 +112,50 @@ def test_perception_parser_normalizes_scalar_and_missing_array_fields() -> None:
     assert result.changes == ()
     assert len(result.elements) == 1
     assert result.elements[0].label == "Essentials item"
+
+
+def test_perception_prompt_passes_the_target_point_as_text_not_pixels() -> None:
+    prompt = build_perception_prompt((1280, 720), temporal=False, target=(175, 387))
+
+    assert "pointing at viewport pixel (175, 387)" in prompt
+    assert "Nothing is drawn there" in prompt
+    assert "box that contains the point" in prompt
+
+    with pytest.raises(ValueError, match="outside the 1280x720 viewport"):
+        build_perception_prompt((1280, 720), temporal=False, target=(1280, 10))
+    with pytest.raises(ValueError, match="two integers"):
+        validate_target_point(("a", 1), (1280, 720))
+
+
+def test_perception_json_carries_target_grounding_with_provenance() -> None:
+    perception = parse_perception(
+        '{"summary":"A shop page.","visible_text":[],"elements":[],"changes":[],'
+        '"confidence":0.7}',
+        frame_id="f2",
+        observed_frame_ids=("f1", "f2"),
+        motion=0.1,
+        viewport=(1280, 720),
+    )
+    assert perception.to_json()["grounding"] is None
+
+    grounded = replace(
+        perception,
+        grounding=TargetGrounding(
+            point=(175, 387),
+            status="grounded",
+            label="navy sweatpants",
+            text="",
+            box=(125, 123, 191, 370),
+            confidence=0.7,
+            source="florence-2-large-ft",
+        ),
+    )
+    assert grounded.to_json()["grounding"] == {
+        "point": {"x": 175, "y": 387},
+        "status": "grounded",
+        "label": "navy sweatpants",
+        "text": "",
+        "box": [125, 123, 191, 370],
+        "confidence": 0.7,
+        "source": "florence-2-large-ft",
+    }
