@@ -1,0 +1,24 @@
+# Realtime-Venus as the foreground provider, for the matched provider bench.
+#
+# Venus runs as its own model server (inclusionAI/Realtime-Venus,
+# demos/model); this runtime stays a thin client of it, so no model paths are
+# needed here. Drive it with the same input as the Thinker baseline:
+#
+#   gnsis-realtime-bench --config runtime/configs/gnsis-venus-bench.yaml \
+#     --audio scenario.wav --frames scenario-frames/ --fps 1 --out venus.json
+#   gnsis-realtime-bench --config runtime/configs/gnsis-voice.yaml \
+#     --audio scenario.wav --frames scenario-frames/ --fps 1 --out thinker.json
+#
+# gnsis-serve refuses this provider until the live sockets move onto the
+# provider seam; the bench is the only consumer today.
+realtime:
+  provider: venus
+  venus_url: http://127.0.0.1:8000
+  venus_timeout_sec: 30
+
+server:
+  mode: lean
+  log_level: info
+
+worker:
+  provider: none

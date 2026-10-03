@@ -1,5 +1,17 @@
-"""Worker provider implementations and their configuration registry."""
+"""Worker provider implementations and their configuration registry.
 
+The foreground realtime model is selected separately, in ``foreground``: the
+worker registry below is for background action providers, not for the model
+that sees and hears the live session.
+"""
+
+from .foreground import (
+    DEFAULT_FOREGROUND_PROVIDER,
+    FOREGROUND_PROVIDERS,
+    RealtimeConfig,
+    build_realtime_provider,
+    validate_realtime_config,
+)
 from .registry import (
     ProviderBuildContext,
     ProviderFactoryRegistry,
@@ -18,8 +30,13 @@ def builtin_provider_registry() -> ProviderFactoryRegistry:
 
 
 __all__ = [
+    "DEFAULT_FOREGROUND_PROVIDER",
+    "FOREGROUND_PROVIDERS",
     "ProviderBuildContext",
     "ProviderFactoryRegistry",
     "ProviderRegistration",
+    "RealtimeConfig",
+    "build_realtime_provider",
     "builtin_provider_registry",
+    "validate_realtime_config",
 ]

@@ -92,3 +92,10 @@ duplex:
 # through here: they go to the connected desktop (duplex.host_tools_path).
 worker:
   provider: none
+
+# The foreground model behind the realtime provider seam. thinker is the
+# baseline and the rollback path; venus is measured against it through the
+# same provider calls with gnsis-realtime-bench (see
+# runtime/configs/gnsis-venus-bench.yaml) before it can become the default.
+realtime:
+  provider: thinker
