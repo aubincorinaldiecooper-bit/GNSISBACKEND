@@ -1,5 +1,9 @@
+from contextlib import nullcontext
 from dataclasses import dataclass
+import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
@@ -15,7 +19,12 @@ from gnsis_runtime.visual.verification import (
     parse_verdict,
     text_tokens,
 )
-from gnsis_runtime.visual.verify_vlm import VlmJudge, build_verification_prompt, describe_action
+from gnsis_runtime.visual.verify_vlm import (
+    VlmJudge,
+    build_verification_prompt,
+    describe_action,
+    minicpmv_generator,
+)
 
 
 def image(shade: int = 255) -> Image.Image:
@@ -307,6 +316,44 @@ def test_reading_real_pixels_when_the_ocr_model_is_installed():
 
 
 # ------------------------------------------------------ vision-language judge
+
+
+def test_minicpmv_generator_uses_uniform_unsliced_temporal_images(monkeypatch):
+    seen = {}
+
+    class Processor:
+        def apply_chat_template(self, messages, **kwargs):
+            seen["messages"] = messages
+            seen["processor_kwargs"] = kwargs
+            return {"input_ids": np.array([[1, 2]])}
+
+        def batch_decode(self, output, **kwargs):
+            seen["decoded"] = output
+            return ['{"summary":"screen"}']
+
+    class Model:
+        def generate(self, **kwargs):
+            seen["model_kwargs"] = kwargs
+            return np.array([[1, 2, 3]])
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(inference_mode=nullcontext),
+    )
+    generate = minicpmv_generator(
+        SimpleNamespace(processor=Processor(), model=Model(), device=None),
+        max_new_tokens=640,
+    )
+
+    result = generate((image(10), image(20), image(30), image(40)), "describe")
+
+    assert result == '{"summary":"screen"}'
+    assert len(seen["messages"][0]["content"]) == 5
+    assert seen["processor_kwargs"]["downsample_mode"] == "16x"
+    assert seen["processor_kwargs"]["max_slice_nums"] == 1
+    assert seen["processor_kwargs"]["use_image_id"] is True
+    assert seen["model_kwargs"]["downsample_mode"] == "16x"
 
 
 def test_vlm_judge_sees_before_and_after_and_is_validated_like_any_judge():

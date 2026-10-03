@@ -13,8 +13,8 @@ from gnsis_runtime.visual.perception import (
 def test_perception_prompt_is_task_independent_and_bounds_visible_output() -> None:
     prompt = build_perception_prompt((1280, 720), temporal=True)
 
-    assert "earlier view" in prompt
-    assert "current view" in prompt
+    assert "ordered from earliest to latest" in prompt
+    assert "final image is the current view" in prompt
     assert "1280 by 720" in prompt
     assert "hidden content" in prompt
     assert "goal" not in prompt.lower()

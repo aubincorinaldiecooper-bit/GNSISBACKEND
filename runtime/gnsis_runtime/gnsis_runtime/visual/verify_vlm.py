@@ -26,6 +26,8 @@ from .verification import VerificationRequest, clean_text
 
 MAX_GOAL = 400
 DEFAULT_MAX_NEW_TOKENS = 96
+MINICPMV_DOWNSAMPLE_MODE = "16x"
+MINICPMV_MAX_SLICE_NUMS = 1
 
 # (images, prompt) -> the model's raw text answer.
 Generate = Callable[[Sequence[Any], str], str]
@@ -116,11 +118,22 @@ def minicpmv_generator(
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
+            downsample_mode=MINICPMV_DOWNSAMPLE_MODE,
+            max_slice_nums=MINICPMV_MAX_SLICE_NUMS,
+            use_image_id=True,
         )
         if device is not None:
-            inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in inputs.items()}
+            inputs = {
+                key: value.to(device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
         with guard, torch.inference_mode():
-            output = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            output = model.generate(
+                **inputs,
+                downsample_mode=MINICPMV_DOWNSAMPLE_MODE,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
         fresh = output[:, inputs["input_ids"].shape[1] :]
         return processor.batch_decode(fresh, skip_special_tokens=True)[0]
 
