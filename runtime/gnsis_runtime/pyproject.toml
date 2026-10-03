@@ -46,6 +46,7 @@ visual = [
 
 [project.scripts]
 gnsis-serve = "gnsis_runtime.cli:main"
+gnsis-realtime-bench = "gnsis_runtime.realtime_bench:main"
 gnsis-live-qr = "gnsis_runtime.live_qr:main"
 smaller-gnsis-mcp = "gnsis_runtime.visual_mcp:main"
 smaller-gnsis-serve = "gnsis_runtime.visual.serve:main"

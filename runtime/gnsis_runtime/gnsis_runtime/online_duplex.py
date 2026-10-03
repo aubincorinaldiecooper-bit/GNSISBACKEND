@@ -484,6 +484,48 @@ def _build_session(
     )
 
 
+def thinker_session_factory(
+    bundle: Any,
+    *,
+    params: Any,
+    settings: OnlineDuplexSettings,
+    media_dir: str | Path,
+    detached_talker: Any | None = None,
+    prepare_prefix: bool = True,
+) -> Callable[[str, Any], GNSISDuplexSession]:
+    """Session builder for the Thinker behind the ``RealtimeProvider`` seam.
+
+    Sessions come from the same ``_build_session`` the live sockets use, on
+    the same prepared prefix, so a provider-driven Thinker session (the
+    matched provider bench) is the model the product serves rather than a
+    look-alike. No task gateway is attached: a provider session has no action
+    layer to dispatch to.
+    """
+
+    def no_gateway(session_id: str) -> Any:
+        raise RuntimeError(
+            f"provider session {session_id} has no task gateway"
+        )
+
+    runtime = _Runtime(
+        bundle=bundle,
+        params=_reserve_built_in_tools(params, bundle),
+        settings=settings,
+        media_dir=Path(media_dir).expanduser().resolve(),
+        gateway_factory=no_gateway,
+        provider_name=None,
+        detached_talker=detached_talker,
+    )
+    if prepare_prefix:
+        _prepare_static_prefix(runtime)
+
+    def build(session_id: str, config: Any) -> GNSISDuplexSession:
+        media_mode = config.extra.get("media_mode") if config is not None else None
+        return _build_session(runtime, media_mode=media_mode)
+
+    return build
+
+
 def _probe_cuda_context(runtime: _Runtime) -> None:
     """Time one trivial GPU op so CUDA context creation is its own number.
 
