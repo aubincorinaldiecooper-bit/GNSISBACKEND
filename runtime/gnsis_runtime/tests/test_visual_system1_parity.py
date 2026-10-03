@@ -29,7 +29,7 @@ from gnsis_runtime.visual.benchmark import (
 from gnsis_runtime.visual.control import ABSTAIN_WAIT_MS, ExecutionReport, step_from_decision
 from gnsis_runtime.visual.legal import IllegalDecision, legal_actions
 from gnsis_runtime.visual.real_runs import Box, Execution
-from gnsis_runtime.visual.runtime import DecisionGate, PersistentVisualDecisionSession
+from gnsis_runtime.visual.runtime import DecisionGate, PersistentPanopticSession
 from gnsis_runtime.visual.schema import Decision, DecisionError, Target
 
 GOAL = 'Search for "red shoes" on https://shop.example/catalog'
@@ -70,7 +70,13 @@ def _session(*decisions, frames=(("f1", 1000, 255),), gate=None, goal=GOAL):
     buf = LatestScreenFrameBuffer(max_history_frames=8)
     for frame_id, ts, value in frames:
         _consume(buf, _frame(frame_id, ts, value))
-    session = PersistentVisualDecisionSession(FixedPolicy(*decisions), buf, gate=gate)
+    policy = FixedPolicy(*decisions)
+    session = PersistentPanopticSession(
+        policy,
+        buf,
+        decision_provider=policy,
+        gate=gate,
+    )
     session.set_task(goal)
     return session, buf
 

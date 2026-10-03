@@ -117,6 +117,51 @@ def test_decide_retries_with_the_same_request_id(monkeypatch) -> None:
     assert delays == [0.2]
 
 
+def test_perceive_retries_with_the_same_request_id(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                503,
+                json={"error": {"code": "temporarily_unavailable", "message": "retry"}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "perception-1",
+                "perception": {
+                    "summary": "A settings screen is visible.",
+                    "frame_id": "frame-1",
+                },
+                "current": True,
+            },
+        )
+
+    monkeypatch.setattr("gnsis_visual_sdk.client.time.sleep", lambda _: None)
+    client = VisualClient(
+        "https://visual.example",
+        "api-secret",
+        max_retries=2,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        result = client.perceive("session-1", "perception-1")
+    finally:
+        client.close()
+
+    assert result["perception"]["frame_id"] == "frame-1"
+    assert [request.url.path for request in requests] == [
+        "/v1/visual/sessions/session-1/perceptions",
+        "/v1/visual/sessions/session-1/perceptions",
+    ]
+    assert [json.loads(request.content)["request_id"] for request in requests] == [
+        "perception-1",
+        "perception-1",
+    ]
+
+
 def test_record_attempt_does_not_retry_after_503(monkeypatch) -> None:
     requests: list[httpx.Request] = []
     delays: list[float] = []

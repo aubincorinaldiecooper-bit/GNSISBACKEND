@@ -14,10 +14,13 @@ from PIL import Image, ImageChops, ImageStat
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .legal import IllegalDecision, LegalActionSet, legal_actions
+from .perception import VisualPerception
 from .schema import ACTIONS, Decision, DecisionError, bounded_actions
 
 MAX_HISTORY = 6
 MOTION_WINDOW_MS = 800
+PERCEPTION_WINDOW_MS = 1_000
+MAX_PERCEPTION_FRAMES = 4
 _SIGNATURE_SIZE = (48, 30)
 DEFAULT_MIN_CONFIDENCE = 0.5
 DEFAULT_UNSETTLED_MOTION = 0.35
@@ -27,7 +30,7 @@ DEFAULT_REPEAT_RADIUS_PX = 24.0
 GateStatus = Literal["act", "abstain", "rejected"]
 
 
-class VisualDecisionPolicy(Protocol):
+class VisualDecisionProvider(Protocol):
     name: str
 
     def decide(
@@ -40,6 +43,17 @@ class VisualDecisionPolicy(Protocol):
         cache: Any,
         allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision: ...
+
+
+class PanopticPolicy(Protocol):
+    name: str
+
+    def perceive(
+        self,
+        frames: tuple[Any, ...],
+        motion: float,
+        viewport: tuple[int, int],
+    ) -> VisualPerception: ...
 
 
 @dataclass
@@ -97,7 +111,9 @@ def recent_motion(
         return 0.0
     ordered = sorted(
         (frame for frame in frames if frame.captured_at_ms is not None),
-        key=lambda frame: int(frame.captured_at_ms) if frame.captured_at_ms is not None else -1,
+        key=lambda frame: (
+            int(frame.captured_at_ms) if frame.captured_at_ms is not None else -1
+        ),
     )
     if len(ordered) < 2:
         return 0.0
@@ -194,7 +210,11 @@ class GatedDecision:
 def _repeats(proposed: Decision, previous: Decision, radius_px: float) -> bool:
     if proposed.action != previous.action:
         return False
-    if (proposed.text, proposed.url, proposed.direction) != (previous.text, previous.url, previous.direction):
+    if (proposed.text, proposed.url, proposed.direction) != (
+        previous.text,
+        previous.url,
+        previous.direction,
+    ):
         return False
     if proposed.target is None or previous.target is None:
         return proposed.target is None and previous.target is None
@@ -214,7 +234,9 @@ def gate_decision(
 ) -> GatedDecision:
     """Apply the legal-set check and abstention rules to one policy proposal."""
 
-    def hold(status: GateStatus, reason: str, confidence: float, key: str | None = None) -> GatedDecision:
+    def hold(
+        status: GateStatus, reason: str, confidence: float, key: str | None = None
+    ) -> GatedDecision:
         return GatedDecision(
             status=status,
             decision=Decision("wait", confidence, frame_id=legal.frame_id),
@@ -229,7 +251,11 @@ def gate_decision(
     if isinstance(proposed, DecisionError):
         return hold("rejected", str(proposed), 0.0)
     if not isinstance(proposed, Decision):
-        return hold("rejected", f"policy returned {type(proposed).__name__}, not a Decision", 0.0)
+        return hold(
+            "rejected",
+            f"policy returned {type(proposed).__name__}, not a Decision",
+            0.0,
+        )
     try:
         choice = legal.match(proposed)
     except DecisionError as exc:
@@ -244,7 +270,12 @@ def gate_decision(
                 choice.key,
             )
         if proposed.target is not None and motion >= gate.unsettled_motion:
-            return hold("abstain", f"screen is still changing (motion {motion:.2f})", confidence, choice.key)
+            return hold(
+                "abstain",
+                f"screen is still changing (motion {motion:.2f})",
+                confidence,
+                choice.key,
+            )
         if (
             last_attempt is not None
             and change_since_last_action is not None
@@ -268,22 +299,24 @@ def gate_decision(
     )
 
 
-class PersistentVisualDecisionSession:
-    """Task state for System-1 decisions over the shared GNSIS visual timeline.
+class PersistentPanopticSession:
+    """Rolling visual understanding over the shared GNSIS timeline.
 
-    This is intentionally not another browser session. It does not own a tab,
-    capture source, websocket, or actuator.
+    The session owns bounded temporal perception state. An optional decision
+    provider may consume that same state without defining the Panoptic policy.
     """
 
     def __init__(
         self,
-        policy: VisualDecisionPolicy,
+        policy: PanopticPolicy,
         screen_frames: LatestScreenFrameBuffer,
         *,
+        decision_provider: VisualDecisionProvider | None = None,
         cache: Any = None,
         gate: DecisionGate | None = None,
     ) -> None:
         self.policy = policy
+        self.decision_provider = decision_provider
         self.screen_frames = screen_frames
         self.cache = cache
         self.gate = gate if gate is not None else DecisionGate()
@@ -319,7 +352,9 @@ class PersistentVisualDecisionSession:
             raise RuntimeError("no consumed visual frame is available")
         return frame
 
-    def change_since_last_action(self, frame: ScreenFrame | None = None) -> float | None:
+    def change_since_last_action(
+        self, frame: ScreenFrame | None = None
+    ) -> float | None:
         frame = frame if frame is not None else self.screen_frames.latest_frame()
         if self._last_attempt is None or frame is None:
             return None
@@ -333,6 +368,8 @@ class PersistentVisualDecisionSession:
         change since the last attempted action.
         """
 
+        if self.decision_provider is None:
+            raise RuntimeError("visual decisions are not configured")
         if not self.goal:
             raise ValueError("no visual task is set")
         source = self.latest_frame()
@@ -347,7 +384,7 @@ class PersistentVisualDecisionSession:
         recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
         motion = recent_motion(recent)
         try:
-            proposed: Any = self.policy.decide(
+            proposed: Any = self.decision_provider.decide(
                 view,
                 self.goal,
                 list(self.history),
@@ -363,7 +400,9 @@ class PersistentVisualDecisionSession:
             legal,
             motion=motion,
             gate=self.gate,
-            last_attempt=self._last_attempt[0] if self._last_attempt is not None else None,
+            last_attempt=self._last_attempt[0]
+            if self._last_attempt is not None
+            else None,
             change_since_last_action=self.change_since_last_action(source),
         )
 
@@ -378,6 +417,20 @@ class PersistentVisualDecisionSession:
         if gated.status == "rejected":
             raise IllegalDecision(gated.reason or "illegal decision")
         return gated.decision
+
+    def perceive(self) -> VisualPerception:
+        source = self.latest_frame()
+        recent = self.screen_frames.recent_frames(
+            limit=MAX_PERCEPTION_FRAMES,
+            within_ms=PERCEPTION_WINDOW_MS,
+        )
+        selected = tuple(reversed(recent)) if recent else (source,)
+        views = tuple(RuntimeFrameView.from_screen_frame(frame) for frame in selected)
+        return self.policy.perceive(
+            views,
+            recent_motion(recent),
+            views[-1].image().size,
+        )
 
     def _attempt_frame(self, decision: Decision) -> ScreenFrame | None:
         if decision.frame_id is not None:
@@ -420,8 +473,6 @@ class PersistentVisualDecisionSession:
             "change_since_last_action": self.change_since_last_action(frame),
             "frame_id": frame.frame_id if frame else None,
             "video_source": (
-                frame.metadata.get("video_source")
-                if frame is not None
-                else None
+                frame.metadata.get("video_source") if frame is not None else None
             ),
         }

@@ -6,19 +6,19 @@ Both contestants are scored on identical inputs:
   structured history and stream motion (``Observation``);
 * the same code-generated ``LegalActionSet`` built from that observation only;
 * the same ``gate_decision`` - legal-set check, confidence abstention, motion
-  settle and repeat guard - that the production decision session applies.
+  settle and repeat guard - that the optional production decision path applies.
 
 Oracle labels (``Oracle``) are split off when a case is loaded and are only
 read by scoring. Nothing a contestant receives is derived from them.
 
 Smaller GNSIS is the backend's JEV/MiniCPM-V policy behind the same
-``VisualDecisionPolicy`` seam the decision session uses. The Laya contract is
+``VisualDecisionProvider`` seam the optional decision path uses. The Laya contract is
 the browser fork's Panoptic perception -> Laya bounded choice, rebuilt here
 against the same legal set so it is projected onto the targets Panoptic
 perceived and can only pick an offered key.
 
 End-to-end episodes run each contestant inside the production
-``PersistentVisualDecisionSession`` against an environment that publishes its
+the optional decision interface against an environment that publishes its
 one persistent stream into a ``LatestScreenFrameBuffer`` and executes
 ``VisualStep`` objects - the existing ``StepExecutor`` seam - so no second
 capture path or actuator is introduced.
@@ -50,9 +50,9 @@ from .runtime import (
     MOTION_WINDOW_MS,
     DecisionGate,
     GatedDecision,
-    PersistentVisualDecisionSession,
+    PersistentPanopticSession,
     RuntimeFrameView,
-    VisualDecisionPolicy,
+    VisualDecisionProvider,
     gate_decision,
     recent_motion,
 )
@@ -212,11 +212,11 @@ class Contestant(Protocol):
 
 
 class PolicyContestant:
-    """A ``VisualDecisionPolicy`` (Smaller GNSIS: the JEV engine) as a contestant."""
+    """A ``VisualDecisionProvider`` (Panoptic's optional JEV path) as a contestant."""
 
     def __init__(
         self,
-        policy: VisualDecisionPolicy,
+        policy: VisualDecisionProvider,
         *,
         cache: Any = None,
         name: str = SMALLER_GNSIS,
@@ -897,7 +897,7 @@ class EpisodeEnvironment(Protocol):
 
 
 class _ContestantPolicy:
-    """Presents a contestant to the production decision session as its policy."""
+    """Presents a contestant to the optional production decision path."""
 
     def __init__(
         self,
@@ -975,7 +975,12 @@ def run_episode(
     contestant: Contestant, env: EpisodeEnvironment, gate: DecisionGate | None = None
 ) -> EpisodeResult:
     policy = _ContestantPolicy(contestant, env.screen_frames, env.episode_id)
-    session = PersistentVisualDecisionSession(policy, env.screen_frames, gate=gate)
+    session = PersistentPanopticSession(
+        policy,
+        env.screen_frames,
+        decision_provider=policy,
+        gate=gate,
+    )
     session.set_task(env.goal)
     rejected = abstained = steps = 0
     claimed_done = False

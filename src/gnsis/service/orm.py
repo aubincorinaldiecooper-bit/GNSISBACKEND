@@ -977,6 +977,7 @@ class VisualUsageRecord(Base):
     decisions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     decisions_act: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     decisions_abstain: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    perceptions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     attempts_recorded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     inference_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     session_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

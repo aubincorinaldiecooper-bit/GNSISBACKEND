@@ -30,6 +30,7 @@ class UsageReport:
     session_ms: int
     closed: bool
     generated_at_ms: int = 0
+    perceptions: int = 0
 
     @property
     def event_id(self) -> str:

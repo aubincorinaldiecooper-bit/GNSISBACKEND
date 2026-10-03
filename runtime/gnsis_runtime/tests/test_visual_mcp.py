@@ -37,6 +37,7 @@ def test_official_mcp_server_exposes_only_non_actuating_visual_tools() -> None:
     assert {tool.name for tool in tools} == {
         "visual_set_task",
         "visual_decide",
+        "visual_perceive",
         "visual_state",
         "visual_reset",
     }
@@ -107,6 +108,32 @@ def test_mcp_client_forwards_session_and_auth_without_returning_credentials(
     assert captured["url"].endswith("/v1/visual/sessions/session-1/decisions")
     assert captured["authorization"] == "Bearer secret-token"
     assert "secret-token" not in json.dumps(result)
+
+
+def test_mcp_client_requests_task_independent_perception(monkeypatch) -> None:
+    captured = {}
+
+    def urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        return FakeResponse(
+            json.dumps(
+                {
+                    "request_id": "perception-1",
+                    "perception": {
+                        "summary": "A browser page is visible.",
+                        "frame_id": "frame-1",
+                    },
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    result = VisualAPIClient(_config()).perceive("perception-1")
+
+    assert captured["url"].endswith("/v1/visual/sessions/session-1/perceptions")
+    assert captured["body"] == {"request_id": "perception-1"}
+    assert result["perception"]["frame_id"] == "frame-1"
 
 
 def test_mcp_client_surfaces_structured_api_errors(monkeypatch) -> None:

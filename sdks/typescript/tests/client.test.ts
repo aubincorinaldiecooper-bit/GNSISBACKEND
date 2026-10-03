@@ -132,6 +132,14 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
   }
 
   await plannerClient.setTask(session.sessionId, "click the control", ["click"]);
+  const perception = await plannerClient.perceive(
+    session.sessionId,
+    "sdk-perception-1",
+  );
+  assert.equal(
+    (perception.perception as { frame_id: string }).frame_id,
+    "sdk-frame-1",
+  );
   const first = await plannerClient.decide(session.sessionId, "sdk-request-1");
   const repeated = await plannerClient.decide(session.sessionId, "sdk-request-1");
   assert.equal(first.decision_id, repeated.decision_id);

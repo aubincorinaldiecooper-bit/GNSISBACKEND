@@ -16,6 +16,7 @@ from gnsis_runtime.visual.api import (
     create_visual_api,
 )
 from gnsis_runtime.visual.grants import GrantVerifier
+from gnsis_runtime.visual.perception import PerceivedElement, VisualPerception
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.service import VisualService
 
@@ -42,6 +43,28 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
+    def perceive(self, frames, motion, viewport):
+        return VisualPerception(
+            summary="A browser page is visible.",
+            visible_text=("Example",),
+            elements=(
+                PerceivedElement(
+                    "Example heading",
+                    "text",
+                    "Example",
+                    (0, 0, 64, 20),
+                    "",
+                    0.9,
+                ),
+            ),
+            changes=(),
+            confidence=0.9,
+            frame_id=str(frames[-1].frame_id),
+            observed_frame_ids=tuple(str(frame.frame_id) for frame in frames),
+            motion=motion,
+            viewport=viewport,
+        )
+
 
 def _jpeg() -> bytes:
     buffer = io.BytesIO()
@@ -49,8 +72,15 @@ def _jpeg() -> bytes:
     return buffer.getvalue()
 
 
+def _service(policy=None, **kwargs):
+    selected = policy if policy is not None else FixedPolicy()
+    kwargs.setdefault("decision_provider", selected)
+    return VisualService(selected, **kwargs)
+
+
 def _app():
-    service = VisualService(FixedPolicy())
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
     return create_visual_api(
         service,
         VisualAPISettings(host_token="test-token"),
@@ -77,7 +107,8 @@ def test_api_requires_authentication_and_unknown_sessions_are_structured() -> No
 
 
 def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
-    service = VisualService(FixedPolicy())
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
     app = create_visual_api(
         service,
         VisualAPISettings(host_token="test-token"),
@@ -105,6 +136,17 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
         assert accepted["frame_id"] == "f1"
         assert accepted["frame_seq"] == 1
         assert service.state(session_id)["usage"]["frame_bytes"] == len(frame_body)
+
+        perception = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=AUTH,
+            json={"request_id": "perception-1"},
+        )
+        assert perception.status_code == 200
+        assert perception.json()["perception"]["summary"] == (
+            "A browser page is visible."
+        )
+        assert perception.json()["perception"]["frame_id"] == "f1"
 
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",
@@ -160,6 +202,14 @@ def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:
             websocket.send_bytes(_jpeg())
             assert websocket.receive_json()["type"] == "screen.frame.accepted"
 
+        perception = client.post(
+            f"/v1/visual/sessions/{session_id}/perceptions",
+            headers=planner_auth,
+            json={"request_id": "planner-perception"},
+        )
+        assert perception.status_code == 200
+        assert perception.json()["perception"]["frame_id"] == "planner-frame"
+
         task = client.put(
             f"/v1/visual/sessions/{session_id}/task",
             headers=planner_auth,
@@ -205,6 +255,13 @@ def test_api_scopes_planner_credentials_to_task_and_read_operations() -> None:
         )
         assert other_session.status_code == 403
         assert other_session.json()["error"]["code"] == "forbidden"
+        other_perception = client.post(
+            f"/v1/visual/sessions/{second['session_id']}/perceptions",
+            headers=planner_auth,
+            json={"request_id": "other-perception"},
+        )
+        assert other_perception.status_code == 403
+        assert other_perception.json()["error"]["code"] == "forbidden"
 
         unknown_session = client.get(
             "/v1/visual/sessions/missing",
@@ -367,7 +424,7 @@ def test_api_accepts_grants_and_isolates_tenants_on_session_routes() -> None:
         )
         .decode()
     )
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     app = create_visual_api(
         service,
         VisualAPISettings(
@@ -424,7 +481,7 @@ def test_api_enforces_grant_concurrent_session_limit() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -461,7 +518,7 @@ def test_expired_grant_closes_session_but_cannot_create_one() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -507,7 +564,7 @@ def test_expired_grant_cannot_record_attempt() -> None:
         )
         .decode()
     )
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     app = create_visual_api(
         service,
         VisualAPISettings(
@@ -562,7 +619,7 @@ def test_same_workspace_grants_from_other_keys_are_isolated() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -612,7 +669,7 @@ def test_unscoped_grant_cannot_enter_scoped_session() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -654,7 +711,7 @@ def test_health_exposes_usage_sink_state() -> None:
                 "running": True,
             }
 
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     app = create_visual_api(service, VisualAPISettings(host_token="operator"))
 
     with TestClient(app) as client:

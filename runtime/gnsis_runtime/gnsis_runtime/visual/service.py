@@ -9,7 +9,11 @@ from typing import Any, Callable
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .metering import UsageReport
-from .runtime import PersistentVisualDecisionSession, VisualDecisionPolicy
+from .runtime import (
+    PanopticPolicy,
+    PersistentPanopticSession,
+    VisualDecisionProvider,
+)
 from .schema import Decision, bounded_actions
 
 
@@ -48,7 +52,7 @@ class VisualServiceSession:
     ``frame_seq`` is authoritative even after an ID leaves this window.
     """
 
-    decision_session: PersistentVisualDecisionSession
+    panoptic_session: PersistentPanopticSession
     session_id: str
     stream_token: str = field(repr=False)
     planner_token: str = field(repr=False)
@@ -61,6 +65,12 @@ class VisualServiceSession:
     )
     replay: OrderedDict[str, dict[str, Any]] = field(default_factory=OrderedDict)
     expired_requests: OrderedDict[str, None] = field(default_factory=OrderedDict)
+    perception_replay: OrderedDict[str, dict[str, Any]] = field(
+        default_factory=OrderedDict
+    )
+    expired_perception_requests: OrderedDict[str, None] = field(
+        default_factory=OrderedDict
+    )
     outstanding: OrderedDict[str, tuple[Decision, int]] = field(
         default_factory=OrderedDict
     )
@@ -75,6 +85,7 @@ class VisualServiceSession:
             "decisions": 0,
             "decisions_act": 0,
             "decisions_abstain": 0,
+            "perceptions": 0,
             "attempts_recorded": 0,
             "inference_ms": 0,
         }
@@ -90,8 +101,9 @@ class VisualService:
 
     def __init__(
         self,
-        policy: VisualDecisionPolicy,
+        policy: PanopticPolicy,
         *,
+        decision_provider: VisualDecisionProvider | None = None,
         cache_factory: Callable[[], Any] | None = None,
         max_sessions: int = 32,
         max_replay_entries: int = 128,
@@ -110,6 +122,7 @@ class VisualService:
         if max_pending_reports < 1:
             raise ValueError("max_pending_reports must be positive")
         self.policy = policy
+        self.decision_provider = decision_provider
         self.cache_factory = cache_factory or (lambda: None)
         self.max_sessions = max_sessions
         self.max_replay_entries = max_replay_entries
@@ -153,9 +166,10 @@ class VisualService:
                 history_window_ms=10_000,
             )
             self._sessions[session_id] = VisualServiceSession(
-                decision_session=PersistentVisualDecisionSession(
+                panoptic_session=PersistentPanopticSession(
                     self.policy,
                     frames,
+                    decision_provider=self.decision_provider,
                     cache=self.cache_factory(),
                 ),
                 session_id=session_id,
@@ -172,10 +186,12 @@ class VisualService:
             raise self._unknown_session()
         with session.lock:
             self._enqueue_report(session, closed=True)
-            session.decision_session.clear_task()
-            session.decision_session.screen_frames.reset()
+            session.panoptic_session.clear_task()
+            session.panoptic_session.screen_frames.reset()
             session.replay.clear()
             session.expired_requests.clear()
+            session.perception_replay.clear()
+            session.expired_perception_requests.clear()
             session.outstanding.clear()
 
     def authorize_tenant(self, session_id: str, tenant: SessionTenant) -> None:
@@ -255,8 +271,8 @@ class VisualService:
                     "frame capture time must increase monotonically",
                     status_code=409,
                 )
-            session.decision_session.screen_frames.publish(frame)
-            consumed = session.decision_session.screen_frames.consume_for_unit()
+            session.panoptic_session.screen_frames.publish(frame)
+            consumed = session.panoptic_session.screen_frames.consume_for_unit()
             if not consumed or consumed[0].frame_id != frame.frame_id:
                 raise VisualServiceError(
                     "frame_not_consumed",
@@ -293,14 +309,14 @@ class VisualService:
                 normalized_actions = bounded_actions(allowed_actions)
             except ValueError as exc:
                 raise VisualServiceError("invalid_task", str(exc)) from exc
-            decision_session = session.decision_session
+            panoptic_session = session.panoptic_session
             if (
-                decision_session.goal == normalized_goal
-                and decision_session.allowed_actions == normalized_actions
+                panoptic_session.goal == normalized_goal
+                and panoptic_session.allowed_actions == normalized_actions
             ):
                 return self._state(session)
             try:
-                decision_session.set_task(
+                panoptic_session.set_task(
                     goal,
                     allowed_actions=allowed_actions,
                 )
@@ -314,7 +330,7 @@ class VisualService:
     def reset_task(self, session_id: str) -> dict[str, Any]:
         session = self._session(session_id)
         with session.lock:
-            session.decision_session.clear_task()
+            session.panoptic_session.clear_task()
             session.replay.clear()
             session.expired_requests.clear()
             session.outstanding.clear()
@@ -339,23 +355,21 @@ class VisualService:
                     "request_id is outside the idempotency window; use a new request_id",
                     status_code=409,
                 )
-            if not session.decision_session.goal:
+            if not session.panoptic_session.goal:
                 raise VisualServiceError(
                     "task_required",
                     "set a visual task before requesting a decision",
                     status_code=409,
                 )
-            if session.decision_session.screen_frames.latest_frame() is None:
+            if session.panoptic_session.screen_frames.latest_frame() is None:
                 raise VisualServiceError(
                     "frame_required",
                     "the visual stream has not supplied a current frame",
                     status_code=409,
                 )
             max_decisions = session.tenant.max_decisions_per_session
-            if (
-                max_decisions is not None
-                and session.usage["decisions"] >= max_decisions
-            ):
+            inference_count = session.usage["decisions"] + session.usage["perceptions"]
+            if max_decisions is not None and inference_count >= max_decisions:
                 raise VisualServiceError(
                     "quota_exceeded",
                     "visual session decision quota is exhausted",
@@ -363,7 +377,7 @@ class VisualService:
                 )
             seq = session.frame_seq
             started = time.monotonic()
-            gated = session.decision_session.decide_gated()
+            gated = session.panoptic_session.decide_gated()
             inference_ms = max(0, int((time.monotonic() - started) * 1000))
             self._record_usage(
                 session,
@@ -376,7 +390,7 @@ class VisualService:
                     status_code=422,
                 )
             decision = gated.decision
-            if session.frame_seq != seq or not session.decision_session.is_current(
+            if session.frame_seq != seq or not session.panoptic_session.is_current(
                 decision
             ):
                 raise VisualServiceError(
@@ -410,6 +424,81 @@ class VisualService:
             self._record_usage(session, **decision_usage)
             return dict(response)
 
+    def perceive(self, session_id: str, request_id: str) -> dict[str, Any]:
+        request_id = str(request_id).strip()
+        if not request_id or len(request_id) > 256:
+            raise VisualServiceError(
+                "invalid_request_id",
+                "request_id must contain 1 to 256 characters",
+            )
+        session = self._session(session_id)
+        with session.lock:
+            replayed = session.perception_replay.get(request_id)
+            if replayed is not None:
+                session.perception_replay.move_to_end(request_id)
+                return dict(replayed)
+            if request_id in session.expired_perception_requests:
+                raise VisualServiceError(
+                    "request_expired",
+                    "request_id is outside the idempotency window; use a new request_id",
+                    status_code=409,
+                )
+            if session.panoptic_session.screen_frames.latest_frame() is None:
+                raise VisualServiceError(
+                    "frame_required",
+                    "the visual stream has not supplied a current frame",
+                    status_code=409,
+                )
+            max_inferences = session.tenant.max_decisions_per_session
+            inference_count = session.usage["decisions"] + session.usage["perceptions"]
+            if max_inferences is not None and inference_count >= max_inferences:
+                raise VisualServiceError(
+                    "quota_exceeded",
+                    "visual session inference quota is exhausted",
+                    status_code=429,
+                )
+            seq = session.frame_seq
+            started = time.monotonic()
+            try:
+                perception = session.panoptic_session.perceive()
+            except ValueError as exc:
+                raise VisualServiceError(
+                    "invalid_perception",
+                    str(exc),
+                    status_code=502,
+                ) from exc
+            inference_ms = max(0, int((time.monotonic() - started) * 1000))
+            if (
+                session.frame_seq != seq
+                or perception.frame_id
+                != session.panoptic_session.latest_frame().frame_id
+            ):
+                raise VisualServiceError(
+                    "stale_perception",
+                    "the visual state changed while perception was generated",
+                    status_code=409,
+                )
+            response = {
+                "request_id": request_id,
+                "perception": perception.to_json(),
+                "frame_seq": seq,
+                "current": True,
+            }
+            session.perception_replay[request_id] = response
+            while len(session.perception_replay) > self.max_replay_entries:
+                expired_request_id, _ = session.perception_replay.popitem(last=False)
+                session.expired_perception_requests[expired_request_id] = None
+                while (
+                    len(session.expired_perception_requests) > self.max_expired_requests
+                ):
+                    session.expired_perception_requests.popitem(last=False)
+            self._record_usage(
+                session,
+                perceptions=1,
+                inference_ms=inference_ms,
+            )
+            return dict(response)
+
     def record_attempt(self, session_id: str, decision_id: str) -> dict[str, Any]:
         session = self._session(session_id)
         with session.lock:
@@ -421,7 +510,7 @@ class VisualService:
                     status_code=409,
                 )
             decision, _seq = outstanding
-            session.decision_session.record_attempt(decision)
+            session.panoptic_session.record_attempt(decision)
             self._record_usage(session, attempts_recorded=1)
             return {
                 "decision_id": decision_id,
@@ -474,7 +563,7 @@ class VisualService:
         return reports
 
     def _state(self, session: VisualServiceSession) -> dict[str, Any]:
-        state = session.decision_session.state()
+        state = session.panoptic_session.state()
         state["frame_seq"] = session.frame_seq
         state["usage"] = dict(session.usage)
         return state
@@ -529,6 +618,7 @@ class VisualService:
             decisions=delta.get("decisions", 0),
             decisions_act=delta.get("decisions_act", 0),
             decisions_abstain=delta.get("decisions_abstain", 0),
+            perceptions=delta.get("perceptions", 0),
             attempts_recorded=delta.get("attempts_recorded", 0),
             inference_ms=delta.get("inference_ms", 0),
             session_ms=session_ms,
@@ -544,6 +634,7 @@ class VisualService:
             "decisions": 0,
             "decisions_act": 0,
             "decisions_abstain": 0,
+            "perceptions": 0,
             "attempts_recorded": 0,
             "inference_ms": 0,
         }

@@ -105,6 +105,7 @@ _VISUAL_COUNTS = (
     "decisions",
     "decisions_act",
     "decisions_abstain",
+    "perceptions",
     "attempts_recorded",
     "inference_ms",
     "session_ms",
@@ -135,6 +136,7 @@ def _authenticate_visual_callback(authorization: Optional[str]) -> None:
 def _parse_visual_usage_report(report: object) -> dict:
     if not isinstance(report, dict):
         raise HTTPException(status_code=400, detail="each report must be an object")
+    report = {**report, "perceptions": report.get("perceptions", 0)}
     for name in _VISUAL_IDS:
         value = report.get(name)
         if not isinstance(value, str) or not value or len(value) > _VISUAL_ID_MAX_LEN:

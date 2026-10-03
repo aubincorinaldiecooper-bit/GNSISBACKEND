@@ -50,11 +50,11 @@ def create_visual_api(
     lifespan: Callable[[FastAPI], AsyncIterator[None]] | None = None,
 ) -> FastAPI:
     app = FastAPI(
-        title="Smaller GNSIS Visual Service",
+        title="Panoptic Visual Service",
         version="1.0.0",
         description=(
-            "Agent-independent visual decision service. Capture and actuation remain "
-            "owned by authenticated hosts."
+            "Rolling visual understanding and grounded decisions. Capture and "
+            "actuation remain owned by authenticated hosts."
         ),
         lifespan=lifespan,
     )
@@ -256,6 +256,16 @@ def create_visual_api(
         payload: DecisionRequest,
     ) -> dict[str, Any]:
         return service.decide(session_id, payload.request_id)
+
+    @app.post(
+        "/v1/visual/sessions/{session_id}/perceptions",
+        dependencies=[Depends(require_session_bearer)],
+    )
+    async def perceive(
+        session_id: str,
+        payload: DecisionRequest,
+    ) -> dict[str, Any]:
+        return service.perceive(session_id, payload.request_id)
 
     @app.post(
         "/v1/visual/sessions/{session_id}/attempts",

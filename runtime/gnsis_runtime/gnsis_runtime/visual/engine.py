@@ -1,7 +1,7 @@
-"""Visual decision engine: persistent GNSIS frame + goal -> structured decision.
+"""Panoptic perception and optional grounded visual decisions.
 
-DecisionPolicy is the model-independent seam used by the runtime.
-JEVEngine implements it with the frozen MiniCPM-V backbone and JEV head.
+PanopticPolicy is the model-independent perception seam used by the runtime.
+JEVEngine also implements the separate DecisionProvider interface.
 Environment-specific capture and execution are deliberately outside this module.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -20,8 +21,14 @@ from .backbone import BackboneConfig, MiniCPMVBackbone, VisualTokens
 from .batching import HEAD_INPUTS, collate
 from .decode import decode
 from .head import HeadConfig, JEVDecisionHead
+from .perception import (
+    VisualPerception,
+    build_perception_prompt,
+    parse_perception,
+)
 from .prompt import build_layout
 from .schema import Decision, validate_decision
+from .verify_vlm import minicpmv_generator
 
 REUSE_DISTANCE = 0.002
 
@@ -35,7 +42,7 @@ class VisualFrame(Protocol):
     def signature(self) -> np.ndarray: ...
 
 
-class DecisionPolicy(Protocol):
+class DecisionProvider(Protocol):
     name: str
 
     def decide(
@@ -52,6 +59,17 @@ class DecisionPolicy(Protocol):
     def encode(self, frame: VisualFrame, cache: "VisualCache") -> None: ...
 
 
+class PanopticPolicy(Protocol):
+    name: str
+
+    def perceive(
+        self,
+        frames: Sequence[VisualFrame],
+        motion: float,
+        viewport: tuple[int, int],
+    ) -> VisualPerception: ...
+
+
 @dataclass
 class VisualCache:
     """Per-session cache of the last encoded frame; reused while visual state is unchanged."""
@@ -65,18 +83,28 @@ class VisualCache:
     def lookup(self, frame: VisualFrame) -> VisualTokens | None:
         if self.tokens is None or self.signature is None:
             return None
-        if frame.frame_id == self.frame_id or frame_distance(frame.signature, self.signature) < REUSE_DISTANCE:
+        if (
+            frame.frame_id == self.frame_id
+            or frame_distance(frame.signature, self.signature) < REUSE_DISTANCE
+        ):
             return self.tokens
         return None
 
     def store(self, frame: VisualFrame, tokens: VisualTokens) -> None:
-        self.signature, self.frame_id, self.tokens = frame.signature, frame.frame_id, tokens
+        self.signature, self.frame_id, self.tokens = (
+            frame.signature,
+            frame.frame_id,
+            tokens,
+        )
 
 
 def frame_signature(image: Image.Image, size: tuple[int, int] = (48, 30)) -> np.ndarray:
     """Small grayscale perceptual signature used only for cache reuse."""
 
-    return np.asarray(image.convert("L").resize(size, Image.BILINEAR), dtype=np.float32) / 255.0
+    return (
+        np.asarray(image.convert("L").resize(size, Image.BILINEAR), dtype=np.float32)
+        / 255.0
+    )
 
 
 def frame_distance(a: np.ndarray, b: np.ndarray) -> float:
@@ -96,7 +124,9 @@ class RuntimeVisualFrame:
     signature: np.ndarray
 
     @classmethod
-    def from_image(cls, frame_id: str | int, image: Image.Image) -> "RuntimeVisualFrame":
+    def from_image(
+        cls, frame_id: str | int, image: Image.Image
+    ) -> "RuntimeVisualFrame":
         rgb = image.convert("RGB")
         return cls(frame_id=frame_id, _image=rgb, signature=frame_signature(rgb))
 
@@ -113,6 +143,11 @@ class JEVEngine:
         self.head = JEVDecisionHead(HeadConfig(**ckpt["config"])).eval()
         self.head.load_state_dict(ckpt["state_dict"])
         self._lock = threading.Lock()
+        self._generate_perception = minicpmv_generator(
+            self.backbone,
+            lock=self._lock,
+            max_new_tokens=640,
+        )
 
     def encode(self, frame: VisualFrame, cache: VisualCache) -> None:
         with self._lock:
@@ -172,4 +207,25 @@ class JEVEngine:
         return validate_decision(
             replace(decision, frame_id=frame.frame_id, timing_ms=timing),
             viewport,
+        )
+
+    def perceive(
+        self,
+        frames: Sequence[VisualFrame],
+        motion: float,
+        viewport: tuple[int, int],
+    ) -> VisualPerception:
+        selected = tuple(frames[-4:])
+        if not selected:
+            raise ValueError("Panoptic perception requires a current frame")
+        raw = self._generate_perception(
+            tuple(frame.image() for frame in selected),
+            build_perception_prompt(viewport, temporal=len(selected) > 1),
+        )
+        return parse_perception(
+            raw,
+            frame_id=str(selected[-1].frame_id),
+            observed_frame_ids=tuple(str(frame.frame_id) for frame in selected),
+            motion=motion,
+            viewport=viewport,
         )

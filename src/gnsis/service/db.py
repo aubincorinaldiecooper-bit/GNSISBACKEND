@@ -113,6 +113,7 @@ _ADDITIVE_COLUMNS = [
     ("memory_provenance", "source_advisor_model", "VARCHAR(128)"),
     ("memory_provenance", "approved_by", "VARCHAR(255)"),
     ("memory_provenance", "approved_at", "TIMESTAMPTZ"),
+    ("visual_usage_records", "perceptions", "INTEGER DEFAULT 0"),
 ]
 
 

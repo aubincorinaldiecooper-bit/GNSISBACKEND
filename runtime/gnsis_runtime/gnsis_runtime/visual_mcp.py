@@ -82,6 +82,9 @@ class VisualAPIClient:
     def decide(self, request_id: str) -> dict[str, object]:
         return self._request("POST", "/decisions", {"request_id": request_id})
 
+    def perceive(self, request_id: str) -> dict[str, object]:
+        return self._request("POST", "/perceptions", {"request_id": request_id})
+
     def state(self) -> dict[str, object]:
         return self._request("GET", "")
 
@@ -134,9 +137,9 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
     server = MCPServer(
         "smaller-gnsis",
         description=(
-            "Fast visual action decisions over a host-owned live screen stream. "
-            "Use a session-scoped planner token. The host alone captures and "
-            "executes actions."
+            "Rolling visual understanding and grounded decisions over a host-owned "
+            "live screen stream. Use a session-scoped planner token. The host alone "
+            "captures and executes actions."
         ),
         version="1.0.0",
     )
@@ -158,6 +161,15 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         """
 
         return client.decide(request_id)
+
+    @server.tool()
+    def visual_perceive(request_id: str) -> dict[str, object]:
+        """Describe the current visible screen and recent visible changes.
+
+        This does not require a task. Reuse the same request_id when retrying.
+        """
+
+        return client.perceive(request_id)
 
     @server.tool()
     def visual_state() -> dict[str, object]:

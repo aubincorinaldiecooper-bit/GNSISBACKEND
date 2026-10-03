@@ -4,6 +4,7 @@ from PIL import Image
 import pytest
 
 from gnsis_runtime.screen import ScreenFrame
+from gnsis_runtime.visual.perception import PerceivedElement, VisualPerception
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.service import (
     OPERATOR,
@@ -20,6 +21,7 @@ class FixedPolicy:
         self.calls = 0
         self.allowed_actions = None
         self.confidence = confidence
+        self.perception_frames = ()
 
     def decide(
         self,
@@ -40,6 +42,56 @@ class FixedPolicy:
             frame_id=frame.frame_id,
         )
 
+    def perceive(self, frames, motion, viewport):
+        self.perception_frames = tuple(frame.frame_id for frame in frames)
+        return VisualPerception(
+            summary="A settings window is visible.",
+            visible_text=("Settings", "Save"),
+            elements=(
+                PerceivedElement(
+                    "Save",
+                    "button",
+                    "Save",
+                    (8, 8, 20, 12),
+                    "enabled",
+                    0.95,
+                ),
+            ),
+            changes=("The Save button appeared.",) if len(frames) > 1 else (),
+            confidence=0.9,
+            frame_id=str(frames[-1].frame_id),
+            observed_frame_ids=tuple(str(frame.frame_id) for frame in frames),
+            motion=motion,
+            viewport=viewport,
+        )
+
+
+class DecisionOnlyProvider:
+    name = "decision-only"
+
+    def decide(
+        self,
+        frame,
+        goal,
+        history,
+        motion,
+        viewport,
+        cache,
+        allowed_actions=None,
+    ):
+        return Decision(
+            "click",
+            0.9,
+            Target(10, 10),
+            frame_id=frame.frame_id,
+        )
+
+
+def _service(policy=None, **kwargs):
+    selected = policy if policy is not None else FixedPolicy()
+    kwargs.setdefault("decision_provider", selected)
+    return VisualService(selected, **kwargs)
+
 
 def _frame(frame_id: str, captured_at_ms: int) -> ScreenFrame:
     return ScreenFrame(
@@ -51,7 +103,7 @@ def _frame(frame_id: str, captured_at_ms: int) -> ScreenFrame:
 
 
 def test_session_credentials_keep_tokens_out_of_repr() -> None:
-    credentials = VisualService(FixedPolicy()).create_session()
+    credentials = _service(FixedPolicy()).create_session()
     rendered = repr(credentials)
 
     assert credentials.session_id in rendered
@@ -60,7 +112,7 @@ def test_session_credentials_keep_tokens_out_of_repr() -> None:
 
 
 def test_service_requires_task_and_frame_before_deciding() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
 
     with pytest.raises(VisualServiceError, match="set a visual task"):
@@ -73,7 +125,7 @@ def test_service_requires_task_and_frame_before_deciding() -> None:
 
 def test_service_replays_decision_requests_without_rerunning_policy() -> None:
     policy = FixedPolicy()
-    service = VisualService(policy)
+    service = _service(policy)
     session_id = service.create_session().session_id
     service.set_task(session_id, "click the control", allowed_actions=("click",))
     service.publish_frame(session_id, _frame("f1", 1000))
@@ -87,8 +139,54 @@ def test_service_replays_decision_requests_without_rerunning_policy() -> None:
     assert first["decision"]["frame_id"] == "f1"
 
 
+def test_service_perception_is_task_independent_temporal_and_idempotent() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f0", 750))
+    service.publish_frame(session_id, _frame("f1", 1000))
+    service.publish_frame(session_id, _frame("f2", 1250))
+    service.publish_frame(session_id, _frame("f3", 1500))
+    service.publish_frame(session_id, _frame("f4", 1750))
+
+    first = service.perceive(session_id, "perception-1")
+    replayed = service.perceive(session_id, "perception-1")
+
+    assert replayed == first
+    assert first["perception"]["summary"] == "A settings window is visible."
+    assert first["perception"]["frame_id"] == "f4"
+    assert first["perception"]["observed_frame_ids"] == ["f1", "f2", "f3", "f4"]
+    assert first["perception"]["elements"][0]["role"] == "button"
+    assert policy.perception_frames == ("f1", "f2", "f3", "f4")
+    assert service.state(session_id)["goal"] is None
+    assert service.state(session_id)["usage"]["perceptions"] == 1
+
+
+def test_service_perception_requires_a_frame_but_not_a_task() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+
+    with pytest.raises(VisualServiceError) as missing:
+        service.perceive(session_id, "perception-1")
+
+    assert missing.value.code == "frame_required"
+
+
+def test_service_accepts_a_separate_decision_only_provider() -> None:
+    service = _service(FixedPolicy(), decision_provider=DecisionOnlyProvider())
+    session_id = service.create_session().session_id
+    service.set_task(session_id, "click the control")
+    service.publish_frame(session_id, _frame("f1", 1000))
+
+    assert (
+        service.perceive(session_id, "perception-1")["perception"]["frame_id"] == "f1"
+    )
+    assert service.decide(session_id, "decision-1")["decision"]["frame_id"] == "f1"
+
+
 def test_service_rejects_stale_and_replayed_frames() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     service.publish_frame(session_id, _frame("f1", 1000))
 
@@ -99,7 +197,7 @@ def test_service_rejects_stale_and_replayed_frames() -> None:
 
 
 def test_frame_byte_usage_is_separate_from_frame_metadata() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     frame = _frame("f1", 1000)
 
@@ -114,7 +212,7 @@ def test_frame_byte_usage_is_separate_from_frame_metadata() -> None:
 
 
 def test_service_exposes_abstention_without_executing_the_proposal() -> None:
-    service = VisualService(FixedPolicy(confidence=0.2))
+    service = _service(FixedPolicy(confidence=0.2))
     session_id = service.create_session().session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
@@ -127,7 +225,7 @@ def test_service_exposes_abstention_without_executing_the_proposal() -> None:
 
 
 def test_attempt_ids_are_single_use_and_history_is_recorded() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
@@ -142,7 +240,7 @@ def test_attempt_ids_are_single_use_and_history_is_recorded() -> None:
 
 
 def test_unknown_and_closed_sessions_are_not_reusable() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     service.close_session(session_id)
 
@@ -151,7 +249,7 @@ def test_unknown_and_closed_sessions_are_not_reusable() -> None:
 
 
 def test_invalid_task_does_not_clear_the_existing_task_or_decision() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     service.set_task(session_id, "existing task", allowed_actions=("click",))
     service.publish_frame(session_id, _frame("f1", 1000))
@@ -171,7 +269,7 @@ def test_invalid_task_does_not_clear_the_existing_task_or_decision() -> None:
 
 
 def test_recent_duplicate_window_allows_old_ids_with_new_frame_sequence() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     service.set_task(session_id, "click the control")
 
@@ -191,7 +289,7 @@ def test_recent_duplicate_window_allows_old_ids_with_new_frame_sequence() -> Non
 
 
 def test_replay_window_rejects_expired_request_ids() -> None:
-    service = VisualService(FixedPolicy(), max_replay_entries=2)
+    service = _service(FixedPolicy(), max_replay_entries=2)
     session_id = service.create_session().session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
@@ -231,7 +329,7 @@ def _tenant(
 
 
 def test_tenant_concurrency_and_per_session_quotas_are_enforced() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     tenant = _tenant(
         max_concurrent_sessions=1,
         max_decisions_per_session=1,
@@ -260,11 +358,13 @@ def test_tenant_concurrency_and_per_session_quotas_are_enforced() -> None:
 
 
 def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> None:
-    service = VisualService(FixedPolicy())
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
     tenant = _tenant()
     session_id = service.create_session(tenant).session_id
-    service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
+    service.perceive(session_id, "perception-1")
+    service.set_task(session_id, "click the control")
     decision = service.decide(session_id, "request-1")
     service.record_attempt(session_id, decision["decision_id"])
 
@@ -273,6 +373,7 @@ def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> No
     assert first[0].event_id == f"{session_id}:1"
     assert first[0].frames_accepted == 1
     assert first[0].decisions == 1
+    assert first[0].perceptions == 1
     assert first[0].attempts_recorded == 1
     assert service.collect_usage() == []
 
@@ -293,7 +394,7 @@ def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> No
 
 
 def test_usage_reports_split_decisions_at_utc_day_boundaries(monkeypatch) -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session(_tenant()).session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
@@ -323,7 +424,7 @@ def test_usage_reports_split_decisions_at_utc_day_boundaries(monkeypatch) -> Non
 
 
 def test_set_task_is_idempotent_and_preserves_replay() -> None:
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     session_id = service.create_session().session_id
     service.set_task(session_id, "click the control", allowed_actions=("click",))
     service.publish_frame(session_id, _frame("f1", 1000))

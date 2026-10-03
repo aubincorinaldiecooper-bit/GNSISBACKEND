@@ -27,6 +27,7 @@ _REPORT_FIELDS = (
     "decisions",
     "decisions_act",
     "decisions_abstain",
+    "perceptions",
     "attempts_recorded",
     "inference_ms",
     "session_ms",
@@ -51,6 +52,7 @@ class VisualUsageRecordView:
     decisions: int
     decisions_act: int
     decisions_abstain: int
+    perceptions: int
     attempts_recorded: int
     inference_ms: int
     session_ms: int
@@ -75,6 +77,7 @@ def _to_view(row: orm.VisualUsageRecord) -> VisualUsageRecordView:
         decisions=row.decisions,
         decisions_act=row.decisions_act,
         decisions_abstain=row.decisions_abstain,
+        perceptions=row.perceptions,
         attempts_recorded=row.attempts_recorded,
         inference_ms=row.inference_ms,
         session_ms=row.session_ms,
@@ -122,7 +125,15 @@ class VisualUsageStore:
         )
         with session_scope() as s:
             total = (
-                s.query(func.coalesce(func.sum(orm.VisualUsageRecord.decisions), 0))
+                s.query(
+                    func.coalesce(
+                        func.sum(
+                            orm.VisualUsageRecord.decisions
+                            + orm.VisualUsageRecord.perceptions
+                        ),
+                        0,
+                    )
+                )
                 .filter(
                     orm.VisualUsageRecord.virtual_key_id == virtual_key_id,
                     event_day >= start,
