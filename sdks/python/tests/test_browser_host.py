@@ -18,15 +18,39 @@ from gnsis_visual_sdk.client import VisualSession
 
 
 class FakeSocket:
-    def __init__(self, messages: list[dict[str, Any]]) -> None:
-        self.messages = deque(json.dumps(message) for message in messages)
+    def __init__(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        action_frames: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
+        self.messages = asyncio.Queue[str]()
+        self.action_results: dict[str, dict[str, Any]] = {}
+        self.action_frames = action_frames or {}
+        for message in messages:
+            call_id = message.get("call_id")
+            if message.get("type") == "browser.action.result" and isinstance(
+                call_id,
+                str,
+            ):
+                self.action_results[call_id] = message
+            else:
+                self.messages.put_nowait(json.dumps(message))
         self.sent: list[dict[str, Any]] = []
 
     async def recv(self) -> str:
-        return self.messages.popleft()
+        return await self.messages.get()
 
     async def send(self, message: str) -> None:
-        self.sent.append(json.loads(message))
+        decoded = json.loads(message)
+        self.sent.append(decoded)
+        call_id = decoded.get("call_id")
+        if decoded.get("type") == "browser.action" and isinstance(call_id, str):
+            for frame_message in self.action_frames.pop(call_id, []):
+                self.messages.put_nowait(json.dumps(frame_message))
+            result = self.action_results.pop(call_id, None)
+            if result is not None:
+                self.messages.put_nowait(json.dumps(result))
 
 
 @dataclass
@@ -90,11 +114,14 @@ class FakeStream:
         self.closed = True
 
 
-def frame(frame_id: str = "frame-1") -> dict[str, Any]:
+def frame(
+    frame_id: str = "frame-1",
+    captured_at_ms: int = 1000,
+) -> dict[str, Any]:
     return {
         "type": "capture.frame",
         "frame_id": frame_id,
-        "captured_at_ms": 1000,
+        "captured_at_ms": captured_at_ms,
         "encoding": "jpeg",
         "image_base64": base64.b64encode(b"jpeg").decode(),
         "source": {
@@ -117,7 +144,6 @@ def test_browser_connector_streams_decides_executes_and_records() -> None:
                 "tab_id": 17,
             },
             frame(),
-            {"type": "capture.stopped", "reason": "requested"},
             {
                 "type": "browser.action.result",
                 "call_id": "decision-1",
@@ -127,7 +153,8 @@ def test_browser_connector_streams_decides_executes_and_records() -> None:
                 "message": "Task is complete.",
                 "evidence": {},
             },
-        ]
+        ],
+        action_frames={"decision-1": [frame("frame-2", 1500)]},
     )
     decisions = deque(
         [
@@ -177,7 +204,21 @@ def test_browser_connector_streams_decides_executes_and_records() -> None:
                 "source_width": 1280,
                 "source_height": 720,
             },
-        )
+        ),
+        (
+            "frame-2",
+            1500,
+            b"jpeg",
+            "jpeg",
+            "screen",
+            {
+                "source_kind": "browser_tab",
+                "source_tab_id": 17,
+                "capture_session_id": "capture-1",
+                "source_width": 1280,
+                "source_height": 720,
+            },
+        ),
     ]
     action = next(
         message for message in socket.sent if message["type"] == "browser.action"
@@ -189,6 +230,8 @@ def test_browser_connector_streams_decides_executes_and_records() -> None:
     assert clients["host-token"].recorded == [("session-1", "decision-1")]
     assert clients["host-token"].closed_session == "session-1"
     assert stream.closed is True
+    assert [message["type"] for message in socket.sent].count("capture.start") == 1
+    assert [message["type"] for message in socket.sent].count("capture.stop") == 1
 
 
 def test_browser_connector_rejects_disallowed_decision() -> None:
@@ -196,14 +239,17 @@ def test_browser_connector_rejects_disallowed_decision() -> None:
         [
             {"type": "ready", "session_id": "hub-1"},
             frame(),
-            {"type": "capture.stopped", "reason": "requested"},
         ]
     )
     decisions = deque(
         [
             {
                 "decision_id": "decision-1",
-                "decision": {"action": "recover", "confidence": 1},
+                "decision": {
+                    "action": "recover",
+                    "confidence": 1,
+                    "frame_id": "frame-1",
+                },
             }
         ]
     )
@@ -222,6 +268,45 @@ def test_browser_connector_rejects_disallowed_decision() -> None:
         asyncio.run(connector.run(socket))
 
     assert all(message["type"] != "browser.action" for message in socket.sent)
+
+
+def test_browser_connector_closes_persistent_capture_after_failure() -> None:
+    socket = FakeSocket(
+        [
+            {"type": "ready", "session_id": "hub-1"},
+            {
+                "type": "capture.stopped",
+                "reason": "failed",
+                "message": "selected tab is no longer available",
+            },
+        ]
+    )
+    decisions: deque[dict[str, Any]] = deque()
+    clients: dict[str, FakeClient] = {}
+
+    def client_factory(token: str) -> FakeClient:
+        client = FakeClient(token, decisions)
+        clients[token] = client
+        return client
+
+    stream = FakeStream()
+    connector = BrowserHubConnector(
+        BrowserHostConfig(
+            base_url="http://127.0.0.1:8765",
+            host_token="host-token",
+            task="Continue browsing",
+        ),
+        client_factory=client_factory,
+        stream_factory=lambda _session: asyncio.sleep(0, result=stream),
+    )
+
+    with pytest.raises(BrowserHubError, match="selected tab"):
+        asyncio.run(connector.run(socket))
+
+    assert [message["type"] for message in socket.sent].count("capture.start") == 1
+    assert [message["type"] for message in socket.sent].count("capture.stop") == 1
+    assert clients["host-token"].closed_session == "session-1"
+    assert stream.closed is True
 
 
 def test_browser_host_config_rejects_unbounded_actions() -> None:
