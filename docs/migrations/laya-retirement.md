@@ -3,7 +3,7 @@
 "Smaller GNSIS" is the backend-owned System-1 path: the locally trained JEV head
 over frozen MiniCPM-V visual features (`gnsis_runtime/visual/engine.py`),
 consuming the one persistent live screen stream through
-`PersistentVisualDecisionSession`. The browser fork's equivalent is
+`PersistentPanopticSession`. The browser fork's equivalent is
 `Panoptic temporal perception -> Laya bounded decision -> Actuator`
 (`Gnsis-browser/AGENTS.md`, `packages/extension/src/vision/LayaClient.ts`,
 `packages/extension/src/agent/PanopticPageAgent.ts`, `services/panoptic`).
@@ -30,13 +30,13 @@ This document records the comparison and the gate for retiring Laya. Laya is
 | Laya/Panoptic strength | Backend gap on `main` | Added |
 | --- | --- | --- |
 | Code-generated bounded legal choices (`actionCandidates`, `byKey`) | value candidates existed only inside the model layout; nothing outside the model checked that a decision *was* one of them | `visual/legal.py` `legal_actions` → `LegalActionSet` (generated from goal + observed frame only, via the same `value_candidates`) |
-| Strict rejection of invented choices (`!built.byKey.has(choice)` → throw) | `validate_decision` checked structure, not provenance: any `type` text, any http(s) URL, extra arguments (e.g. `click` with text) and decisions bound to another frame passed | `LegalActionSet.match`: text/URL/direction must equal a goal-derived value, no extra arguments, targeted actions must be bound to the observed frame, unknown commands rejected. `PersistentVisualDecisionSession.decide()` raises `IllegalDecision`; nothing is silently absorbed |
+| Strict rejection of invented choices (`!built.byKey.has(choice)` → throw) | `validate_decision` checked structure, not provenance: any `type` text, any http(s) URL, extra arguments (e.g. `click` with text) and decisions bound to another frame passed | `LegalActionSet.match`: text/URL/direction must equal a goal-derived value, no extra arguments, targeted actions must be bound to the observed frame, unknown commands rejected. `PersistentPanopticSession.decide()` raises `IllegalDecision`; nothing is silently absorbed |
 | Confidence abstention (`confidence < minConfidence` → `WAIT`, default 0.5) | confidence was computed but never acted on | `DecisionGate.min_confidence` (default 0.5) in `gate_decision` |
 | Panoptic temporal state (`silence`/`standby` → keep observing; `change` field) | motion was a model input only; a target read from a still-changing screen could be executed; no notion of "did my last action change anything" | `DecisionGate.unsettled_motion` (targeted proposals wait while motion ≥ 0.35); change since the last attempted action measured against that action's own frame; repeating the same action/arguments/target (≤ 24 px) on an unchanged screen abstains. Exposed as `GatedDecision.change_since_last_action` and in `state()` |
 | Deterministic actuator separation (`VisualActuator.execute` only on typed actions) | no single mapping from a System-1 decision to a `VisualStep` | `control.step_from_decision`: reads only `GatedDecision.decision`; abstained/rejected proposals can reach the actuator only as a bounded 500 ms WAIT |
 | Fair comparison | no harness compared the two System-1 contracts on identical inputs | `visual/benchmark.py` (below) |
 
-`PersistentVisualDecisionSession.decide_gated()` composes these. The session
+`PersistentPanopticSession.decide_gated()` composes these. The session
 still owns no capture source, socket, tab or actuator.
 
 ## 3. The common benchmark (`gnsis_runtime/visual/benchmark.py`)
@@ -49,7 +49,7 @@ still owns no capture source, socket, tab or actuator.
   read only by scoring (`matches`, `grounded`). Contestants receive an
   `Observation` and a `LegalActionSet`, nothing else.
 * **Contestants.** `smaller-gnsis` = `PolicyContestant(JEVEngine)` via the same
-  `VisualDecisionPolicy` seam the session uses. `laya-contract` =
+  `VisualDecisionProvider` seam the session uses. `laya-contract` =
   `LayaContractContestant(PanopticStreamPerceiver, LayaHttpChooser)`: one
   Panoptic session per observation fed the ordered frames and history events,
   then Laya's `/v1/systemone` choice over `laya_options` — a faithful port of
@@ -62,7 +62,7 @@ still owns no capture source, socket, tab or actuator.
   abstention), calibration (ECE over 10 bins, Brier, risk–coverage at
   τ ∈ {0, .3, .5, .7, .9}), latency p50/p95, per-action and per-family accuracy.
 * **End-to-end.** `run_episode` runs a contestant *inside*
-  `PersistentVisualDecisionSession` against an `EpisodeEnvironment` that
+  `PersistentPanopticSession` against an `EpisodeEnvironment` that
   publishes its one persistent stream into a `LatestScreenFrameBuffer` and
   executes `VisualStep`s (the existing `StepExecutor` seam). Success is read
   from the environment only after the episode. Reports task success, false

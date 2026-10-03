@@ -72,8 +72,15 @@ def _jpeg() -> bytes:
     return buffer.getvalue()
 
 
+def _service(policy=None, **kwargs):
+    selected = policy if policy is not None else FixedPolicy()
+    kwargs.setdefault("decision_provider", selected)
+    return VisualService(selected, **kwargs)
+
+
 def _app():
-    service = VisualService(FixedPolicy())
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
     return create_visual_api(
         service,
         VisualAPISettings(host_token="test-token"),
@@ -100,7 +107,8 @@ def test_api_requires_authentication_and_unknown_sessions_are_structured() -> No
 
 
 def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
-    service = VisualService(FixedPolicy())
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
     app = create_visual_api(
         service,
         VisualAPISettings(host_token="test-token"),
@@ -416,7 +424,7 @@ def test_api_accepts_grants_and_isolates_tenants_on_session_routes() -> None:
         )
         .decode()
     )
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     app = create_visual_api(
         service,
         VisualAPISettings(
@@ -473,7 +481,7 @@ def test_api_enforces_grant_concurrent_session_limit() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -510,7 +518,7 @@ def test_expired_grant_closes_session_but_cannot_create_one() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -556,7 +564,7 @@ def test_expired_grant_cannot_record_attempt() -> None:
         )
         .decode()
     )
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     app = create_visual_api(
         service,
         VisualAPISettings(
@@ -611,7 +619,7 @@ def test_same_workspace_grants_from_other_keys_are_isolated() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -661,7 +669,7 @@ def test_unscoped_grant_cannot_enter_scoped_session() -> None:
         .decode()
     )
     app = create_visual_api(
-        VisualService(FixedPolicy()),
+        _service(FixedPolicy()),
         VisualAPISettings(
             grant_verifier=GrantVerifier(public_pem, issuer="control-plane")
         ),
@@ -703,7 +711,7 @@ def test_health_exposes_usage_sink_state() -> None:
                 "running": True,
             }
 
-    service = VisualService(FixedPolicy())
+    service = _service(FixedPolicy())
     app = create_visual_api(service, VisualAPISettings(host_token="operator"))
 
     with TestClient(app) as client:

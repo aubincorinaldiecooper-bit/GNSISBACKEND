@@ -19,6 +19,8 @@ from .schema import ACTIONS, Decision, DecisionError, bounded_actions
 
 MAX_HISTORY = 6
 MOTION_WINDOW_MS = 800
+PERCEPTION_WINDOW_MS = 1_000
+MAX_PERCEPTION_FRAMES = 4
 _SIGNATURE_SIZE = (48, 30)
 DEFAULT_MIN_CONFIDENCE = 0.5
 DEFAULT_UNSETTLED_MOTION = 0.35
@@ -28,7 +30,7 @@ DEFAULT_REPEAT_RADIUS_PX = 24.0
 GateStatus = Literal["act", "abstain", "rejected"]
 
 
-class VisualDecisionPolicy(Protocol):
+class VisualDecisionProvider(Protocol):
     name: str
 
     def decide(
@@ -41,6 +43,10 @@ class VisualDecisionPolicy(Protocol):
         cache: Any,
         allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision: ...
+
+
+class PanopticPolicy(Protocol):
+    name: str
 
     def perceive(
         self,
@@ -293,22 +299,24 @@ def gate_decision(
     )
 
 
-class PersistentVisualDecisionSession:
-    """Task state for System-1 decisions over the shared GNSIS visual timeline.
+class PersistentPanopticSession:
+    """Rolling visual understanding over the shared GNSIS timeline.
 
-    This is intentionally not another browser session. It does not own a tab,
-    capture source, websocket, or actuator.
+    The session owns bounded temporal perception state. An optional decision
+    provider may consume that same state without defining the Panoptic policy.
     """
 
     def __init__(
         self,
-        policy: VisualDecisionPolicy,
+        policy: PanopticPolicy,
         screen_frames: LatestScreenFrameBuffer,
         *,
+        decision_provider: VisualDecisionProvider | None = None,
         cache: Any = None,
         gate: DecisionGate | None = None,
     ) -> None:
         self.policy = policy
+        self.decision_provider = decision_provider
         self.screen_frames = screen_frames
         self.cache = cache
         self.gate = gate if gate is not None else DecisionGate()
@@ -360,6 +368,8 @@ class PersistentVisualDecisionSession:
         change since the last attempted action.
         """
 
+        if self.decision_provider is None:
+            raise RuntimeError("visual decisions are not configured")
         if not self.goal:
             raise ValueError("no visual task is set")
         source = self.latest_frame()
@@ -374,7 +384,7 @@ class PersistentVisualDecisionSession:
         recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
         motion = recent_motion(recent)
         try:
-            proposed: Any = self.policy.decide(
+            proposed: Any = self.decision_provider.decide(
                 view,
                 self.goal,
                 list(self.history),
@@ -410,14 +420,11 @@ class PersistentVisualDecisionSession:
 
     def perceive(self) -> VisualPerception:
         source = self.latest_frame()
-        recent = self.screen_frames.recent_frames(within_ms=MOTION_WINDOW_MS)
-        selected = (
-            (recent[1], recent[0])
-            if len(recent) > 1
-            else (recent[0],)
-            if recent
-            else (source,)
+        recent = self.screen_frames.recent_frames(
+            limit=MAX_PERCEPTION_FRAMES,
+            within_ms=PERCEPTION_WINDOW_MS,
         )
+        selected = tuple(reversed(recent)) if recent else (source,)
         views = tuple(RuntimeFrameView.from_screen_frame(frame) for frame in selected)
         return self.policy.perceive(
             views,

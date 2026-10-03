@@ -4,7 +4,7 @@ from PIL import Image
 
 from gnsis_runtime.screen import LatestScreenFrameBuffer, ScreenFrame
 from gnsis_runtime.visual.runtime import (
-    PersistentVisualDecisionSession,
+    PersistentPanopticSession,
     recent_motion,
 )
 from gnsis_runtime.visual.schema import Decision, Target
@@ -63,7 +63,12 @@ def test_session_reads_existing_consumed_frame_without_owning_capture():
     _consume(buf, _frame("f1", 1000))
     policy = RecordingPolicy()
     cache = object()
-    session = PersistentVisualDecisionSession(policy, buf, cache=cache)
+    session = PersistentPanopticSession(
+        policy,
+        buf,
+        decision_provider=policy,
+        cache=cache,
+    )
     session.set_task("click the visible control")
 
     decision = session.decide()
@@ -80,7 +85,7 @@ def test_session_uses_bounded_existing_visual_history_for_motion():
     _consume(buf, _frame("f1", 1000, 0))
     _consume(buf, _frame("f2", 1200, 255))
     policy = RecordingPolicy()
-    session = PersistentVisualDecisionSession(policy, buf)
+    session = PersistentPanopticSession(policy, buf, decision_provider=policy)
     session.set_task("click it")
 
     session.decide()
@@ -98,7 +103,8 @@ def test_motion_ignores_frames_outside_window():
 def test_attempt_history_preserves_prototype_semantics_and_is_bounded():
     buf = LatestScreenFrameBuffer(max_history_frames=8)
     _consume(buf, _frame("f1", 1000))
-    session = PersistentVisualDecisionSession(RecordingPolicy(), buf)
+    policy = RecordingPolicy()
+    session = PersistentPanopticSession(policy, buf, decision_provider=policy)
     session.set_task("do something")
     for i in range(40):
         session.record_attempt(
@@ -111,7 +117,8 @@ def test_attempt_history_preserves_prototype_semantics_and_is_bounded():
 def test_done_is_not_added_to_action_history():
     buf = LatestScreenFrameBuffer(max_history_frames=8)
     _consume(buf, _frame("f1", 1000))
-    session = PersistentVisualDecisionSession(RecordingPolicy(), buf)
+    policy = RecordingPolicy()
+    session = PersistentPanopticSession(policy, buf, decision_provider=policy)
     session.set_task("finish")
     session.record_attempt(Decision("done", 1.0, frame_id="f1"))
     assert session.history == []
@@ -120,7 +127,8 @@ def test_done_is_not_added_to_action_history():
 def test_newer_frame_marks_old_decision_stale():
     buf = LatestScreenFrameBuffer(max_history_frames=8)
     _consume(buf, _frame("f1", 1000))
-    session = PersistentVisualDecisionSession(RecordingPolicy(), buf)
+    policy = RecordingPolicy()
+    session = PersistentPanopticSession(policy, buf, decision_provider=policy)
     session.set_task("click it")
     decision = session.decide()
     _consume(buf, _frame("f2", 1200))
@@ -130,7 +138,8 @@ def test_newer_frame_marks_old_decision_stale():
 def test_task_reset_clears_structured_action_history_not_visual_history():
     buf = LatestScreenFrameBuffer(max_history_frames=8)
     _consume(buf, _frame("f1", 1000))
-    session = PersistentVisualDecisionSession(RecordingPolicy(), buf)
+    policy = RecordingPolicy()
+    session = PersistentPanopticSession(policy, buf, decision_provider=policy)
     session.set_task("first")
     session.record_attempt(Decision("scroll", 0.9, direction="down", frame_id="f1"))
     session.set_task("second")

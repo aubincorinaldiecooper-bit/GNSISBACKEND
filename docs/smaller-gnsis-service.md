@@ -43,7 +43,8 @@ Authorization: Bearer <host token or session-scoped planner token>
 ```
 
 1. `POST /v1/visual/sessions`
-   creates a bounded decision session and returns the stream and planner tokens.
+   creates a bounded rolling visual session and returns the stream and planner
+   tokens.
 2. The host opens
    `/v1/visual/sessions/{session_id}/stream?token={stream_token}`.
 3. For each frame, the host sends one `screen.frame` JSON header followed by one
@@ -51,7 +52,8 @@ Authorization: Bearer <host token or session-scoped planner token>
 4. `POST /v1/visual/sessions/{session_id}/perceptions`
    returns the current visible scene and recent visible changes without requiring
    a task. The response includes a summary, visible text, visible elements with
-   pixel boxes and confidence, the current frame ID, and the observed frame IDs.
+   pixel boxes and confidence, the current frame ID, and up to four ordered frame
+   IDs from the latest one-second rolling visual window.
 5. `PUT /v1/visual/sessions/{session_id}/task`
    binds the goal and legal action set.
 6. `POST /v1/visual/sessions/{session_id}/decisions`

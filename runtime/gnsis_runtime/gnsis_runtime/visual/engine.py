@@ -1,7 +1,7 @@
-"""Visual decision engine: persistent GNSIS frame + goal -> structured decision.
+"""Panoptic perception and optional grounded visual decisions.
 
-DecisionPolicy is the model-independent seam used by the runtime.
-JEVEngine implements it with the frozen MiniCPM-V backbone and JEV head.
+PanopticPolicy is the model-independent perception seam used by the runtime.
+JEVEngine also implements the separate DecisionProvider interface.
 Environment-specific capture and execution are deliberately outside this module.
 """
 
@@ -42,7 +42,7 @@ class VisualFrame(Protocol):
     def signature(self) -> np.ndarray: ...
 
 
-class DecisionPolicy(Protocol):
+class DecisionProvider(Protocol):
     name: str
 
     def decide(
@@ -57,6 +57,10 @@ class DecisionPolicy(Protocol):
     ) -> Decision: ...
 
     def encode(self, frame: VisualFrame, cache: "VisualCache") -> None: ...
+
+
+class PanopticPolicy(Protocol):
+    name: str
 
     def perceive(
         self,
@@ -211,7 +215,7 @@ class JEVEngine:
         motion: float,
         viewport: tuple[int, int],
     ) -> VisualPerception:
-        selected = tuple(frames[-2:])
+        selected = tuple(frames[-4:])
         if not selected:
             raise ValueError("Panoptic perception requires a current frame")
         raw = self._generate_perception(

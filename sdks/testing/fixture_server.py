@@ -64,7 +64,12 @@ def main() -> None:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
 
-    app = build_app(FixedPolicy(), "sdk-test-host-token")
+    policy = FixedPolicy()
+    app = build_app(
+        policy,
+        "sdk-test-host-token",
+        decision_provider=policy,
+    )
     config = uvicorn.Config(
         app,
         host="127.0.0.1",

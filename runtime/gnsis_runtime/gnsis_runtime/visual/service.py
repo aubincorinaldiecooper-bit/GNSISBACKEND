@@ -9,7 +9,11 @@ from typing import Any, Callable
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
 from .metering import UsageReport
-from .runtime import PersistentVisualDecisionSession, VisualDecisionPolicy
+from .runtime import (
+    PanopticPolicy,
+    PersistentPanopticSession,
+    VisualDecisionProvider,
+)
 from .schema import Decision, bounded_actions
 
 
@@ -48,7 +52,7 @@ class VisualServiceSession:
     ``frame_seq`` is authoritative even after an ID leaves this window.
     """
 
-    decision_session: PersistentVisualDecisionSession
+    panoptic_session: PersistentPanopticSession
     session_id: str
     stream_token: str = field(repr=False)
     planner_token: str = field(repr=False)
@@ -97,8 +101,9 @@ class VisualService:
 
     def __init__(
         self,
-        policy: VisualDecisionPolicy,
+        policy: PanopticPolicy,
         *,
+        decision_provider: VisualDecisionProvider | None = None,
         cache_factory: Callable[[], Any] | None = None,
         max_sessions: int = 32,
         max_replay_entries: int = 128,
@@ -117,6 +122,7 @@ class VisualService:
         if max_pending_reports < 1:
             raise ValueError("max_pending_reports must be positive")
         self.policy = policy
+        self.decision_provider = decision_provider
         self.cache_factory = cache_factory or (lambda: None)
         self.max_sessions = max_sessions
         self.max_replay_entries = max_replay_entries
@@ -160,9 +166,10 @@ class VisualService:
                 history_window_ms=10_000,
             )
             self._sessions[session_id] = VisualServiceSession(
-                decision_session=PersistentVisualDecisionSession(
+                panoptic_session=PersistentPanopticSession(
                     self.policy,
                     frames,
+                    decision_provider=self.decision_provider,
                     cache=self.cache_factory(),
                 ),
                 session_id=session_id,
@@ -179,8 +186,8 @@ class VisualService:
             raise self._unknown_session()
         with session.lock:
             self._enqueue_report(session, closed=True)
-            session.decision_session.clear_task()
-            session.decision_session.screen_frames.reset()
+            session.panoptic_session.clear_task()
+            session.panoptic_session.screen_frames.reset()
             session.replay.clear()
             session.expired_requests.clear()
             session.perception_replay.clear()
@@ -264,8 +271,8 @@ class VisualService:
                     "frame capture time must increase monotonically",
                     status_code=409,
                 )
-            session.decision_session.screen_frames.publish(frame)
-            consumed = session.decision_session.screen_frames.consume_for_unit()
+            session.panoptic_session.screen_frames.publish(frame)
+            consumed = session.panoptic_session.screen_frames.consume_for_unit()
             if not consumed or consumed[0].frame_id != frame.frame_id:
                 raise VisualServiceError(
                     "frame_not_consumed",
@@ -302,14 +309,14 @@ class VisualService:
                 normalized_actions = bounded_actions(allowed_actions)
             except ValueError as exc:
                 raise VisualServiceError("invalid_task", str(exc)) from exc
-            decision_session = session.decision_session
+            panoptic_session = session.panoptic_session
             if (
-                decision_session.goal == normalized_goal
-                and decision_session.allowed_actions == normalized_actions
+                panoptic_session.goal == normalized_goal
+                and panoptic_session.allowed_actions == normalized_actions
             ):
                 return self._state(session)
             try:
-                decision_session.set_task(
+                panoptic_session.set_task(
                     goal,
                     allowed_actions=allowed_actions,
                 )
@@ -323,7 +330,7 @@ class VisualService:
     def reset_task(self, session_id: str) -> dict[str, Any]:
         session = self._session(session_id)
         with session.lock:
-            session.decision_session.clear_task()
+            session.panoptic_session.clear_task()
             session.replay.clear()
             session.expired_requests.clear()
             session.outstanding.clear()
@@ -348,13 +355,13 @@ class VisualService:
                     "request_id is outside the idempotency window; use a new request_id",
                     status_code=409,
                 )
-            if not session.decision_session.goal:
+            if not session.panoptic_session.goal:
                 raise VisualServiceError(
                     "task_required",
                     "set a visual task before requesting a decision",
                     status_code=409,
                 )
-            if session.decision_session.screen_frames.latest_frame() is None:
+            if session.panoptic_session.screen_frames.latest_frame() is None:
                 raise VisualServiceError(
                     "frame_required",
                     "the visual stream has not supplied a current frame",
@@ -370,7 +377,7 @@ class VisualService:
                 )
             seq = session.frame_seq
             started = time.monotonic()
-            gated = session.decision_session.decide_gated()
+            gated = session.panoptic_session.decide_gated()
             inference_ms = max(0, int((time.monotonic() - started) * 1000))
             self._record_usage(
                 session,
@@ -383,7 +390,7 @@ class VisualService:
                     status_code=422,
                 )
             decision = gated.decision
-            if session.frame_seq != seq or not session.decision_session.is_current(
+            if session.frame_seq != seq or not session.panoptic_session.is_current(
                 decision
             ):
                 raise VisualServiceError(
@@ -436,7 +443,7 @@ class VisualService:
                     "request_id is outside the idempotency window; use a new request_id",
                     status_code=409,
                 )
-            if session.decision_session.screen_frames.latest_frame() is None:
+            if session.panoptic_session.screen_frames.latest_frame() is None:
                 raise VisualServiceError(
                     "frame_required",
                     "the visual stream has not supplied a current frame",
@@ -453,7 +460,7 @@ class VisualService:
             seq = session.frame_seq
             started = time.monotonic()
             try:
-                perception = session.decision_session.perceive()
+                perception = session.panoptic_session.perceive()
             except ValueError as exc:
                 raise VisualServiceError(
                     "invalid_perception",
@@ -464,7 +471,7 @@ class VisualService:
             if (
                 session.frame_seq != seq
                 or perception.frame_id
-                != session.decision_session.latest_frame().frame_id
+                != session.panoptic_session.latest_frame().frame_id
             ):
                 raise VisualServiceError(
                     "stale_perception",
@@ -503,7 +510,7 @@ class VisualService:
                     status_code=409,
                 )
             decision, _seq = outstanding
-            session.decision_session.record_attempt(decision)
+            session.panoptic_session.record_attempt(decision)
             self._record_usage(session, attempts_recorded=1)
             return {
                 "decision_id": decision_id,
@@ -556,7 +563,7 @@ class VisualService:
         return reports
 
     def _state(self, session: VisualServiceSession) -> dict[str, Any]:
-        state = session.decision_session.state()
+        state = session.panoptic_session.state()
         state["frame_seq"] = session.frame_seq
         state["usage"] = dict(session.usage)
         return state

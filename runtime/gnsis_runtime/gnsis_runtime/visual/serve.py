@@ -16,14 +16,15 @@ from .api import (
 )
 from .grants import GrantVerifier
 from .metering import HttpUsageSink, UsageSink
-from .runtime import VisualDecisionPolicy
+from .runtime import PanopticPolicy, VisualDecisionProvider
 from .service import VisualService
 
 
 def build_app(
-    policy: VisualDecisionPolicy,
+    policy: PanopticPolicy,
     host_token: str | None = None,
     *,
+    decision_provider: VisualDecisionProvider | None = None,
     grant_verifier: GrantVerifier | None = None,
     max_sessions: int = 32,
     cache_factory: Callable[[], Any] | None = None,
@@ -31,6 +32,7 @@ def build_app(
 ) -> FastAPI:
     service = VisualService(
         policy,
+        decision_provider=decision_provider,
         cache_factory=cache_factory,
         max_sessions=max_sessions,
     )
@@ -110,6 +112,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     app = build_app(
         engine,
         host_token,
+        decision_provider=engine,
         grant_verifier=grant_verifier,
         max_sessions=args.max_sessions,
         cache_factory=VisualCache,
