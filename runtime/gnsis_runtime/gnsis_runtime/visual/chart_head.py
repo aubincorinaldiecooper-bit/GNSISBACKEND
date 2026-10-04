@@ -29,6 +29,7 @@ class ChartStateHead(nn.Module):
         nn.init.normal_(self.label_embeddings, mean=0.0, std=0.02)
         self.pointer = Pointer(hidden_size, proj)
         self.register_buffer("temperature", torch.tensor(1.0))
+        self.register_buffer("logit_bias", torch.zeros(n_labels))
 
     def forward(self, visual_embeds: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         normalized = self.norm(visual_embeds)
@@ -41,7 +42,7 @@ class ChartStateHead(nn.Module):
         labels = self.label_embeddings.unsqueeze(0).expand(
             visual_embeds.shape[0], -1, -1
         )
-        return self.pointer(pooled, labels) / self.temperature
+        return (self.pointer(pooled, labels) + self.logit_bias) / self.temperature
 
     def fit_temperature(self, logits: torch.Tensor, targets: torch.Tensor) -> float:
         """Fit a positive scalar temperature against validation negative log likelihood."""

@@ -180,11 +180,11 @@ def build_samples(
     symbol: str,
     split: str,
     stride_seconds: int = 60,
-    max_samples: int = 1000,
+    max_samples: int | None = None,
 ) -> list[ChartSample]:
     if stride_seconds <= 0:
         raise ValueError("stride_seconds must be positive")
-    if max_samples <= 0:
+    if max_samples is not None and max_samples <= 0:
         return []
     if not ticks:
         return []
@@ -209,7 +209,7 @@ def build_samples(
                 )
             )
         anchor_ms += stride_ms
-    if len(samples) > max_samples:
+    if max_samples is not None and len(samples) > max_samples:
         step = (len(samples) + max_samples - 1) // max_samples
         samples = samples[::step]
     return samples

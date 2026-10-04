@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import io
+import math
 
 import pytest
 
 from gnsis_runtime.visual.chart import (
     HORIZON_SECONDS,
     MIN_TRADES,
+    ChartSample,
     Tick,
     build_samples,
     momentum_label,
     render_chart,
+)
+from gnsis_runtime.visual.chart_train import (
+    _balance_train_samples,
+    _compute_logit_adjust,
+    _fit_adjusted_temperature,
 )
 
 
@@ -80,6 +87,84 @@ def test_build_samples_stride_skip_and_deterministic_subsample() -> None:
     assert all(sample.label == "range_bound" for sample in samples)
 
 
+def test_build_samples_can_keep_more_than_the_old_default_cap() -> None:
+    ticks = [Tick(ts_ms, 100.0, 1.0) for ts_ms in range(0, 1_400_000, 1000)]
+    samples = build_samples(
+        ticks, "BTC-USDT", "train", stride_seconds=1, max_samples=None
+    )
+    assert len(samples) > 1000
+
+
+def _sample(anchor_ms: int, label: str) -> ChartSample:
+    return ChartSample(
+        symbol="BTC-USDT",
+        anchor_ms=anchor_ms,
+        split="train",
+        label=label,
+        outcome_bps=0.0,
+        persistence_label=None,
+        persistence_bps=None,
+        evidence={},
+    )
+
+
+def test_train_balancing_keeps_movement_and_caps_range_candidates() -> None:
+    candidates = [
+        _sample(index, label)
+        for index, label in enumerate(
+            [
+                "range_bound",
+                "upward_momentum",
+                "range_bound",
+                "downward_momentum",
+                "range_bound",
+                "upward_momentum",
+                "range_bound",
+                "downward_momentum",
+                "range_bound",
+                "range_bound",
+                "range_bound",
+                "range_bound",
+                "range_bound",
+                "range_bound",
+                "range_bound",
+                "range_bound",
+            ]
+        )
+    ]
+    selected = _balance_train_samples(candidates)
+    movement = [sample for sample in selected if sample.label != "range_bound"]
+    range_bound = [sample for sample in selected if sample.label == "range_bound"]
+    assert {sample.anchor_ms for sample in movement} == {1, 3, 5, 7}
+    assert len(range_bound) == 2 * len(movement)
+
+
+def test_logit_adjust_uses_natural_and_selected_train_priors() -> None:
+    adjustment = _compute_logit_adjust(
+        {
+            "natural_train_counts": {
+                "upward_momentum": 10,
+                "downward_momentum": 5,
+                "range_bound": 85,
+            },
+            "selected_counts": {
+                "train": {
+                    "upward_momentum": 10,
+                    "downward_momentum": 5,
+                    "range_bound": 30,
+                }
+            },
+        }
+    )
+    assert adjustment == pytest.approx(
+        [
+            math.log(0.1) - math.log(10 / 45),
+            math.log(0.05) - math.log(5 / 45),
+            math.log(0.85) - math.log(30 / 45),
+        ]
+    )
+
+
 def test_render_chart_is_deterministic_448_rgb_and_clips_price_bps() -> None:
     ticks = [
         Tick(1_000_000, 200.0, 1.0),
@@ -132,6 +217,10 @@ def test_chart_head_forward_mask_temperature_and_abstention() -> None:
     changed = embeds.clone()
     changed[0, 2:] = 1e5
     assert torch.allclose(output[0], head(changed, mask)[0])
+    bias = torch.tensor([0.25, -0.5, 1.0])
+    head.logit_bias.copy_(bias)
+    assert torch.allclose(head(embeds, mask), output + bias)
+    head.logit_bias.zero_()
 
     logits = torch.tensor(
         [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]]
@@ -146,3 +235,23 @@ def test_chart_head_forward_mask_temperature_and_abstention() -> None:
         pytest.approx(0.49),
         True,
     )
+
+
+def test_temperature_fit_uses_bias_adjusted_logits() -> None:
+    torch = pytest.importorskip("torch")
+    from torch.nn import functional as F
+
+    from gnsis_runtime.visual.chart_head import ChartStateHead
+
+    head = ChartStateHead(hidden_size=8, proj=4)
+    raw_logits = torch.tensor(
+        [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]]
+    )
+    targets = torch.tensor([0, 1, 2, 1])
+    logit_adjust = torch.tensor([0.6, -0.4, 0.2])
+    adjusted_logits = _fit_adjusted_temperature(head, raw_logits, targets, logit_adjust)
+    assert torch.allclose(adjusted_logits, raw_logits + logit_adjust)
+    assert torch.equal(head.logit_bias, logit_adjust)
+    before = F.cross_entropy(adjusted_logits, targets)
+    after = F.cross_entropy(adjusted_logits / head.temperature, targets)
+    assert after < before

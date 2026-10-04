@@ -15,6 +15,7 @@ from PIL import Image
 from .chart import (
     CHART_LABELS,
     CLASSIFIER,
+    NORMAL_LABEL,
     ChartSample,
     Tick,
     build_samples,
@@ -86,6 +87,7 @@ def _read_days(path: Path) -> list[dict[str, Any]]:
 def _build(ticks_dir: Path, days_path: Path, out_dir: Path) -> None:
     days = _read_days(days_path)
     candidate_groups: dict[tuple[str, str], list[ChartSample]] = defaultdict(list)
+    natural_train_counts = dict.fromkeys(CHART_LABELS, 0)
     days_by_date = {str(day["date"]): day for day in days}
     symbols = ("BTC-USDT", "ETH-USDT", "SOL-USDT")
     for day in days:
@@ -95,9 +97,19 @@ def _build(ticks_dir: Path, days_path: Path, out_dir: Path) -> None:
             native = symbol.replace("-", "")
             path = ticks_dir / f"{native}-{date}.csv"
             ticks = _load_ticks(path)
-            candidate_groups[(split, symbol)].extend(
-                build_samples(ticks, symbol, split, stride_seconds=60)
+            stride_seconds = 10 if split == "train" else 15
+            candidates = build_samples(
+                ticks,
+                symbol,
+                split,
+                stride_seconds=stride_seconds,
+                max_samples=None,
             )
+            if split == "train":
+                for sample in candidates:
+                    natural_train_counts[sample.label] += 1
+                candidates = _balance_train_samples(candidates)
+            candidate_groups[(split, symbol)].extend(candidates)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     ticks_output = out_dir / "ticks"
@@ -109,10 +121,21 @@ def _build(ticks_dir: Path, days_path: Path, out_dir: Path) -> None:
                 ticks_dir / f"{native}-{date}.csv",
                 ticks_output / f"{native}-{date}.csv",
             )
+    selected_groups: dict[tuple[str, str], list[ChartSample]] = {}
+    selected_counts = {
+        split: dict.fromkeys(CHART_LABELS, 0) for split in ("train", "val", "test")
+    }
+    for (split, symbol), candidates in sorted(candidate_groups.items()):
+        selected = (
+            _evenly_sample(candidates, 4000) if split in ("val", "test") else candidates
+        )
+        selected_groups[(split, symbol)] = selected
+        for sample in selected:
+            selected_counts[split][sample.label] += 1
+
     samples_path = out_dir / "samples.jsonl"
     with samples_path.open("w", encoding="utf-8") as samples_file:
-        for (split, symbol), candidates in sorted(candidate_groups.items()):
-            selected = _evenly_sample(candidates, 1000)
+        for (split, symbol), selected in sorted(selected_groups.items()):
             by_date: dict[str, list[ChartSample]] = defaultdict(list)
             for sample in selected:
                 date = (
@@ -142,9 +165,48 @@ def _build(ticks_dir: Path, days_path: Path, out_dir: Path) -> None:
     (out_dir / "days.json").write_text(
         json.dumps({"days": days}, indent=2) + "\n", encoding="utf-8"
     )
+    (out_dir / "dataset.json").write_text(
+        json.dumps(
+            {
+                "natural_train_counts": natural_train_counts,
+                "selected_counts": selected_counts,
+                "sampling_rules": {
+                    "train": (
+                        "For each symbol and day, use a 10-second stride, keep every "
+                        "non-range_bound candidate, and evenly sample range_bound "
+                        "candidates up to twice the number of movement candidates."
+                    ),
+                    "val_test": (
+                        "For each symbol and day, use a 15-second stride and preserve "
+                        "the natural label distribution; evenly sample at most 4,000 "
+                        "candidates per split and symbol."
+                    ),
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _balance_train_samples(samples: list[ChartSample]) -> list[ChartSample]:
+    movement = [sample for sample in samples if sample.label != NORMAL_LABEL]
+    range_bound = [sample for sample in samples if sample.label == NORMAL_LABEL]
+    selected_range = _evenly_sample(
+        range_bound, min(len(range_bound), 2 * len(movement))
+    )
+    selected_anchors = {sample.anchor_ms for sample in selected_range}
+    return [
+        sample
+        for sample in samples
+        if sample.label != NORMAL_LABEL or sample.anchor_ms in selected_anchors
+    ]
 
 
 def _evenly_sample(samples: list[ChartSample], maximum: int) -> list[ChartSample]:
+    if maximum <= 0:
+        return []
     if len(samples) <= maximum:
         return samples
     return [samples[index * len(samples) // maximum] for index in range(maximum)]
@@ -177,6 +239,9 @@ def _extract(
     from .backbone import BackboneConfig, MiniCPMVBackbone
 
     records = _read_jsonl(dataset_dir / "samples.jsonl")
+    dataset_metadata = json.loads(
+        (dataset_dir / "dataset.json").read_text(encoding="utf-8")
+    )
     if limit_per_split is not None:
         selected: list[dict[str, Any]] = []
         counts: dict[str, int] = defaultdict(int)
@@ -228,6 +293,7 @@ def _extract(
         "sample_ids": [str(record.get("sample_id", "")) for record in records],
         "samples": records,
         "days": _read_days(dataset_dir / "days.json"),
+        "dataset": dataset_metadata,
     }
     torch.save(payload, output_path)
     del payload
@@ -248,6 +314,7 @@ def _train(features_path: Path, output_path: Path) -> None:
     embeddings = payload["embeds"]
     labels = payload["labels"].long()
     splits = payload["splits"]
+    logit_adjust_values = _compute_logit_adjust(payload["dataset"])
     train_indices = [index for index, split in enumerate(splits) if split == "train"]
     val_indices = [index for index, split in enumerate(splits) if split == "val"]
     if not train_indices or not val_indices:
@@ -255,6 +322,7 @@ def _train(features_path: Path, output_path: Path) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ChartStateHead(hidden_size=embeddings.shape[-1]).to(device)
+    logit_adjust = torch.tensor(logit_adjust_values, dtype=torch.float32, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
     generator = torch.Generator().manual_seed(SEED)
     best_loss = math.inf
@@ -283,7 +351,7 @@ def _train(features_path: Path, output_path: Path) -> None:
             val_logits = _logits_for_indices(
                 model, embeddings, val_indices, device, torch
             )
-            val_loss = float(F.cross_entropy(val_logits, val_y).item())
+            val_loss = float(F.cross_entropy(val_logits + logit_adjust, val_y).item())
         if val_loss < best_loss:
             best_loss = val_loss
             best_epoch = epoch + 1
@@ -304,20 +372,33 @@ def _train(features_path: Path, output_path: Path) -> None:
     model.eval()
     val_y = labels[val_indices].to(device)
     with torch.no_grad():
-        uncalibrated_logits = _logits_for_indices(
+        raw_val_logits = _logits_for_indices(
             model, embeddings, val_indices, device, torch
         )
-    model.fit_temperature(uncalibrated_logits, val_y)
+    _fit_adjusted_temperature(model, raw_val_logits, val_y, logit_adjust)
     with torch.no_grad():
         calibrated_logits = _logits_for_indices(
             model, embeddings, val_indices, device, torch
         )
+        val_probabilities = torch.softmax(calibrated_logits, dim=-1)
+        val_confidence, val_predictions = val_probabilities.max(dim=-1)
+        label_recall: dict[str, float] = {}
+        for label_index in sorted({int(index) for index in val_y.tolist()}):
+            expected = val_y == label_index
+            true_positives = (
+                expected & (val_predictions == label_index) & (val_confidence >= 0.5)
+            )
+            label_recall[CHART_LABELS[label_index]] = float(
+                true_positives.sum().item() / expected.sum().item()
+            )
         val_metrics = {
             "nll": float(F.cross_entropy(calibrated_logits, val_y).item()),
             "accuracy": float(
                 (calibrated_logits.argmax(-1) == val_y).float().mean().item()
             ),
             "samples": len(val_indices),
+            "label_recall": label_recall,
+            "macro_recall": sum(label_recall.values()) / len(label_recall),
         }
 
     checkpoint = {
@@ -347,6 +428,7 @@ def _train(features_path: Path, output_path: Path) -> None:
         "label_order": list(CHART_LABELS),
         "backbone": BACKBONE_REPO,
         "data_days": payload.get("days", []),
+        "logit_bias": model.logit_bias.detach().cpu().tolist(),
         "val_metrics": val_metrics,
         "classifier": CLASSIFIER,
         "shadow": True,
@@ -463,6 +545,40 @@ def _sync_device(device: Any) -> None:
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+
+
+def _compute_logit_adjust(dataset: dict[str, Any]) -> list[float]:
+    natural_counts = dataset["natural_train_counts"]
+    selected_counts = dataset["selected_counts"]["train"]
+    natural_total = sum(int(natural_counts[label]) for label in CHART_LABELS)
+    selected_total = sum(int(selected_counts[label]) for label in CHART_LABELS)
+    if natural_total <= 0 or selected_total <= 0:
+        raise ValueError("logit adjustment requires non-empty train counts")
+    if any(
+        int(natural_counts[label]) <= 0 or int(selected_counts[label]) <= 0
+        for label in CHART_LABELS
+    ):
+        raise ValueError("logit adjustment requires train examples for every label")
+    return [
+        math.log(int(natural_counts[label]) / natural_total)
+        - math.log(int(selected_counts[label]) / selected_total)
+        for label in CHART_LABELS
+    ]
+
+
+def _fit_adjusted_temperature(
+    model: Any,
+    raw_logits: Any,
+    targets: Any,
+    logit_adjust: Any,
+) -> Any:
+    import torch
+
+    adjusted_logits = raw_logits + logit_adjust
+    with torch.no_grad():
+        model.logit_bias.copy_(logit_adjust)
+    model.fit_temperature(adjusted_logits, targets)
+    return adjusted_logits
 
 
 def _logits_for_indices(
