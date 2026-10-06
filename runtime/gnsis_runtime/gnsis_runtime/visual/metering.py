@@ -31,6 +31,11 @@ class UsageReport:
     closed: bool
     generated_at_ms: int = 0
     perceptions: int = 0
+    inspections: int = 0
+    pixel_reads: int = 0
+    history_reads: int = 0
+    host_client: str | None = None
+    planner_client: str | None = None
 
     @property
     def event_id(self) -> str:

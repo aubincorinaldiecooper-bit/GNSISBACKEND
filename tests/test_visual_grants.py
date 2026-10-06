@@ -367,6 +367,86 @@ class VisualGrantTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].event_id, "session-1:1")
 
+    def test_usage_read_api_sums_counters_by_day_key_and_client(self):
+        from gnsis.service import workspaces as ws
+
+        # The dashboard session resolves to its subject's workspace.
+        self.workspace_id = ws.get_or_create_workspace("visual-dashboard-user").id
+        view, secret = self._create_key(["visual:host"])
+        other, other_secret = self._create_key(["visual:host"])
+        public_only, public_secret = self._create_key()
+        reports = [
+            self._usage_report(
+                key_id=view.id,
+                report_seq=1,
+                session_ms=10_000,
+                inspections=2,
+                pixel_reads=1,
+                history_reads=3,
+                host_client="gnsis-visual-browser-host/0.1",
+                planner_client="claude-code/2.1",
+            ),
+            self._usage_report(
+                key_id=view.id,
+                report_seq=2,
+                session_ms=5_000,
+                closed=True,
+                host_client="gnsis-visual-browser-host/0.1",
+                planner_client="claude-code/2.1",
+            ),
+            self._usage_report(
+                key_id=other.id,
+                session_id="session-2",
+                session_ms=7_000,
+                host_client="codex/0.4",
+            ),
+        ]
+        legacy = self._usage_report(key_id=other.id, session_id="session-3")
+        self.assertEqual(self._post_usage(reports + [legacy]).status_code, 200)
+
+        workspace = self.client.get(
+            "/v1/visual/usage", headers=self._auth(self.dashboard_token)
+        )
+        self.assertEqual(workspace.status_code, 200, workspace.text)
+        body = workspace.json()
+        self.assertEqual(body["totals"]["session_ms"], 23_000)
+        self.assertEqual(body["totals"]["inspections"], 2)
+        self.assertEqual(body["totals"]["pixel_reads"], 1)
+        self.assertEqual(body["totals"]["history_reads"], 3)
+        self.assertEqual(body["totals"]["sessions"], 3)
+        self.assertEqual(len(body["by_day"]), 1)
+        clients = {row["client"]: row["session_ms"] for row in body["by_client"]}
+        self.assertEqual(
+            clients, {"claude-code/2.1": 15_000, "codex/0.4": 7_000, "unknown": 1000}
+        )
+
+        own = self.client.get("/v1/visual/usage", headers=self._auth(secret))
+        self.assertEqual(own.status_code, 200, own.text)
+        self.assertEqual(own.json()["totals"]["session_ms"], 15_000)
+        self.assertEqual(
+            [row["virtual_key_id"] for row in own.json()["by_key"]], [view.id]
+        )
+        foreign = self.client.get(
+            f"/v1/visual/usage?virtual_key_id={other.id}", headers=self._auth(secret)
+        )
+        self.assertEqual(foreign.status_code, 403, foreign.text)
+        unscoped = self.client.get(
+            "/v1/visual/usage", headers=self._auth(public_secret)
+        )
+        self.assertEqual(unscoped.status_code, 403, unscoped.text)
+        bad_days = self.client.get(
+            "/v1/visual/usage?days=0", headers=self._auth(self.dashboard_token)
+        )
+        self.assertEqual(bad_days.status_code, 400, bad_days.text)
+        oversized_client = self._post_usage(
+            [
+                self._usage_report(
+                    key_id=view.id, session_id="session-4", planner_client="x" * 129
+                )
+            ]
+        )
+        self.assertEqual(oversized_client.status_code, 400, oversized_client.text)
+
     def test_visual_key_api_round_trips_scopes_rejects_unknown_and_rotates_them(self):
         created = self.client.post(
             "/v1/virtual-keys",

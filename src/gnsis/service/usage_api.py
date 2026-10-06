@@ -109,7 +109,14 @@ _VISUAL_COUNTS = (
     "attempts_recorded",
     "inference_ms",
     "session_ms",
+    "inspections",
+    "pixel_reads",
+    "history_reads",
 )
+# Counters added after the first runtime release; older runtimes omit them.
+_VISUAL_OPTIONAL_COUNTS = ("perceptions", "inspections", "pixel_reads", "history_reads")
+_VISUAL_CLIENTS = ("host_client", "planner_client")
+_VISUAL_CLIENT_MAX_LEN = 128
 _INT64_MAX = 2**63 - 1
 _INT32_MAX = 2**31 - 1
 # Report timestamps may lag ingestion (outage retries) and run slightly ahead
@@ -136,7 +143,11 @@ def _authenticate_visual_callback(authorization: Optional[str]) -> None:
 def _parse_visual_usage_report(report: object) -> dict:
     if not isinstance(report, dict):
         raise HTTPException(status_code=400, detail="each report must be an object")
-    report = {**report, "perceptions": report.get("perceptions", 0)}
+    report = {
+        **report,
+        **{name: report.get(name, 0) for name in _VISUAL_OPTIONAL_COUNTS},
+        **{name: report.get(name) for name in _VISUAL_CLIENTS},
+    }
     for name in _VISUAL_IDS:
         value = report.get(name)
         if not isinstance(value, str) or not value or len(value) > _VISUAL_ID_MAX_LEN:
@@ -151,6 +162,16 @@ def _parse_visual_usage_report(report: object) -> dict:
         if type(value) is not int or value < 0 or value > _INT64_MAX:
             raise HTTPException(
                 status_code=400, detail=f"{name} must be a non-negative integer"
+            )
+    for name in _VISUAL_CLIENTS:
+        value = report[name]
+        if value is not None and (
+            not isinstance(value, str)
+            or not value
+            or len(value) > _VISUAL_CLIENT_MAX_LEN
+        ):
+            raise HTTPException(
+                status_code=400, detail=f"{name} must be a short string or null"
             )
     for name in ("project_id", "environment_id"):
         value = report.get(name)
