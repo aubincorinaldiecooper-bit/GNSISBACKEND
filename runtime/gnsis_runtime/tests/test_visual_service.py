@@ -6,6 +6,7 @@ from PIL import Image
 import pytest
 
 from gnsis_runtime.screen import ScreenFrame
+from gnsis_runtime.visual.inspection import Region
 from gnsis_runtime.visual.perception import PerceivedElement, VisualPerception
 from gnsis_runtime.visual.schema import Decision, Target
 from gnsis_runtime.visual.service import (
@@ -784,3 +785,49 @@ def test_service_reuse_cache_is_bounded_and_cleared_on_close() -> None:
 
     service.close_session(session_id)
     assert session.perception_reuse == {}
+
+
+def test_service_inspects_and_reads_pixels_of_retained_frames_only() -> None:
+    policy = FixedPolicy()
+    service = _service(policy, decision_provider=policy)
+    session_id = service.create_session().session_id
+    service.publish_frame(session_id, _frame("f1", 1000, "red"))
+    service.publish_frame(session_id, _frame("f2", 1250, "blue"))
+    service.perceive(session_id, "perception-1")
+
+    history = service.history(session_id)
+    assert [frame["frame_id"] for frame in history["frames"]] == ["f2", "f1"]
+    assert history["frames"][0]["width"] == 64
+    assert history["perceptions"][0]["request_id"] == "perception-1"
+    assert history["perceptions"][0]["frame_id"] == "f2"
+
+    view = service.inspect(session_id, "f1", Region(0, 0, 16, 8), 64)
+    assert view["frame_id"] == "f1"
+    assert view["region"] == [0, 0, 16, 8]
+    assert (view["image"]["width"], view["image"]["height"]) == (64, 32)
+    assert view["image"]["mime_type"] == "image/png"
+    assert service.inspect(session_id)["frame_id"] == "f2"
+
+    pixels = service.read_pixels(session_id, Region(0, 0, 4, 2), "f1", step=2)
+    assert pixels["columns"] == [0, 2]
+    assert pixels["rows"] == [{"y": 0, "colors": ["#ff0000", "#ff0000"]}]
+    assert service.read_pixels(session_id, Region(0, 0, 1, 1))["rows"][0]["colors"] == [
+        "#0000ff"
+    ]
+    assert service.state(session_id)["usage"]["perceptions"] == 1
+
+    with pytest.raises(VisualServiceError) as expired:
+        service.inspect(session_id, "f0")
+    assert expired.value.code == "frame_expired"
+    with pytest.raises(VisualServiceError) as outside:
+        service.read_pixels(session_id, Region(60, 0, 8, 1))
+    assert outside.value.code == "invalid_region"
+
+
+def test_service_inspection_requires_a_streamed_frame() -> None:
+    service = _service(FixedPolicy())
+    session_id = service.create_session().session_id
+
+    with pytest.raises(VisualServiceError) as missing:
+        service.inspect(session_id)
+    assert missing.value.code == "frame_required"

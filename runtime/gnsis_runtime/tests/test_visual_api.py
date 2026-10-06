@@ -173,6 +173,46 @@ def test_api_stream_task_decision_attempt_and_reset_contract() -> None:
             json={"request_id": "perception-2", "target": {"x": 3, "y": 2}},
         )
         assert targeted.status_code == 200
+
+        history = client.get(f"/v1/visual/sessions/{session_id}/history", headers=AUTH)
+        assert history.status_code == 200
+        assert [frame["frame_id"] for frame in history.json()["frames"]] == ["f1"]
+        assert [item["request_id"] for item in history.json()["perceptions"]] == [
+            "perception-2",
+            "perception-1",
+        ]
+
+        inspected = client.post(
+            f"/v1/visual/sessions/{session_id}/inspections",
+            headers=AUTH,
+            json={"region": {"x": 0, "y": 0, "width": 4, "height": 2}},
+        )
+        assert inspected.status_code == 200
+        assert inspected.json()["frame_id"] == "f1"
+        assert inspected.json()["image"]["mime_type"] == "image/png"
+
+        pixels = client.post(
+            f"/v1/visual/sessions/{session_id}/pixels",
+            headers=AUTH,
+            json={"region": {"x": 0, "y": 0, "width": 2, "height": 1}},
+        )
+        assert pixels.status_code == 200
+        assert pixels.json()["rows"][0]["colors"] == ["#ffffff", "#ffffff"]
+
+        expired = client.post(
+            f"/v1/visual/sessions/{session_id}/inspections",
+            headers=AUTH,
+            json={"frame_id": "f0"},
+        )
+        assert expired.status_code == 404
+        assert expired.json()["error"]["code"] == "frame_expired"
+        outside = client.post(
+            f"/v1/visual/sessions/{session_id}/pixels",
+            headers=AUTH,
+            json={"region": {"x": 0, "y": 0, "width": 4096, "height": 1}},
+        )
+        assert outside.status_code == 400
+        assert outside.json()["error"]["code"] == "invalid_region"
         assert policy.perception_target == (3, 2)
         assert targeted.json()["perception"]["grounding"] is None
 

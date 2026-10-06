@@ -448,6 +448,16 @@ def test_real_api_lifecycle_and_credential_redaction(
 
         state = planner_client.state(session.session_id)
         assert any(item["action"] == "click" for item in state["history"])
+
+        history = planner_client.history(session.session_id, limit=4)
+        assert [frame["frame_id"] for frame in history["frames"]] == ["sdk-frame-1"]
+        view = planner_client.inspect(
+            session.session_id, region=(0, 0, 4, 4), display_size=64
+        )
+        assert view["frame_id"] == "sdk-frame-1"
+        assert view["image"]["mime_type"] == "image/png"
+        pixels = planner_client.read_pixels(session.session_id, (0, 0, 2, 1))
+        assert pixels["rows"][0]["colors"] == ["#ffffff", "#ffffff"]
         assert planner_client.reset_task(session.session_id)["goal"] is None
         assert client.close_session(session.session_id)["closed"] is True
         with pytest.raises(VisualServiceError) as closed:

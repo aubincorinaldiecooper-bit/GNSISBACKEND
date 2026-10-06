@@ -22,13 +22,23 @@ from PIL import Image
 from .backbone import BackboneConfig, MiniCPMVBackbone, VisualTokens
 from .batching import HEAD_INPUTS, collate
 from .decode import decode
-from .grounding import TargetGrounder, failed, ground_from_elements
+from .grounding import (
+    CLOSEUP_SIZE,
+    TargetGrounder,
+    TextReader,
+    crop_around,
+    failed,
+    ground_from_elements,
+)
 from .head import HeadConfig, JEVDecisionHead
 from .perception import (
+    PerceivedElement,
     TargetGrounding,
     VisualPerception,
     build_perception_prompt,
+    merge_text_regions,
     parse_perception_or_grounding,
+    perception_schema,
     validate_target_point,
 )
 from .prompt import build_layout
@@ -150,6 +160,7 @@ class JEVEngine:
         backbone: BackboneConfig,
         head_path: str,
         grounder: TargetGrounder | None = None,
+        text_reader: TextReader | None = None,
     ):
         self.backbone = MiniCPMVBackbone(backbone)
         ckpt = torch.load(head_path, map_location="cpu", weights_only=False)
@@ -160,10 +171,15 @@ class JEVEngine:
             self.backbone,
             lock=self._lock,
             max_new_tokens=640,
+            json_schema=perception_schema(),
         )
         self.grounder = grounder
+        self.text_reader = text_reader
         self._grounding_pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="panoptic-grounding"
+        )
+        self._text_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="panoptic-text"
         )
 
     def encode(self, frame: VisualFrame, cache: VisualCache) -> None:
@@ -238,18 +254,29 @@ class JEVEngine:
         if not selected:
             raise ValueError("Panoptic perception requires a current frame")
         point = None if target is None else validate_target_point(target, viewport)
+        current = selected[-1].image()
         grounding: Future[TargetGrounding] | None = None
         if point is not None and self.grounder is not None:
             grounding = self._grounding_pool.submit(
-                self.grounder.ground, selected[-1].image(), point, focus
+                self.grounder.ground, current, point, focus
             )
+        text: Future[tuple[PerceivedElement, ...]] | None = None
+        if self.text_reader is not None:
+            text = self._text_pool.submit(self.text_reader.read_text, current)
+        images = [frame.image() for frame in selected]
+        closeup: tuple[int, int, int, int] | None = None
+        if point is not None:
+            crop = crop_around(current, point, CLOSEUP_SIZE)
+            images.append(crop.image)
+            closeup = (*crop.origin, *crop.image.size)
         raw = self._generate_perception(
-            tuple(frame.image() for frame in selected),
+            tuple(images),
             build_perception_prompt(
                 viewport,
                 temporal=len(selected) > 1,
                 focus=focus,
                 target=point,
+                closeup=closeup,
             ),
         )
         perception = parse_perception_or_grounding(
@@ -260,6 +287,8 @@ class JEVEngine:
             motion=motion,
             viewport=viewport,
         )
+        if text is not None:
+            perception = merge_text_regions(perception, self._text_result(text))
         if point is None:
             return perception
         if grounding is None:
@@ -270,6 +299,15 @@ class JEVEngine:
         if perception.grounding is not None:
             return perception
         return replace(perception, grounding=self._grounding_result(grounding, point))
+
+    def _text_result(
+        self, text: Future[tuple[PerceivedElement, ...]]
+    ) -> tuple[PerceivedElement, ...]:
+        try:
+            return text.result()
+        except Exception:
+            log.exception("text reading failed")
+            return ()
 
     def _grounding_result(
         self, grounding: Future[TargetGrounding], point: tuple[int, int]

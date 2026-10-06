@@ -78,6 +78,7 @@ image = (
         "rapidocr==3.9.2",
         "onnxruntime==1.30.0",
         "opencv-python==5.0.0.93",
+        "xgrammar==0.2.8",
         "fastapi>=0.110",
         "uvicorn[standard]>=0.29",
         "websockets>=12",

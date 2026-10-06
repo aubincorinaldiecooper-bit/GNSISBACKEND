@@ -10,6 +10,14 @@ from typing import Any, Callable
 from PIL import Image
 
 from ..screen import LatestScreenFrameBuffer, ScreenFrame
+from .inspection import (
+    DEFAULT_DISPLAY_SIZE,
+    InspectionError,
+    Region,
+    frame_entry,
+    inspect_region,
+    read_pixels,
+)
 from .metering import UsageReport
 from .perception import VisualPerception, validate_target_point
 from .runtime import (
@@ -22,6 +30,7 @@ from .schema import Decision, bounded_actions
 
 
 MAX_PERCEPTION_REUSE_ENTRIES = 8
+MAX_HISTORY_ENTRIES = 64
 
 PerceptionKey = tuple[str | None, tuple[int, int] | None, tuple[int, int]]
 
@@ -612,6 +621,99 @@ class VisualService:
         session = self._session(session_id)
         with session.lock:
             return self._state(session)
+
+    def history(
+        self, session_id: str, limit: int = MAX_HISTORY_ENTRIES
+    ) -> dict[str, Any]:
+        """Retained frames and remembered perceptions, newest first.
+
+        Both lists come from the session's bounded windows; frames older than
+        the history window can no longer be inspected.
+        """
+
+        limit = max(1, min(int(limit), MAX_HISTORY_ENTRIES))
+        session = self._session(session_id)
+        with session.lock:
+            self._require_open(session)
+            frames = session.panoptic_session.screen_frames.recent_frames(limit=limit)
+            remembered = list(reversed(session.perception_replay.values()))[:limit]
+        return {
+            "frames": [
+                frame_entry(frame.frame_id, frame.captured_at_ms, frame.image.size)
+                for frame in frames
+            ],
+            "perceptions": [
+                {
+                    "request_id": item["request_id"],
+                    "frame_id": item["perception"].get("frame_id"),
+                    "summary": item["perception"].get("summary"),
+                    "confidence": item["perception"].get("confidence"),
+                    "current": item["current"],
+                    "reused_from": item["reused_from"],
+                }
+                for item in remembered
+            ],
+        }
+
+    def inspect(
+        self,
+        session_id: str,
+        frame_id: str | None = None,
+        region: Region | None = None,
+        display_size: int = DEFAULT_DISPLAY_SIZE,
+    ) -> dict[str, Any]:
+        """A full-resolution crop of a retained frame (the latest by default)."""
+
+        frame = self._retained_frame(session_id, frame_id)
+        try:
+            view = inspect_region(frame.image, region, display_size)
+        except InspectionError as exc:
+            raise VisualServiceError("invalid_region", str(exc)) from exc
+        return {
+            **frame_entry(frame.frame_id, frame.captured_at_ms, frame.image.size),
+            **view,
+        }
+
+    def read_pixels(
+        self,
+        session_id: str,
+        region: Region,
+        frame_id: str | None = None,
+        step: int = 1,
+    ) -> dict[str, Any]:
+        """Exact colours sampled from a retained frame (the latest by default)."""
+
+        frame = self._retained_frame(session_id, frame_id)
+        try:
+            pixels = read_pixels(frame.image, region, step)
+        except InspectionError as exc:
+            raise VisualServiceError("invalid_region", str(exc)) from exc
+        return {
+            **frame_entry(frame.frame_id, frame.captured_at_ms, frame.image.size),
+            **pixels,
+        }
+
+    def _retained_frame(self, session_id: str, frame_id: str | None) -> ScreenFrame:
+        session = self._session(session_id)
+        with session.lock:
+            self._require_open(session)
+            frames = session.panoptic_session.screen_frames.recent_frames()
+        if not frames:
+            raise VisualServiceError(
+                "frame_required",
+                "the visual stream has not supplied a current frame",
+                status_code=409,
+            )
+        if frame_id is None:
+            return frames[0]
+        for frame in frames:
+            if frame.frame_id == frame_id:
+                return frame
+        raise VisualServiceError(
+            "frame_expired",
+            "frame_id is not in the bounded recent history; call history for retained frames",
+            status_code=404,
+        )
 
     def health(self) -> dict[str, Any]:
         with self._lock:

@@ -5,12 +5,14 @@ import json
 from PIL import Image
 
 from gnsis_runtime.visual.grounding import (
+    OCR_CONFIDENCE,
     Florence2Grounder,
     GroundingRouter,
     box_to_viewport,
     crop_around,
     ground_from_elements,
     parse_qwen_grounding,
+    text_tiles,
 )
 from gnsis_runtime.visual.perception import PerceivedElement, TargetGrounding
 
@@ -219,3 +221,39 @@ def test_florence_reports_unresolved_when_nothing_contains_the_point() -> None:
     assert result.status == "unresolved"
     assert result.box is None
     assert result.confidence == 0.0
+
+
+def test_florence_reads_full_frame_text_per_tile_in_reading_order() -> None:
+    image = Image.new("RGB", (1280, 942))
+    grounder = FakeFlorence(
+        dense={"bboxes": [], "labels": []},
+        ocr={
+            "quad_boxes": [
+                [100, 300, 200, 300, 200, 320, 100, 320],
+                [10, 10, 90, 10, 90, 30, 10, 30],
+            ],
+            "labels": ["SIN.</s>", "FEAR  OF GOD</s>"],
+        },
+    )
+
+    regions = grounder.read_text(image)
+
+    assert [crop.size for crop in grounder.images] == [(640, 471)] * 4
+    assert [region.text for region in regions[:2]] == ["FEAR OF GOD", "FEAR OF GOD"]
+    assert regions[0].box == (10, 10, 80, 20)
+    assert regions[1].box == (650, 10, 80, 20)
+    assert regions[-1].box == (740, 771, 100, 20)
+    assert {region.role for region in regions} == {"text"}
+    assert {region.confidence for region in regions} == {OCR_CONFIDENCE}
+
+
+def test_text_tiles_cover_the_frame_without_exceeding_the_tile_size() -> None:
+    tiles = text_tiles((1280, 942), 768)
+
+    assert tiles == (
+        (0, 0, 640, 471),
+        (640, 0, 1280, 471),
+        (0, 471, 640, 942),
+        (640, 471, 1280, 942),
+    )
+    assert text_tiles((640, 480), 768) == ((0, 0, 640, 480),)

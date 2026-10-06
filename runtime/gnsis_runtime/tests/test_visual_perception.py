@@ -6,11 +6,17 @@ from dataclasses import replace
 import pytest
 
 from gnsis_runtime.visual.perception import (
+    MAX_ELEMENTS,
+    PERCEPTION_ROLES,
+    PerceivedElement,
     TargetGrounding,
+    VisualPerception,
     build_perception_prompt,
+    merge_text_regions,
     parse_perception,
     parse_perception_or_grounding,
     perception_from_grounding,
+    perception_schema,
     validate_target_point,
 )
 
@@ -163,10 +169,98 @@ def test_perception_json_carries_target_grounding_with_provenance() -> None:
     }
 
 
-def test_perception_prompt_tells_the_model_not_to_echo_the_template() -> None:
+def test_perception_prompt_has_no_json_example_for_the_model_to_echo() -> None:
     prompt = build_perception_prompt((1280, 720), temporal=False)
 
-    assert "never return the placeholder words" in prompt
+    assert "{" not in prompt
+    assert "plain-language overview" not in prompt
+    assert "[x,y,width,height]" not in prompt
+
+
+def test_perception_schema_requires_the_parsed_contract_and_bounds_output() -> None:
+    schema = perception_schema()
+    element = schema["properties"]["elements"]["items"]
+
+    assert set(schema["required"]) == {
+        "summary",
+        "visible_text",
+        "elements",
+        "changes",
+        "confidence",
+    }
+    assert schema["additionalProperties"] is False
+    assert element["additionalProperties"] is False
+    assert element["properties"]["role"]["enum"] == list(PERCEPTION_ROLES)
+    assert element["properties"]["box"]["minItems"] == 4
+    assert element["properties"]["box"]["items"]["type"] == "integer"
+    assert schema["properties"]["summary"]["minLength"] == 1
+    assert schema["properties"]["elements"]["maxItems"] <= MAX_ELEMENTS
+
+
+def test_target_prompt_describes_the_appended_closeup_in_viewport_terms() -> None:
+    prompt = build_perception_prompt(
+        (1280, 942),
+        temporal=True,
+        target=(175, 387),
+        closeup=(0, 163, 448, 448),
+    )
+
+    assert "final screen image is the current view" in prompt
+    assert "x=0, y=163, 448 by 448 pixels" in prompt
+    assert "boxes still use full-viewport coordinates" in prompt
+
+
+def _perception(**overrides) -> VisualPerception:
+    values = dict(
+        frame_id="frame-4",
+        observed_frame_ids=("frame-4",),
+        summary="A clothing store page.",
+        visible_text=("TAK OF 99",),
+        elements=(
+            PerceivedElement(
+                label="logo",
+                role="text",
+                text="FEAR OF GOD",
+                box=(610, 80, 120, 20),
+                state="",
+                confidence=0.6,
+            ),
+        ),
+        changes=(),
+        motion=0.0,
+        confidence=0.7,
+        viewport=(1280, 942),
+    )
+    values.update(overrides)
+    return VisualPerception(**values)
+
+
+def _text(text: str, box=(10, 10, 50, 12)) -> PerceivedElement:
+    return PerceivedElement(
+        label=text, role="text", text=text, box=box, state="", confidence=0.8
+    )
+
+
+def test_text_reader_regions_replace_visible_text_and_add_undescribed_boxes() -> None:
+    merged = merge_text_regions(
+        _perception(),
+        (_text("FEAR OF GOD", (612, 82, 118, 18)), _text("SALE"), _text("SALE")),
+    )
+
+    assert merged.visible_text == ("FEAR OF GOD", "SALE")
+    assert [element.text for element in merged.elements] == [
+        "FEAR OF GOD",
+        "SALE",
+        "SALE",
+    ]
+    assert merged.elements[0].box == (610, 80, 120, 20)
+    assert merged.summary == "A clothing store page."
+
+
+def test_empty_text_reading_keeps_the_model_perception() -> None:
+    perception = _perception()
+
+    assert merge_text_regions(perception, ()) is perception
 
 
 def test_grounded_target_can_stand_in_for_an_unparseable_perception() -> None:

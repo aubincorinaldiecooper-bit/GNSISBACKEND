@@ -161,6 +161,27 @@ test("visual SDK completes the real API lifecycle and hides credentials", async 
   );
   const state = await plannerClient.state(session.sessionId);
   assert.ok(JSON.stringify(state.history).includes("click"));
+  const history = await plannerClient.history(session.sessionId, 4);
+  const frames = history.frames as Array<{ frame_id: string }>;
+  assert.deepEqual(
+    frames.map((frame) => frame.frame_id),
+    ["sdk-frame-1"],
+  );
+  const view = await plannerClient.inspect(session.sessionId, {
+    region: { x: 0, y: 0, width: 4, height: 4 },
+    displaySize: 64,
+  });
+  assert.equal(view.frame_id, "sdk-frame-1");
+  assert.equal((view.image as { mime_type: string }).mime_type, "image/png");
+  const pixels = await plannerClient.readPixels(session.sessionId, {
+    x: 0,
+    y: 0,
+    width: 2,
+    height: 1,
+  });
+  const colors = (pixels.rows as Array<{ colors: string[] }>)[0].colors;
+  assert.equal(colors.length, 2);
+  assert.match(colors[0], /^#[0-9a-f]{6}$/);
   await plannerClient.resetTask(session.sessionId);
   await client.closeSession(session.sessionId);
   await assert.rejects(
