@@ -12,6 +12,7 @@ import httpx
 from .errors import VisualServiceError
 
 _RETRYABLE_STATUSES = frozenset({502, 503, 504})
+DEFAULT_CLIENT_NAME = "gnsis-visual-sdk-python/0.1.0"
 
 
 @dataclass(frozen=True)
@@ -38,11 +39,13 @@ class VisualClient:
         timeout: float = 30.0,
         max_retries: int = 2,
         transport: httpx.BaseTransport | None = None,
+        client_name: str = DEFAULT_CLIENT_NAME,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must not be negative")
         _validate_base_url(base_url)
         self._api_token = api_token
+        self._client_name = _client_label(client_name)
         self._http = httpx.Client(
             base_url=base_url.rstrip("/"),
             timeout=timeout,
@@ -241,9 +244,9 @@ class VisualClient:
         retry: bool,
         accept_unknown_session_after_retry: bool = False,
     ) -> dict[str, Any]:
-        headers = (
-            {"Authorization": f"Bearer {self._api_token}"} if authenticated else {}
-        )
+        headers = {"X-Panoptic-Client": self._client_name}
+        if authenticated:
+            headers["Authorization"] = f"Bearer {self._api_token}"
         attempts = self._max_retries + 1 if retry else 1
         for attempt in range(attempts):
             try:
@@ -331,6 +334,13 @@ def _redact(value: str, *secrets: str) -> str:
         if secret:
             value = value.replace(secret, "[redacted]")
     return value
+
+
+def _client_label(value: str) -> str:
+    """Printable ASCII, at most 128 characters, as the service records it."""
+
+    label = "".join(ch for ch in value if " " <= ch <= "~").strip()[:128]
+    return label or DEFAULT_CLIENT_NAME
 
 
 def _validate_base_url(base_url: str) -> None:

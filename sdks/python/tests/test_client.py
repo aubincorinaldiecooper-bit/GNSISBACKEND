@@ -471,3 +471,27 @@ def test_real_api_lifecycle_and_credential_redaction(
         bad_client.close()
         if planner_client is not None:
             planner_client.close()
+
+
+def test_client_sends_a_bounded_client_label() -> None:
+    seen: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        return httpx.Response(200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    with VisualClient("https://visual.example", "t", transport=transport) as client:
+        client.health()
+    with VisualClient(
+        "https://visual.example",
+        "t",
+        transport=transport,
+        client_name="claude-code\n" + "x" * 200,
+    ) as client:
+        client.state("session-1")
+
+    assert seen[0]["x-panoptic-client"] == "gnsis-visual-sdk-python/0.1.0"
+    assert "authorization" not in seen[0]
+    assert seen[1]["x-panoptic-client"] == "claude-code" + "x" * 117
+    assert seen[1]["authorization"] == "Bearer t"

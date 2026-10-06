@@ -6,11 +6,14 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Image
-from mcp.types import TextContent
+from mcp.types import TextContent, ToolAnnotations
+
+READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False)
+SESSION_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False)
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class VisualMCPConfig:
     api_token: str = field(repr=False)
     session_id: str
     timeout_sec: float = 30.0
+    client_name: str = "panoptic-mcp/0.1.0"
 
     @classmethod
     def from_env(cls) -> "VisualMCPConfig":
@@ -38,7 +42,7 @@ class VisualMCPConfig:
         ]
         if missing:
             raise RuntimeError(
-                f"missing Smaller GNSIS MCP configuration: {', '.join(missing)}"
+                f"missing Panoptic MCP configuration: {', '.join(missing)}"
             )
         try:
             parsed = urlsplit(api_base)
@@ -56,13 +60,12 @@ class VisualMCPConfig:
                 "::1",
             }
         ):
-            raise RuntimeError(
-                "Smaller GNSIS MCP requires HTTPS except for loopback hosts"
-            )
+            raise RuntimeError("Panoptic MCP requires HTTPS except for loopback hosts")
         return cls(
             api_base=api_base,
             api_token=api_token,
             session_id=session_id,
+            client_name=os.environ.get("GNSIS_VISUAL_CLIENT", "panoptic-mcp/0.1.0"),
         )
 
 
@@ -145,7 +148,7 @@ class VisualAPIClient:
             body = json.dumps(payload, separators=(",", ":")).encode()
         url = (
             f"{self.config.api_base}/v1/visual/sessions/"
-            f"{self.config.session_id}{suffix}"
+            f"{quote(self.config.session_id, safe='')}{suffix}"
         )
         request = urllib.request.Request(
             url,
@@ -154,6 +157,7 @@ class VisualAPIClient:
             headers={
                 "Authorization": f"Bearer {self.config.api_token}",
                 "Content-Type": "application/json",
+                "X-Panoptic-Client": _client_label(self.config.client_name),
             },
         )
         try:
@@ -167,12 +171,22 @@ class VisualAPIClient:
                 error = json.load(exc)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 error = {"error": {"code": "http_error", "message": str(exc)}}
-            raise RuntimeError(json.dumps(error, separators=(",", ":"))) from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Smaller GNSIS API unavailable: {exc.reason}") from exc
+            message = json.dumps(error, separators=(",", ":"))
+            raise RuntimeError(
+                message.replace(self.config.api_token, "[redacted]")
+            ) from None
+        except urllib.error.URLError:
+            raise RuntimeError(
+                "Panoptic API unavailable: network or timeout error"
+            ) from None
         if not isinstance(value, dict):
-            raise RuntimeError("Smaller GNSIS API returned a non-object response")
+            raise RuntimeError("Panoptic API returned a non-object response")
         return value
+
+
+def _client_label(value: str) -> str:
+    label = "".join(ch for ch in value if " " <= ch <= "~").strip()[:128]
+    return label or "panoptic-mcp/0.1.0"
 
 
 def _region(region: tuple[int, int, int, int]) -> dict[str, int]:
@@ -193,7 +207,7 @@ def _optional_region(
 def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
     client = VisualAPIClient(config or VisualMCPConfig.from_env())
     server = MCPServer(
-        "smaller-gnsis",
+        "panoptic",
         description=(
             "Rolling visual understanding and grounded decisions over a host-owned "
             "live screen stream. Use a session-scoped planner token. The host alone "
@@ -202,7 +216,7 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         version="1.0.0",
     )
 
-    @server.tool()
+    @server.tool(annotations=SESSION_WRITE)
     def visual_set_task(
         goal: str,
         allowed_actions: list[str] | None = None,
@@ -211,7 +225,7 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
 
         return client.set_task(goal, allowed_actions)
 
-    @server.tool()
+    @server.tool(annotations=SESSION_WRITE)
     def visual_decide(request_id: str) -> dict[str, object]:
         """Return one grounded action for the current live visual frame.
 
@@ -220,7 +234,7 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
 
         return client.decide(request_id)
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def visual_perceive(
         request_id: str,
         focus: str | None = None,
@@ -240,13 +254,13 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         target = None if target_x is None or target_y is None else (target_x, target_y)
         return client.perceive(request_id, focus, target)
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def visual_state() -> dict[str, object]:
         """Inspect task, bounded history, current frame and usage state."""
 
         return client.state()
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def visual_history(limit: int | None = None) -> dict[str, object]:
         """List retained frames and earlier perception answers, newest first.
 
@@ -256,7 +270,7 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
 
         return client.history(limit)
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def visual_inspect(
         question: str,
         frame_id: str | None = None,
@@ -277,14 +291,14 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         )
         image = view.pop("image")
         if not isinstance(image, dict):
-            raise RuntimeError("Smaller GNSIS API returned no inspection image")
+            raise RuntimeError("Panoptic API returned no inspection image")
         view["question"] = " ".join(question.split())[:500]
         return [
             TextContent(type="text", text=json.dumps(view)),
             Image(data=base64.b64decode(str(image["data"])), format="png"),
         ]
 
-    @server.tool()
+    @server.tool(annotations=READ_ONLY)
     def visual_read_pixels(
         x: int,
         y: int,
@@ -299,7 +313,7 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
 
         return client.read_pixels((x, y, width, height), frame_id, step)
 
-    @server.tool()
+    @server.tool(annotations=SESSION_WRITE)
     def visual_reset() -> dict[str, object]:
         """Clear the current goal and visual action history."""
 

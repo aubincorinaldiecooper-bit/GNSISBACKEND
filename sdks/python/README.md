@@ -1,6 +1,6 @@
 # GNSIS Visual SDK for Python
 
-`gnsis-visual-sdk` calls the Smaller GNSIS visual API and streams frames
+`gnsis-visual-sdk` calls the Panoptic visual API and streams frames
 captured by a trusted host. It does not capture screens, execute actions, or
 grant permissions.
 
@@ -43,6 +43,23 @@ single-use `record_attempt` requests. `create_session`, `close_session`, and
 `record_attempt` require the host token. The host receives a session-scoped
 `planner_token` at creation for planner task, decision, and state access.
 
+Each request sends `X-Panoptic-Client` (default `gnsis-visual-sdk-python/0.1.0`)
+so usage can be grouped by agent. Pass `client_name="my-agent/1.0"` to label
+your integration; the label is self-reported, not verified identity.
+
+## MCP server for agents
+
+The optional `mcp` extra installs `panoptic-mcp`, a stdio MCP server that gives
+Claude Code, Codex, OpenClaw or any MCP client read access to a host-owned
+session through its planner token. It exposes no capture, click or execution
+tools.
+
+```bash
+pip install "gnsis-visual-sdk[mcp] @ git+https://github.com/aubincorinaldiecooper-bit/GNSISBACKEND.git#subdirectory=sdks/python"
+```
+
+See `docs/smaller-gnsis-service.md` for the tool list and agent configuration.
+
 ## GNSIS Browser host
 
 The SDK includes a connector for GNSIS Browser's existing Hub protocol. It
@@ -62,7 +79,7 @@ Hub with `?ws=8766`; after the extension approves the connection, the connector:
 
 1. creates one visual session and starts the existing `capture.frame` stream;
 2. sends each live tab frame through `FrameStream`;
-3. requests one bounded Smaller GNSIS decision;
+3. requests one bounded Panoptic decision;
 4. sends it through the existing `browser.action` authority contract;
 5. records the correlated action attempt and repeats from a fresh frame.
 

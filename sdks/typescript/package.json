@@ -1,7 +1,7 @@
 {
   "name": "@gnsis/visual-sdk",
   "version": "0.1.0",
-  "description": "Client SDK for the Smaller GNSIS visual API",
+  "description": "Client SDK for the Panoptic visual API",
   "license": "MIT",
   "type": "module",
   "engines": {

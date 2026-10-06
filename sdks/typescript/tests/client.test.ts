@@ -471,3 +471,28 @@ test("close does not suppress unknown session on its first attempt", async () =>
   );
   assert.equal(calls, 1);
 });
+
+test("sends a bounded client label for usage attribution", async () => {
+  const seen: Headers[] = [];
+  const fakeFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers));
+    return new Response(JSON.stringify({ status: "ok" }), {
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  await new VisualClient({
+    baseUrl: "https://visual.example",
+    apiToken: "t",
+    fetch: fakeFetch,
+  }).health();
+  await new VisualClient({
+    baseUrl: "https://visual.example",
+    apiToken: "t",
+    fetch: fakeFetch,
+    clientName: `openclaw\n${"x".repeat(200)}`,
+  }).health();
+
+  assert.equal(seen[0]?.get("x-panoptic-client"), "gnsis-visual-sdk-typescript/0.1.0");
+  assert.equal(seen[1]?.get("x-panoptic-client"), `openclaw${"x".repeat(120)}`);
+});
