@@ -19,6 +19,7 @@ instructions) can be placed first.
 
 from __future__ import annotations
 
+import json
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Callable, Mapping, Sequence
 
@@ -91,8 +92,12 @@ def minicpmv_generator(
     *,
     lock: AbstractContextManager[Any] | None = None,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    json_schema: Mapping[str, Any] | None = None,
 ) -> Generate:
     """Greedy generation on the loaded System-1 MiniCPM-V backbone.
+
+    With ``json_schema``, decoding is constrained by an xgrammar grammar so the
+    reply is always a JSON object matching that schema.
 
     Uses the same weights System 1 already holds, so verification adds no
     second vision model. Pass the engine's lock so a verdict never runs on the
@@ -108,6 +113,11 @@ def minicpmv_generator(
     processor, model = backbone.processor, backbone.model
     device = getattr(backbone, "device", None)
     guard = lock if lock is not None else nullcontext()
+    grammar = (
+        None
+        if json_schema is None
+        else _compile_json_schema(processor, model, json_schema)
+    )
 
     def generate(images: Sequence[Any], prompt: str) -> str:
         content = [{"type": "image", "image": image.convert("RGB")} for image in images]
@@ -127,14 +137,40 @@ def minicpmv_generator(
                 key: value.to(device) if hasattr(value, "to") else value
                 for key, value in inputs.items()
             }
+        constraint = {} if grammar is None else {"logits_processor": [grammar()]}
         with guard, torch.inference_mode():
             output = model.generate(
                 **inputs,
                 downsample_mode=MINICPMV_DOWNSAMPLE_MODE,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
+                **constraint,
             )
         fresh = output[:, inputs["input_ids"].shape[1] :]
         return processor.batch_decode(fresh, skip_special_tokens=True)[0]
 
     return generate
+
+
+def _compile_json_schema(
+    processor: Any,
+    model: Any,
+    schema: Mapping[str, Any],
+) -> Callable[[], Any]:
+    """Compile once; return a factory of single-use xgrammar logits processors."""
+
+    import xgrammar as xgr
+    from xgrammar.contrib.hf import LogitsProcessor
+
+    stop = model.generation_config.eos_token_id
+    tokenizer_info = xgr.TokenizerInfo.from_huggingface(
+        processor.tokenizer,
+        vocab_size=model.get_output_embeddings().weight.shape[0],
+        stop_token_ids=stop,
+    )
+    compiled = xgr.GrammarCompiler(tokenizer_info).compile_json_schema(
+        json.dumps(schema),
+        any_whitespace=False,
+        separators=(",", ":"),
+    )
+    return lambda: LogitsProcessor(compiled)

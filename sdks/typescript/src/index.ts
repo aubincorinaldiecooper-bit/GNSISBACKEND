@@ -20,6 +20,14 @@ export interface VisualSession {
 }
 
 /** A current-viewport pixel to ground; nothing is drawn onto the frame. */
+/** Viewport-pixel rectangle of a retained frame. */
+export interface Region {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface TargetPoint {
   x: number;
   y: number;
@@ -215,6 +223,57 @@ export class VisualClient {
         request_id: stableRequestId,
         ...(focus === undefined ? {} : { focus }),
         ...(target === undefined ? {} : { target }),
+      },
+      true,
+      true,
+    );
+  }
+
+  /** Retained frames and earlier perceptions, newest first. */
+  async history(sessionId: string, limit?: number): Promise<JsonObject> {
+    const query = limit === undefined ? "" : `?limit=${Math.trunc(limit)}`;
+    return this.#request(
+      "GET",
+      `${this.#sessionPath(sessionId)}/history${query}`,
+      undefined,
+      true,
+      true,
+    );
+  }
+
+  /** A full-resolution PNG crop (base64) of a retained frame's region. */
+  async inspect(
+    sessionId: string,
+    options: { frameId?: string; region?: Region; displaySize?: number } = {},
+  ): Promise<JsonObject> {
+    return this.#request(
+      "POST",
+      `${this.#sessionPath(sessionId)}/inspections`,
+      {
+        ...(options.frameId === undefined ? {} : { frame_id: options.frameId }),
+        ...(options.region === undefined ? {} : { region: { ...options.region } }),
+        ...(options.displaySize === undefined
+          ? {}
+          : { display_size: options.displaySize }),
+      },
+      true,
+      true,
+    );
+  }
+
+  /** Exact `#rrggbb` samples from a retained frame's region. */
+  async readPixels(
+    sessionId: string,
+    region: Region,
+    options: { frameId?: string; step?: number } = {},
+  ): Promise<JsonObject> {
+    return this.#request(
+      "POST",
+      `${this.#sessionPath(sessionId)}/pixels`,
+      {
+        region: { ...region },
+        step: options.step ?? 1,
+        ...(options.frameId === undefined ? {} : { frame_id: options.frameId }),
       },
       true,
       true,

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Image
+from mcp.types import TextContent
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,36 @@ class VisualAPIClient:
     def state(self) -> dict[str, object]:
         return self._request("GET", "")
 
+    def history(self, limit: int | None = None) -> dict[str, object]:
+        query = "" if limit is None else "?" + urlencode({"limit": int(limit)})
+        return self._request("GET", f"/history{query}")
+
+    def inspect(
+        self,
+        frame_id: str | None = None,
+        region: tuple[int, int, int, int] | None = None,
+        display_size: int | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        if frame_id is not None:
+            payload["frame_id"] = frame_id
+        if region is not None:
+            payload["region"] = _region(region)
+        if display_size is not None:
+            payload["display_size"] = int(display_size)
+        return self._request("POST", "/inspections", payload)
+
+    def read_pixels(
+        self,
+        region: tuple[int, int, int, int],
+        frame_id: str | None = None,
+        step: int = 1,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {"region": _region(region), "step": int(step)}
+        if frame_id is not None:
+            payload["frame_id"] = frame_id
+        return self._request("POST", "/pixels", payload)
+
     def reset(self) -> dict[str, object]:
         return self._request("DELETE", "/task")
 
@@ -140,6 +173,21 @@ class VisualAPIClient:
         if not isinstance(value, dict):
             raise RuntimeError("Smaller GNSIS API returned a non-object response")
         return value
+
+
+def _region(region: tuple[int, int, int, int]) -> dict[str, int]:
+    x, y, width, height = (int(value) for value in region)
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _optional_region(
+    x: int | None, y: int | None, width: int | None, height: int | None
+) -> tuple[int, int, int, int] | None:
+    if x is None and y is None and width is None and height is None:
+        return None
+    if x is None or y is None or width is None or height is None:
+        raise ValueError("x, y, width and height must be supplied together")
+    return (x, y, width, height)
 
 
 def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
@@ -197,6 +245,59 @@ def build_server(config: VisualMCPConfig | None = None) -> MCPServer:
         """Inspect task, bounded history, current frame and usage state."""
 
         return client.state()
+
+    @server.tool()
+    def visual_history(limit: int | None = None) -> dict[str, object]:
+        """List retained frames and earlier perception answers, newest first.
+
+        Frames listed here can be addressed by frame_id in visual_inspect and
+        visual_read_pixels; older frames have left the bounded window.
+        """
+
+        return client.history(limit)
+
+    @server.tool()
+    def visual_inspect(
+        question: str,
+        frame_id: str | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        display_size: int | None = None,
+    ) -> list[TextContent | Image]:
+        """Look closely at a retained frame: the region x, y, width, height
+        (viewport pixels) cropped at full resolution and enlarged to about
+        display_size pixels. Omit the region for the whole frame and frame_id
+        for the latest frame. State in question what you are checking.
+        """
+
+        view = client.inspect(
+            frame_id, _optional_region(x, y, width, height), display_size
+        )
+        image = view.pop("image")
+        if not isinstance(image, dict):
+            raise RuntimeError("Smaller GNSIS API returned no inspection image")
+        view["question"] = " ".join(question.split())[:500]
+        return [
+            TextContent(type="text", text=json.dumps(view)),
+            Image(data=base64.b64decode(str(image["data"])), format="png"),
+        ]
+
+    @server.tool()
+    def visual_read_pixels(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        frame_id: str | None = None,
+        step: int = 1,
+    ) -> dict[str, object]:
+        """Exact #rrggbb colours of a retained frame's region, sampled every
+        step pixels (at most 4096 samples). frame_id defaults to the latest frame.
+        """
+
+        return client.read_pixels((x, y, width, height), frame_id, step)
 
     @server.tool()
     def visual_reset() -> dict[str, object]:

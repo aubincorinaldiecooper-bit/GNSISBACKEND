@@ -1,5 +1,6 @@
 from contextlib import nullcontext
 from dataclasses import dataclass
+import json
 import sys
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from gnsis_runtime.screen import ScreenFrame
+from gnsis_runtime.visual.perception import perception_schema
 from gnsis_runtime.visual.verification import (
     ExpectedState,
     OcrTextJudge,
@@ -354,6 +356,80 @@ def test_minicpmv_generator_uses_uniform_unsliced_temporal_images(monkeypatch):
     assert seen["processor_kwargs"]["max_slice_nums"] == 1
     assert seen["processor_kwargs"]["use_image_id"] is True
     assert seen["model_kwargs"]["downsample_mode"] == "4x"
+
+
+def test_minicpmv_generator_constrains_decoding_with_a_fresh_schema_processor(
+    monkeypatch,
+):
+    seen = {"compiled": [], "processors": [], "generate": []}
+
+    class Processor:
+        tokenizer = "tokenizer"
+
+        def apply_chat_template(self, messages, **kwargs):
+            return {"input_ids": np.array([[1, 2]])}
+
+        def batch_decode(self, output, **kwargs):
+            return ['{"summary":"screen"}']
+
+    class Model:
+        generation_config = SimpleNamespace(eos_token_id=[7, 9])
+
+        def get_output_embeddings(self):
+            return SimpleNamespace(weight=np.zeros((12, 1)))
+
+        def generate(self, **kwargs):
+            seen["generate"].append(kwargs["logits_processor"])
+            return np.array([[1, 2, 3]])
+
+    class TokenizerInfo:
+        @staticmethod
+        def from_huggingface(tokenizer, vocab_size, stop_token_ids):
+            seen["tokenizer"] = (tokenizer, vocab_size, stop_token_ids)
+            return "info"
+
+    class GrammarCompiler:
+        def __init__(self, info):
+            assert info == "info"
+
+        def compile_json_schema(self, schema, **kwargs):
+            seen["compiled"].append((json.loads(schema), kwargs))
+            return "grammar"
+
+    class LogitsProcessor:
+        def __init__(self, compiled):
+            assert compiled == "grammar"
+            seen["processors"].append(self)
+
+    hf = SimpleNamespace(LogitsProcessor=LogitsProcessor)
+    xgrammar = SimpleNamespace(
+        TokenizerInfo=TokenizerInfo,
+        GrammarCompiler=GrammarCompiler,
+        contrib=SimpleNamespace(hf=hf),
+    )
+    monkeypatch.setitem(sys.modules, "xgrammar", xgrammar)
+    monkeypatch.setitem(sys.modules, "xgrammar.contrib", xgrammar.contrib)
+    monkeypatch.setitem(sys.modules, "xgrammar.contrib.hf", hf)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(inference_mode=nullcontext),
+    )
+    schema = perception_schema()
+    generate = minicpmv_generator(
+        SimpleNamespace(processor=Processor(), model=Model(), device=None),
+        json_schema=schema,
+    )
+
+    generate((image(10),), "describe")
+    generate((image(10),), "describe")
+
+    assert seen["tokenizer"] == ("tokenizer", 12, [7, 9])
+    assert seen["compiled"] == [
+        (schema, {"any_whitespace": False, "separators": (",", ":")})
+    ]
+    assert [calls[0] for calls in seen["generate"]] == seen["processors"]
+    assert seen["processors"][0] is not seen["processors"][1]
 
 
 def test_vlm_judge_sees_before_and_after_and_is_validated_like_any_judge():

@@ -30,6 +30,9 @@ FLORENCE_MODEL_ID = "florence-community/Florence-2-large-ft"
 FLORENCE_REVISION = "26b734a54fdfbf9c398351eedfabb7f27fc470b7"
 QWEN_MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
 DEFAULT_CROP_SIZE = 640
+CLOSEUP_SIZE = 448
+TEXT_TILE_SIZE = 768
+MAX_TEXT_REGIONS = 60
 FALLBACK_BELOW_CONFIDENCE = 0.5
 MAX_LABEL_CHARS = 200
 MAX_TEXT_CHARS = 500
@@ -47,6 +50,12 @@ class TargetGrounder(Protocol):
         point: tuple[int, int],
         focus: str | None = None,
     ) -> TargetGrounding: ...
+
+
+class TextReader(Protocol):
+    name: str
+
+    def read_text(self, image: Image.Image) -> tuple[PerceivedElement, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +81,26 @@ def crop_around(
         image=image.crop((left, top, left + crop_width, top + crop_height)),
         origin=(left, top),
         point=(x - left, y - top),
+    )
+
+
+def text_tiles(
+    size: tuple[int, int],
+    tile: int = TEXT_TILE_SIZE,
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Equal ``left, top, right, bottom`` tiles no larger than ``tile`` per side."""
+
+    width, height = size
+    columns, rows = -(-width // tile), -(-height // tile)
+    return tuple(
+        (
+            column * width // columns,
+            row * height // rows,
+            (column + 1) * width // columns,
+            (row + 1) * height // rows,
+        )
+        for row in range(rows)
+        for column in range(columns)
     )
 
 
@@ -317,17 +346,9 @@ class Florence2Grounder:
             viewport_box = box_to_viewport(box, crop.origin, image.size)
             if viewport_box is not None:
                 candidates.append(("dense", str(label), viewport_box))
-        for quad, label in zip(
-            _list(ocr, "quad_boxes"), _list(ocr, "labels"), strict=False
-        ):
-            if len(quad) != 8:
-                continue
-            xs, ys = quad[0::2], quad[1::2]
-            viewport_box = box_to_viewport(
-                (min(xs), min(ys), max(xs), max(ys)), crop.origin, image.size
-            )
-            if viewport_box is not None:
-                candidates.append(("ocr", str(label).replace("</s>", ""), viewport_box))
+        candidates.extend(
+            ("ocr", label, box) for label, box in _ocr_boxes(ocr, crop.origin, image.size)
+        )
         hits = sorted(
             (item for item in candidates if contains_point(item[2], point)),
             key=lambda item: box_area(item[2]),
@@ -347,6 +368,50 @@ class Florence2Grounder:
             confidence=OCR_CONFIDENCE if kind == "ocr" else DETECTION_CONFIDENCE,
             source=self.name,
         )
+
+    def read_text(self, image: Image.Image) -> tuple[PerceivedElement, ...]:
+        """Full-resolution OCR of the whole frame, tile by tile, in reading order."""
+
+        image = image.convert("RGB")
+        regions: list[tuple[str, tuple[int, int, int, int]]] = []
+        with self._lock:
+            self._load()
+            for left, top, right, bottom in text_tiles(image.size):
+                ocr = self._run(
+                    "<OCR_WITH_REGION>", image.crop((left, top, right, bottom))
+                )
+                regions.extend(_ocr_boxes(ocr, (left, top), image.size))
+        ordered = sorted(
+            ((" ".join(text.split()), box) for text, box in regions if text.strip()),
+            key=lambda item: (item[1][1], item[1][0]),
+        )
+        return tuple(
+            PerceivedElement(
+                label=_clip(text, MAX_LABEL_CHARS),
+                role="text",
+                text=_clip(text, MAX_TEXT_CHARS),
+                box=box,
+                state="",
+                confidence=OCR_CONFIDENCE,
+            )
+            for text, box in ordered[:MAX_TEXT_REGIONS]
+        )
+
+
+def _ocr_boxes(
+    ocr: Any,
+    origin: tuple[int, int],
+    viewport: tuple[int, int],
+) -> list[tuple[str, tuple[int, int, int, int]]]:
+    regions: list[tuple[str, tuple[int, int, int, int]]] = []
+    for quad, label in zip(_list(ocr, "quad_boxes"), _list(ocr, "labels"), strict=False):
+        if len(quad) != 8:
+            continue
+        xs, ys = quad[0::2], quad[1::2]
+        box = box_to_viewport((min(xs), min(ys), max(xs), max(ys)), origin, viewport)
+        if box is not None:
+            regions.append((str(label).replace("</s>", ""), box))
+    return regions
 
 
 class Qwen3VLGrounder:

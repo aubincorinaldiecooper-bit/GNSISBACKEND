@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import urllib.error
@@ -40,6 +41,9 @@ def test_official_mcp_server_exposes_only_non_actuating_visual_tools() -> None:
         "visual_perceive",
         "visual_state",
         "visual_reset",
+        "visual_history",
+        "visual_inspect",
+        "visual_read_pixels",
     }
     assert not {tool.name for tool in tools} & {
         "click",
@@ -142,6 +146,83 @@ def test_mcp_client_requests_task_independent_perception(monkeypatch) -> None:
         "target": {"x": 175, "y": 387},
     }
     assert result["perception"]["frame_id"] == "frame-1"
+
+
+def test_mcp_inspect_returns_the_crop_as_an_image_and_reads_pixels(
+    monkeypatch,
+) -> None:
+    requests = []
+    png = b"\x89PNG\r\n\x1a\nfake"
+
+    def urlopen(request, timeout):
+        body = json.loads(request.data) if request.data else None
+        requests.append((request.get_method(), request.full_url, body))
+        if request.full_url.endswith("/inspections"):
+            payload = {
+                "frame_id": "frame-2",
+                "region": [10, 20, 30, 40],
+                "image": {
+                    "mime_type": "image/png",
+                    "width": 240,
+                    "height": 320,
+                    "data": base64.b64encode(png).decode(),
+                },
+            }
+        else:
+            payload = {"frame_id": "frame-2", "rows": [], "columns": []}
+        return FakeResponse(json.dumps(payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    server = build_server(_config())
+    inspected = asyncio.run(
+        server.call_tool(
+            "visual_inspect",
+            {
+                "question": "Is the  toggle on?",
+                "frame_id": "frame-2",
+                "x": 10,
+                "y": 20,
+                "width": 30,
+                "height": 40,
+            },
+        )
+    )
+    asyncio.run(
+        server.call_tool(
+            "visual_read_pixels",
+            {"x": 1, "y": 2, "width": 3, "height": 4, "step": 2},
+        )
+    )
+
+    blocks = inspected.content
+    images = [block for block in blocks if block.type == "image"]
+    texts = [block.text for block in blocks if block.type == "text"]
+    assert base64.b64decode(images[0].data) == png
+    assert "Is the toggle on?" in texts[0]
+    assert "secret-token" not in "".join(texts)
+    assert requests == [
+        (
+            "POST",
+            "https://visual.example/v1/visual/sessions/session-1/inspections",
+            {
+                "frame_id": "frame-2",
+                "region": {"x": 10, "y": 20, "width": 30, "height": 40},
+            },
+        ),
+        (
+            "POST",
+            "https://visual.example/v1/visual/sessions/session-1/pixels",
+            {"region": {"x": 1, "y": 2, "width": 3, "height": 4}, "step": 2},
+        ),
+    ]
+
+
+def test_mcp_inspect_requires_a_complete_region() -> None:
+    server = build_server(_config())
+
+    with pytest.raises(Exception) as excinfo:
+        asyncio.run(server.call_tool("visual_inspect", {"question": "what?", "x": 1}))
+    assert "supplied together" in str(excinfo.value.__cause__)
 
 
 def test_mcp_client_surfaces_structured_api_errors(monkeypatch) -> None:

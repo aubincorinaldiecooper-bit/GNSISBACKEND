@@ -179,6 +179,58 @@ class VisualClient:
             retry=True,
         )
 
+    def history(self, session_id: str, limit: int | None = None) -> dict[str, Any]:
+        """Retained frames and earlier perceptions, newest first."""
+
+        suffix = "" if limit is None else f"?limit={int(limit)}"
+        return self._request(
+            "GET",
+            f"/v1/visual/sessions/{quote(session_id, safe='')}/history{suffix}",
+            retry=True,
+        )
+
+    def inspect(
+        self,
+        session_id: str,
+        frame_id: str | None = None,
+        region: tuple[int, int, int, int] | None = None,
+        display_size: int | None = None,
+    ) -> dict[str, Any]:
+        """A full-resolution PNG crop (base64) of a retained frame's region."""
+
+        payload: dict[str, Any] = {}
+        if frame_id is not None:
+            payload["frame_id"] = frame_id
+        if region is not None:
+            payload["region"] = _region(region)
+        if display_size is not None:
+            payload["display_size"] = int(display_size)
+        return self._request(
+            "POST",
+            f"/v1/visual/sessions/{quote(session_id, safe='')}/inspections",
+            json=payload,
+            retry=True,
+        )
+
+    def read_pixels(
+        self,
+        session_id: str,
+        region: tuple[int, int, int, int],
+        frame_id: str | None = None,
+        step: int = 1,
+    ) -> dict[str, Any]:
+        """Exact ``#rrggbb`` samples from a retained frame's region."""
+
+        payload: dict[str, Any] = {"region": _region(region), "step": int(step)}
+        if frame_id is not None:
+            payload["frame_id"] = frame_id
+        return self._request(
+            "POST",
+            f"/v1/visual/sessions/{quote(session_id, safe='')}/pixels",
+            json=payload,
+            retry=True,
+        )
+
     def _request(
         self,
         method: str,
@@ -267,6 +319,11 @@ class VisualClient:
             status_code=response.status_code,
             retryable=retryable,
         )
+
+
+def _region(region: tuple[int, int, int, int]) -> dict[str, int]:
+    x, y, width, height = (int(value) for value in region)
+    return {"x": x, "y": y, "width": width, "height": height}
 
 
 def _redact(value: str, *secrets: str) -> str:

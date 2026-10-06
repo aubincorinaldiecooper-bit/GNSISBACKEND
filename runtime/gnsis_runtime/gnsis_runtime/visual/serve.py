@@ -20,6 +20,7 @@ from .grounding import (
     GroundingRouter,
     Qwen3VLGrounder,
     TargetGrounder,
+    TextReader,
 )
 from .metering import HttpUsageSink, UsageSink
 from .runtime import PanopticPolicy, VisualDecisionProvider
@@ -70,18 +71,19 @@ def build_grounder(
     *,
     device: str,
     dtype: str,
-) -> TargetGrounder | None:
-    """Compose the focused grounding sidecar; models load on first target request."""
+) -> tuple[TargetGrounder | None, TextReader | None]:
+    """Compose the grounding sidecar and its full-frame text reader.
+
+    Florence serves both on one lazily loaded model.
+    """
 
     if primary == "none":
-        return None
+        return None, None
     secondary: TargetGrounder | None = None
     if fallback == "qwen":
         secondary = Qwen3VLGrounder(device=device, dtype=dtype)
-    return GroundingRouter(
-        Florence2Grounder(device=device, dtype=dtype),
-        secondary,
-    )
+    florence = Florence2Grounder(device=device, dtype=dtype)
+    return GroundingRouter(florence, secondary), florence
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -138,15 +140,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     from .backbone import BackboneConfig
     from .engine import JEVEngine, VisualCache
 
+    grounder, text_reader = build_grounder(
+        args.grounder,
+        args.fallback_grounder,
+        device=args.device,
+        dtype=args.dtype,
+    )
     engine = JEVEngine(
         BackboneConfig(model_dir=args.model, dtype=args.dtype, device=args.device),
         args.head,
-        build_grounder(
-            args.grounder,
-            args.fallback_grounder,
-            device=args.device,
-            dtype=args.dtype,
-        ),
+        grounder,
+        text_reader,
     )
     usage_sink_factory = (
         (lambda _service: HttpUsageSink(usage_url, usage_secret))

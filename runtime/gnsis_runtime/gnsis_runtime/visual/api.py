@@ -6,14 +6,21 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from ..screen_transport import ScreenFrameHeader, decode_screen_frame
 from .grants import GrantVerifier
-from .service import OPERATOR, SessionTenant, VisualService, VisualServiceError
+from .inspection import DEFAULT_DISPLAY_SIZE, MAX_DISPLAY_SIZE, Region
+from .service import (
+    MAX_HISTORY_ENTRIES,
+    OPERATOR,
+    SessionTenant,
+    VisualService,
+    VisualServiceError,
+)
 
 MAX_FRAME_HEADER_BYTES = 4096
 MAX_FRAME_BYTES = 8 * 1024 * 1024
@@ -50,6 +57,28 @@ class TargetPointRequest(BaseModel):
 class PerceptionRequest(DecisionRequest):
     focus: str | None = Field(default=None, min_length=1, max_length=1_000)
     target: TargetPointRequest | None = None
+
+
+class RegionRequest(BaseModel):
+    x: int = Field(ge=0, le=MAX_TARGET_COORDINATE)
+    y: int = Field(ge=0, le=MAX_TARGET_COORDINATE)
+    width: int = Field(ge=1, le=MAX_TARGET_COORDINATE)
+    height: int = Field(ge=1, le=MAX_TARGET_COORDINATE)
+
+    def region(self) -> Region:
+        return Region(self.x, self.y, self.width, self.height)
+
+
+class InspectionRequest(BaseModel):
+    frame_id: str | None = Field(default=None, min_length=1, max_length=256)
+    region: RegionRequest | None = None
+    display_size: int = Field(default=DEFAULT_DISPLAY_SIZE, ge=64, le=MAX_DISPLAY_SIZE)
+
+
+class PixelRequest(BaseModel):
+    frame_id: str | None = Field(default=None, min_length=1, max_length=256)
+    region: RegionRequest
+    step: int = Field(default=1, ge=1, le=MAX_TARGET_COORDINATE)
 
 
 class AttemptRequest(BaseModel):
@@ -283,6 +312,40 @@ def create_visual_api(
             payload.request_id,
             payload.focus,
             None if payload.target is None else (payload.target.x, payload.target.y),
+        )
+
+    @app.get(
+        "/v1/visual/sessions/{session_id}/history",
+        dependencies=[Depends(require_session_bearer)],
+    )
+    async def history(
+        session_id: str,
+        limit: int = Query(default=MAX_HISTORY_ENTRIES, ge=1, le=MAX_HISTORY_ENTRIES),
+    ) -> dict[str, Any]:
+        return service.history(session_id, limit)
+
+    @app.post(
+        "/v1/visual/sessions/{session_id}/inspections",
+        dependencies=[Depends(require_session_bearer)],
+    )
+    def inspect(session_id: str, payload: InspectionRequest) -> dict[str, Any]:
+        return service.inspect(
+            session_id,
+            payload.frame_id,
+            None if payload.region is None else payload.region.region(),
+            payload.display_size,
+        )
+
+    @app.post(
+        "/v1/visual/sessions/{session_id}/pixels",
+        dependencies=[Depends(require_session_bearer)],
+    )
+    def pixels(session_id: str, payload: PixelRequest) -> dict[str, Any]:
+        return service.read_pixels(
+            session_id,
+            payload.region.region(),
+            payload.frame_id,
+            payload.step,
         )
 
     @app.post(
