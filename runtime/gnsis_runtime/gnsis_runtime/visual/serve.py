@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -24,7 +25,7 @@ from .grounding import (
 )
 from .metering import HttpUsageSink, UsageSink
 from .runtime import PanopticPolicy, VisualDecisionProvider
-from .service import VisualService
+from .service import DEFAULT_IDLE_TIMEOUT_S, VisualService
 
 
 def build_app(
@@ -36,22 +37,38 @@ def build_app(
     max_sessions: int = 32,
     cache_factory: Callable[[], Any] | None = None,
     usage_sink_factory: Callable[[VisualService], UsageSink] | None = None,
+    idle_timeout_s: float | None = DEFAULT_IDLE_TIMEOUT_S,
+    idle_sweep_interval_s: float = 10.0,
 ) -> FastAPI:
     service = VisualService(
         policy,
         decision_provider=decision_provider,
         cache_factory=cache_factory,
         max_sessions=max_sessions,
+        idle_timeout_s=idle_timeout_s,
     )
     sink = usage_sink_factory(service) if usage_sink_factory is not None else None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        stop_sweep = threading.Event()
+        sweeper = None
+        if service.idle_timeout_s is not None:
+            sweeper = threading.Thread(
+                target=_sweep_idle_sessions,
+                args=(service, stop_sweep, idle_sweep_interval_s),
+                name="visual-idle-sweep",
+                daemon=True,
+            )
+            sweeper.start()
         if sink is not None:
             sink.start(service)
         try:
             yield
         finally:
+            stop_sweep.set()
+            if sweeper is not None:
+                sweeper.join(timeout=max(1.0, idle_sweep_interval_s + 1.0))
             if sink is not None:
                 sink.stop()
 
@@ -63,6 +80,21 @@ def build_app(
     app.state.visual_service = service
     app.state.usage_sink = sink
     return app
+
+
+def _sweep_idle_sessions(
+    service: VisualService, stop: threading.Event, interval_s: float
+) -> None:
+    while not stop.wait(interval_s):
+        service.close_idle_sessions()
+
+
+def _idle_timeout_from_env() -> float | None:
+    raw = os.environ.get("GNSIS_VISUAL_IDLE_TIMEOUT_S")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_IDLE_TIMEOUT_S
+    value = float(raw)
+    return None if value <= 0 else value
 
 
 def build_grounder(
@@ -165,6 +197,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_sessions=args.max_sessions,
         cache_factory=VisualCache,
         usage_sink_factory=usage_sink_factory,
+        idle_timeout_s=_idle_timeout_from_env(),
     )
     uvicorn.run(
         app,
