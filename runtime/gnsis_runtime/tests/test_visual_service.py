@@ -349,9 +349,7 @@ def test_close_waits_for_perception_and_reports_its_usage() -> None:
     perception = {}
 
     perception_thread = threading.Thread(
-        target=lambda: perception.update(
-            service.perceive(session_id, "perception-1")
-        )
+        target=lambda: perception.update(service.perceive(session_id, "perception-1"))
     )
     perception_thread.start()
     assert policy.started.wait(timeout=1)
@@ -380,18 +378,14 @@ def test_close_waits_for_perception_and_reports_its_usage() -> None:
 def test_concurrent_perception_and_decision_share_inference_quota() -> None:
     policy = BlockingPerceptionPolicy()
     service = _service(policy)
-    session_id = service.create_session(
-        _tenant(max_decisions_per_session=1)
-    ).session_id
+    session_id = service.create_session(_tenant(max_decisions_per_session=1)).session_id
     service.set_task(session_id, "click the control")
     service.publish_frame(session_id, _frame("f1", 1000))
     perception = {}
     decision_errors = []
 
     perception_thread = threading.Thread(
-        target=lambda: perception.update(
-            service.perceive(session_id, "perception-1")
-        )
+        target=lambda: perception.update(service.perceive(session_id, "perception-1"))
     )
     perception_thread.start()
     assert policy.started.wait(timeout=1)
@@ -419,9 +413,7 @@ def test_concurrent_perception_and_decision_share_inference_quota() -> None:
 def test_failed_inference_releases_its_quota_reservation() -> None:
     policy = FailingPerceptionPolicy()
     service = _service(policy)
-    session_id = service.create_session(
-        _tenant(max_decisions_per_session=1)
-    ).session_id
+    session_id = service.create_session(_tenant(max_decisions_per_session=1)).session_id
     service.publish_frame(session_id, _frame("f1", 1000))
 
     with pytest.raises(RuntimeError, match="perception failed"):
@@ -618,9 +610,7 @@ def test_tenant_concurrency_and_per_session_quotas_are_enforced() -> None:
 
 def _freeze_monotonic(monkeypatch, start: float = 1000.0) -> list[float]:
     clock = [start]
-    monkeypatch.setattr(
-        "gnsis_runtime.visual.service.time.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("gnsis_runtime.visual.service.time.monotonic", lambda: clock[0])
     return clock
 
 
@@ -901,3 +891,50 @@ def test_session_time_reports_split_at_midnight(monkeypatch) -> None:
     assert reports[1].generated_at_ms - reports[0].generated_at_ms == 86_400_000
     service.close_session(session_id)
     assert service.collect_usage()[0].session_ms == 0
+
+
+def test_idle_sessions_close_and_send_their_final_usage(monkeypatch) -> None:
+    clock = _freeze_monotonic(monkeypatch)
+    service = _service(FixedPolicy())
+    idle_id = service.create_session(_tenant()).session_id
+    active_id = service.create_session(OPERATOR).session_id
+
+    clock[0] += 100.0
+    service.publish_frame(active_id, _frame("f1", 1000))
+    clock[0] += 20.0
+    assert service.close_idle_sessions() == [idle_id]
+
+    reports = service.collect_usage()
+    assert [(r.session_id, r.session_ms, r.closed) for r in reports] == [
+        (idle_id, 120_000, True)
+    ]
+    with pytest.raises(VisualServiceError, match="does not exist"):
+        service.state(idle_id)
+
+    clock[0] += 119.0
+    service.state(active_id)
+    clock[0] += 119.0
+    assert service.close_idle_sessions() == []
+    clock[0] += 1.0
+    assert service.close_idle_sessions() == [active_id]
+
+
+def test_idle_close_skips_sessions_with_inference_in_flight(monkeypatch) -> None:
+    clock = _freeze_monotonic(monkeypatch)
+    service = _service(FixedPolicy())
+    session_id = service.create_session(_tenant()).session_id
+    service._sessions[session_id].reserved_inferences = 1
+
+    clock[0] += 500.0
+    assert service.close_idle_sessions() == []
+
+
+def test_idle_timeout_can_be_disabled(monkeypatch) -> None:
+    clock = _freeze_monotonic(monkeypatch)
+    service = _service(FixedPolicy(), idle_timeout_s=None)
+    service.create_session(_tenant())
+
+    clock[0] += 10_000.0
+    assert service.close_idle_sessions() == []
+    with pytest.raises(ValueError, match="idle_timeout_s"):
+        _service(FixedPolicy(), idle_timeout_s=0)

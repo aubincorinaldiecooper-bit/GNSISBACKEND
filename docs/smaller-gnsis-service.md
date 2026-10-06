@@ -191,8 +191,10 @@ Usage is attributed per reporting interval, not per individual client call.
 Legacy callbacks may omit the new counters and labels.
 
 Metering requires grant and usage-sink configuration on both the control plane
-and runtime. There is still no idle timeout: hosts must close sessions, and an
-abandoned session continues accruing time while the runtime is alive. Runtime
+and runtime. Sessions with no accepted frame and no authenticated request for
+`GNSIS_VISUAL_IDLE_TIMEOUT_S` (default 120 seconds; `0` disables) are closed by a
+background sweep, and their final usage report is sent like a host close. Idle
+time before that close is counted; later requests get `unknown_session`. Runtime
 queues remain process-local; a crash can lose undelivered reports and time
 since the last report. This ledger is not yet a crash-safe billing system.
 Grants remain valid until expiry (up to the configured TTL, 300 seconds by

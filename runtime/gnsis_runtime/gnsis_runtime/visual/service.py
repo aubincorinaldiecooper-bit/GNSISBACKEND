@@ -32,6 +32,7 @@ from .schema import Decision, bounded_actions
 MAX_PERCEPTION_REUSE_ENTRIES = 8
 MAX_HISTORY_ENTRIES = 64
 MAX_CLIENT_LABEL_CHARS = 128
+DEFAULT_IDLE_TIMEOUT_S = 120.0
 
 USAGE_COUNTERS = (
     "frames_accepted",
@@ -140,6 +141,8 @@ class VisualServiceSession:
     created_monotonic: float = field(default_factory=time.monotonic)
     # Session time up to this instant has already been added to ``usage``.
     session_clock_monotonic: float = field(default_factory=lambda: time.monotonic())
+    # Any authenticated request or accepted frame; idle sessions are closed.
+    last_activity_monotonic: float = field(default_factory=lambda: time.monotonic())
     host_client: str | None = None
     planner_client: str | None = None
     report_seq: int = 0
@@ -168,6 +171,7 @@ class VisualService:
         max_outstanding_decisions: int = 32,
         max_expired_requests: int = 4096,
         max_pending_reports: int = 10_000,
+        idle_timeout_s: float | None = DEFAULT_IDLE_TIMEOUT_S,
     ) -> None:
         if max_sessions < 1:
             raise ValueError("max_sessions must be positive")
@@ -179,6 +183,8 @@ class VisualService:
             raise ValueError("max_expired_requests must be positive")
         if max_pending_reports < 1:
             raise ValueError("max_pending_reports must be positive")
+        if idle_timeout_s is not None and idle_timeout_s <= 0:
+            raise ValueError("idle_timeout_s must be positive or None")
         self.policy = policy
         self.decision_provider = decision_provider
         self.cache_factory = cache_factory or (lambda: None)
@@ -187,6 +193,7 @@ class VisualService:
         self.max_outstanding_decisions = max_outstanding_decisions
         self.max_expired_requests = max_expired_requests
         self.max_pending_reports = max_pending_reports
+        self.idle_timeout_s = idle_timeout_s
         self._lock = threading.RLock()
         self._sessions: dict[str, VisualServiceSession] = {}
         self._pending_reports: deque[UsageReport] = deque()
@@ -245,6 +252,27 @@ class VisualService:
             session = self._sessions.pop(session_id, None)
         if session is None:
             raise self._unknown_session()
+        self._finish_close(session)
+
+    def close_idle_sessions(self) -> list[str]:
+        """Close sessions with no frame or request for ``idle_timeout_s``."""
+
+        if self.idle_timeout_s is None:
+            return []
+        cutoff = time.monotonic() - self.idle_timeout_s
+        idle: list[VisualServiceSession] = []
+        with self._lock:
+            for session_id, session in list(self._sessions.items()):
+                if (
+                    session.last_activity_monotonic <= cutoff
+                    and session.reserved_inferences == 0
+                ):
+                    idle.append(self._sessions.pop(session_id))
+        for session in idle:
+            self._finish_close(session)
+        return [session.session_id for session in idle]
+
+    def _finish_close(self, session: VisualServiceSession) -> None:
         with session.inference_lock:
             with session.lock:
                 session.closed = True
@@ -761,6 +789,7 @@ class VisualService:
                 "policy": self.policy.name,
                 "active_sessions": len(self._sessions),
                 "session_capacity": self.max_sessions,
+                "idle_timeout_s": self.idle_timeout_s,
                 "pending_usage_reports": len(self._pending_reports),
                 "usage_report_drops": self._pending_report_drops,
             }
@@ -907,8 +936,9 @@ class VisualService:
     def _session(self, session_id: str) -> VisualServiceSession:
         with self._lock:
             session = self._sessions.get(session_id)
-        if session is None:
-            raise self._unknown_session()
+            if session is None:
+                raise self._unknown_session()
+            session.last_activity_monotonic = time.monotonic()
         return session
 
     def _reserve_inference(self, session: VisualServiceSession) -> None:
