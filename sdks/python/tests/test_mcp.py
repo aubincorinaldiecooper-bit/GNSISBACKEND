@@ -8,7 +8,7 @@ import urllib.error
 
 import pytest
 
-from gnsis_runtime.visual_mcp import (
+from gnsis_visual_sdk.mcp import (
     VisualAPIClient,
     VisualMCPConfig,
     build_server,
@@ -246,3 +246,54 @@ def test_mcp_client_surfaces_structured_api_errors(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="task_required"):
         VisualAPIClient(_config()).decide("request-1")
+
+
+def test_mcp_tools_declare_read_only_and_non_destructive_hints() -> None:
+    tools = {
+        tool.name: tool for tool in asyncio.run(build_server(_config()).list_tools())
+    }
+
+    read_only = {
+        "visual_perceive",
+        "visual_state",
+        "visual_history",
+        "visual_inspect",
+        "visual_read_pixels",
+    }
+    for name, tool in tools.items():
+        assert tool.annotations is not None
+        assert tool.annotations.destructive_hint is False
+        assert tool.annotations.read_only_hint is (name in read_only)
+
+
+def test_mcp_client_sends_bounded_client_label(monkeypatch) -> None:
+    captured = {}
+
+    def urlopen(request, timeout):
+        captured["client"] = request.headers["X-panoptic-client"]
+        return FakeResponse(b'{"session_id": "session-1"}')
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    config = VisualMCPConfig(
+        api_base="https://visual.example",
+        api_token="secret-token",
+        session_id="session-1",
+        client_name="codex\n" + "x" * 200,
+    )
+    VisualAPIClient(config).state()
+
+    assert captured["client"] == "codex" + "x" * 123
+
+
+def test_mcp_client_does_not_echo_the_token_in_errors(monkeypatch) -> None:
+    body = io.BytesIO(json.dumps({"error": {"message": "bad secret-token"}}).encode())
+    error = urllib.error.HTTPError("https://visual.example", 401, "No", {}, body)
+
+    def urlopen(request, timeout):
+        raise error
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        VisualAPIClient(_config()).state()
+    assert "secret-token" not in str(excinfo.value)

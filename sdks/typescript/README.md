@@ -1,6 +1,6 @@
-# Smaller GNSIS Visual SDK for TypeScript
+# Panoptic Visual SDK for TypeScript
 
-`@gnsis/visual-sdk` is a client for the Smaller GNSIS visual API. The trusted
+`@gnsis/visual-sdk` is a client for the Panoptic visual API. The trusted
 host remains responsible for screen capture, permission checks, and action
 execution; this SDK only streams frames and exchanges task/decision data.
 
@@ -15,6 +15,7 @@ const session = await client.createSession();
 const planner = new VisualClient({
   baseUrl: "http://127.0.0.1:8765",
   apiToken: session.plannerToken,
+  clientName: "my-agent/1.0", // sent as X-Panoptic-Client for usage grouping
 });
 const stream = await FrameStream.connect(
   "http://127.0.0.1:8765",

@@ -202,13 +202,29 @@ by the usage-sink interval.
 
 ## MCP adapter
 
-The local stdio adapter uses the official open-source MCP Python SDK. It exposes:
+The local stdio adapter (`panoptic-mcp`) ships in the lightweight Python SDK and
+uses the official MCP Python SDK. Install it without the runtime package:
 
-- `visual_set_task`
-- `visual_decide`
-- `visual_perceive`
-- `visual_state`
-- `visual_reset`
+```bash
+pip install "gnsis-visual-sdk[mcp] @ git+https://github.com/aubincorinaldiecooper-bit/GNSISBACKEND.git#subdirectory=sdks/python"
+```
+
+`smaller-gnsis-mcp` remains as an alias for existing configurations.
+
+| Tool | Hint | Purpose |
+| --- | --- | --- |
+| `visual_perceive` | read-only | Describe the current screen, optionally focused or grounded at a pixel |
+| `visual_state` | read-only | Task, bounded history, current frame and usage state |
+| `visual_history` | read-only | Retained frames and earlier perception answers |
+| `visual_inspect` | read-only | Enlarged full-resolution crop of a retained frame, returned as an image |
+| `visual_read_pixels` | read-only | Exact colours of a retained frame region |
+| `visual_set_task` | session write | Set the goal and allowed action set |
+| `visual_decide` | session write | One grounded action proposal for the current frame |
+| `visual_reset` | session write | Clear the goal and visual action history |
+
+Every tool declares `destructiveHint: false`; only the five reading tools declare
+`readOnlyHint: true`. Clients decide how to use these hints for approval.
+`visual_decide` only proposes an action; it never executes one.
 
 It intentionally exposes no session-creation, stream-token, screenshot-upload,
 attempt-recording, browser-control, or arbitrary-execution tool. The trusted
@@ -219,21 +235,20 @@ token to the adapter:
 GNSIS_VISUAL_API_BASE=https://visual.example
 GNSIS_VISUAL_API_TOKEN=<planner token from create_session>
 GNSIS_VISUAL_SESSION_ID=<host-created session>
+GNSIS_VISUAL_CLIENT=claude-code   # optional usage label, default panoptic-mcp/0.1.0
 ```
 
-Run the adapter with:
-
-```bash
-smaller-gnsis-mcp
-```
+The adapter sends `GNSIS_VISUAL_CLIENT` as `X-Panoptic-Client`, so usage
+summaries can be grouped by agent. The label is self-reported, not verified
+identity. Non-loopback API bases must use HTTPS. Error messages never repeat the
+planner token.
 
 Claude, Codex, Hermes, OpenClaw, Big GNSIS, or another MCP-compatible planner
 can use the same tool contract. The adapter forwards to the API and contains no
-parallel policy or execution implementation.
+parallel policy or execution implementation. Planner tokens are per session:
+update the agent configuration when the host starts a new session.
 
 ### Claude Code
-
-Claude Code supports local stdio servers through `claude mcp add`:
 
 ```bash
 claude mcp add \
@@ -241,30 +256,44 @@ claude mcp add \
   --env GNSIS_VISUAL_API_BASE=https://visual.example \
   --env GNSIS_VISUAL_API_TOKEN=<session-planner-token> \
   --env GNSIS_VISUAL_SESSION_ID=<host-created-session> \
-  smaller-gnsis \
-  -- smaller-gnsis-mcp
+  --env GNSIS_VISUAL_CLIENT=claude-code \
+  panoptic \
+  -- panoptic-mcp
 ```
 
 ### Codex
 
-Codex supports local stdio servers in `~/.codex/config.toml`:
+In `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.smaller_gnsis]
-command = "smaller-gnsis-mcp"
+[mcp_servers.panoptic]
+command = "panoptic-mcp"
 enabled = true
-enabled_tools = [
-  "visual_set_task",
-  "visual_decide",
-  "visual_state",
-  "visual_reset"
-]
 
-[mcp_servers.smaller_gnsis.env]
+[mcp_servers.panoptic.env]
 GNSIS_VISUAL_API_BASE = "https://visual.example"
 GNSIS_VISUAL_API_TOKEN = "<session-planner-token>"
 GNSIS_VISUAL_SESSION_ID = "<host-created-session>"
+GNSIS_VISUAL_CLIENT = "codex"
 ```
+
+If you restrict tools with `enabled_tools`, keep `visual_perceive`: it is the
+main read of the current screen.
+
+### OpenClaw
+
+```bash
+openclaw mcp add panoptic \
+  --command panoptic-mcp \
+  --env GNSIS_VISUAL_API_BASE=https://visual.example \
+  --env GNSIS_VISUAL_API_TOKEN=<session-planner-token> \
+  --env GNSIS_VISUAL_SESSION_ID=<host-created-session> \
+  --env GNSIS_VISUAL_CLIENT=openclaw
+openclaw mcp doctor panoptic --probe
+```
+
+`openclaw mcp doctor` flags literal sensitive environment values; prefer
+OpenClaw's secret mechanisms for the planner token where available.
 
 These examples use a local adapter because the host already owns the live visual
 session. A future remote Streamable HTTP MCP endpoint must use OAuth and

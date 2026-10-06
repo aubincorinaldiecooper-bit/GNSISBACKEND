@@ -39,6 +39,15 @@ export interface VisualClientOptions {
   timeoutMs?: number;
   maxRetries?: number;
   fetch?: typeof fetch;
+  /** Sent as X-Panoptic-Client so usage can be grouped by agent. */
+  clientName?: string;
+}
+
+const DEFAULT_CLIENT_NAME = "gnsis-visual-sdk-typescript/0.1.0";
+
+function clientLabel(value: string): string {
+  const label = value.replace(/[^\x20-\x7e]/g, "").trim().slice(0, 128);
+  return label || DEFAULT_CLIENT_NAME;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -113,6 +122,7 @@ export class VisualClient {
   readonly #timeoutMs: number;
   readonly #maxRetries: number;
   readonly #fetch: typeof fetch;
+  readonly #clientName: string;
 
   constructor(options: VisualClientOptions) {
     validateBaseUrl(options.baseUrl);
@@ -121,6 +131,7 @@ export class VisualClient {
     this.#timeoutMs = options.timeoutMs ?? 30_000;
     this.#maxRetries = options.maxRetries ?? 2;
     this.#fetch = (options.fetch ?? globalThis.fetch).bind(globalThis);
+    this.#clientName = clientLabel(options.clientName ?? DEFAULT_CLIENT_NAME);
 
     if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {
       throw new RangeError("timeoutMs must be a positive number");
@@ -319,6 +330,7 @@ export class VisualClient {
     const headers = new Headers();
     try {
       if (body !== undefined) headers.set("content-type", "application/json");
+      headers.set("x-panoptic-client", this.#clientName);
       if (authenticated) {
         headers.set("authorization", `Bearer ${this.#apiToken}`);
       }

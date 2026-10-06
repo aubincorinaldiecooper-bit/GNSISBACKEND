@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gnsis-visual-sdk"
 version = "0.1.0"
-description = "Python client SDK for the Smaller GNSIS visual API."
+description = "Python client SDK and optional MCP adapter for the Panoptic visual API."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -14,8 +14,13 @@ dependencies = [
   "websockets>=12",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp==2.2.0"]
+
 [project.scripts]
 gnsis-visual-browser-host = "gnsis_visual_sdk.browser_host:main"
+panoptic-mcp = "gnsis_visual_sdk.mcp:main"
+smaller-gnsis-mcp = "gnsis_visual_sdk.mcp:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
