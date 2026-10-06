@@ -11,9 +11,12 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
+  Menu,
+  nativeImage,
   screen as displays,
   session,
   systemPreferences,
+  Tray,
 } from "electron";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +48,7 @@ import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
+import { MenuBar } from "./menuBar.js";
 import { applyWindowRules } from "./windowRules.js";
 import { PersonApp, appToRestore } from "./personApp.js";
 
@@ -309,6 +313,55 @@ const UI_SCALE = (() => {
   return Number.isFinite(asked) && asked >= 0.6 && asked <= 1.25 ? asked : 0.8;
 })();
 
+/**
+ * GNSIS's icon in the Mac menu bar, for tucking the floating window away and
+ * bringing it back (see menuBar.ts). Only where GNSIS floats: in an ordinary
+ * window, the window's own buttons do this.
+ */
+const menuBar = OVERLAY
+  ? new MenuBar({
+      makeTray: (image) => new Tray(image as Electron.NativeImage),
+      image: (png) => {
+        const image = nativeImage.createEmpty();
+        image.addRepresentation({ scaleFactor: 2, dataURL: png });
+        image.setTemplateImage(true);
+        return image;
+      },
+      window: () => win,
+      send: (message) => sendToRenderer("menubar", message),
+      zoom: UI_SCALE,
+      log: (line) => hostLog("host", line),
+      reopen: () => createWindow(),
+      endCall: () => {
+        if (!callOpen) return;
+        callOpen = false;
+        hostLog("host", "call ended reason=tucked_away (the page did not end it)");
+        host.endCall("tucked_away", { stop: false });
+      },
+      rightClickMenu: () => Menu.buildFromTemplate([{ label: "Quit GNSIS", click: () => quitGnsis("the menu bar icon") }]),
+    })
+  : null;
+/** A call is open on the timeline (the page's call:start without its call:end yet). */
+let callOpen = false;
+/** Microphone frames that arrived while GNSIS was tucked into the menu bar, and were not sent. */
+let tuckedFrames = 0;
+
+/**
+ * "Quit GNSIS" (the owner's call, 30 September), from the ≡ menu or the menu
+ * bar icon. Floating over full-screen apps makes macOS treat GNSIS as a
+ * background app: no running dot in the Dock, no app menu with Quit, and not
+ * in Force Quit. So GNSIS offers its own way out. A call still open ends
+ * first; will-quit then disconnects.
+ */
+function quitGnsis(from: string): void {
+  hostLog("host", `quit: from ${from}`);
+  if (callOpen) {
+    callOpen = false;
+    host.endCall("quit");
+  }
+  app.quit();
+}
+
 function createWindow(): void {
   const webPreferences = {
     preload: path.join(__dirname, "preload.mjs"),
@@ -317,7 +370,7 @@ function createWindow(): void {
     nodeIntegration: false,
     zoomFactor: UI_SCALE,
     // The page learns from its preload whether it floats, before it first draws.
-    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`],
+    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`, `--gnsis-menubar=${menuBar ? "1" : "0"}`],
   };
   if (OVERLAY) {
     win = new BrowserWindow({
@@ -371,6 +424,9 @@ function createWindow(): void {
 function fitOverlay(): void {
   if (!OVERLAY || !win || win.isDestroyed()) return;
   win.setBounds(displays.getPrimaryDisplay().workArea);
+  // The menu bar icon is where GNSIS tucks into; tell the page where it now is.
+  const at = menuBar?.iconAt();
+  if (at) sendToRenderer("menubar", { at });
 }
 
 // One HostSession per machine: a second GNSIS.app instance would open a
@@ -500,11 +556,13 @@ app.whenReady().then(async () => {
   let callFrames = 0;
   let droppedFrames = 0;
   ipcMain.on("call:start", () => {
+    callOpen = true;
     callFrames = 0;
     hostLog("host", "call started");
     host.startCall();
   });
   ipcMain.on("call:end", (_e, reason) => {
+    callOpen = false;
     const why = typeof reason === "string" && reason ? reason : "renderer";
     hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
     host.endCall(why, { stop: false });
@@ -514,6 +572,11 @@ app.whenReady().then(async () => {
     if (!header || !(pcm instanceof Uint8Array)) {
       // Once, then every 500th: a steady stream of bad frames would bury the log.
       if (droppedFrames++ % 500 === 0) hostLog("audio", `a microphone frame was not well formed; dropped (${droppedFrames} so far)`);
+      return;
+    }
+    // Tucked into the menu bar, GNSIS is not listening: nothing from the microphone leaves this Mac.
+    if (menuBar?.tucked) {
+      if (tuckedFrames++ % 500 === 0) hostLog("audio", `GNSIS is tucked into the menu bar; microphone frames are not sent (${tuckedFrames} so far)`);
       return;
     }
     const audio = Buffer.from(pcm);
@@ -559,6 +622,10 @@ app.whenReady().then(async () => {
   displays.on("display-metrics-changed", fitOverlay);
   displays.on("display-added", fitOverlay);
   displays.on("display-removed", fitOverlay);
+  // The menu bar icon: the page's drawing of the face, and "tucked away, hide the window now".
+  ipcMain.on("menubar:face", (_e, png: unknown) => menuBar?.setFace(png));
+  ipcMain.on("menubar:hide", () => menuBar?.pageTuckedAway());
+  ipcMain.on("app:quit", () => quitGnsis("GNSIS's menu"));
   ipcMain.on("host:log", (_e, line) => {
     if (typeof line === "string") hostLog("renderer", line);
   });
@@ -576,6 +643,7 @@ app.whenReady().then(async () => {
 
 app.on("will-quit", () => {
   hostLog("host", "will-quit");
+  menuBar?.destroy();
   shortcuts.unregisterAll();
   void desktopVisual?.close();
   host.disconnect("app_quit");
@@ -591,11 +659,14 @@ app.on("activate", () => {
   // usable window back rather than leaving a windowless Host.
   hostLog("host", "activate");
   if (win === null) createWindow();
+  // Tucked into the menu bar: the Dock icon brings GNSIS back too.
+  else if (menuBar?.tucked) menuBar.show();
 });
 
 app.on("second-instance", () => {
   hostLog("host", "second-instance");
   if (win !== null) {
+    if (menuBar?.tucked) menuBar.show();
     if (win.isMinimized()) win.restore();
     win.focus();
   } else {

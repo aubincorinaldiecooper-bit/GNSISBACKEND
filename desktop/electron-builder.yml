@@ -15,8 +15,9 @@ files:
 
 mac:
   category: public.app-category.productivity
-  # Temporary icon — electron-builder converts the PNG to .icns at package
-  # time. Replace with a real .icns when brand assets are produced.
+  # GNSIS's app icon, generated from blobatar by `npm run icon`
+  # (scripts/app-icon.mjs); electron-builder converts the PNG to .icns at
+  # package time.
   icon: build/icon.png
   target:
     # One download for Mac: a universal app runs natively on Apple Silicon and
@@ -34,7 +35,9 @@ mac:
     NSAppleEventsUsageDescription: GNSIS controls Finder, your browser and other apps when you ask it to do something on your Mac.
 
 dmg:
-  artifactName: GNSIS-${version}-${arch}.${ext}
+  # The file inside the download (the owner's pick, 30 September). One
+  # universal DMG, so the name carries neither version nor architecture.
+  artifactName: "GNSIS for Mac.${ext}"
   contents:
     - x: 130
       y: 200

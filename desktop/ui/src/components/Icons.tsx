@@ -37,6 +37,7 @@ export const Lock = (p: P) => <Icon sw={2} {...p}><rect x="5" y="11" width="14" 
 export const Keyboard = (p: P) => <Icon {...p}><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M17 10h.01M7 14h10" /></Icon>;
 export const Mail = (p: P) => <Icon {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></Icon>;
 export const Pencil = (p: P) => <Icon {...p}><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></Icon>;
+export const Power = (p: P) => <Icon {...p}><path d="M12 3v8M7.1 6.5a7 7 0 1 0 9.8 0" /></Icon>;
 export const Gear = (p: P) => <Icon {...p}><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></Icon>;
 export const Dots = (p: P) => <Icon sw={2.6} {...p}><path d="M5 12h.01M12 12h.01M19 12h.01" /></Icon>;
 export const Copy = (p: P) => <Icon {...p}><rect x="8" y="8" width="12" height="13" rx="2.5" /><path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-7A2.5 2.5 0 0 0 4 5.5v9A2.5 2.5 0 0 0 6.5 17H8" /></Icon>;
