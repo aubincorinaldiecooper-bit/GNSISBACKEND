@@ -114,6 +114,11 @@ _ADDITIVE_COLUMNS = [
     ("memory_provenance", "approved_by", "VARCHAR(255)"),
     ("memory_provenance", "approved_at", "TIMESTAMPTZ"),
     ("visual_usage_records", "perceptions", "INTEGER DEFAULT 0"),
+    ("visual_usage_records", "inspections", "INTEGER DEFAULT 0"),
+    ("visual_usage_records", "pixel_reads", "INTEGER DEFAULT 0"),
+    ("visual_usage_records", "history_reads", "INTEGER DEFAULT 0"),
+    ("visual_usage_records", "host_client", "VARCHAR(128)"),
+    ("visual_usage_records", "planner_client", "VARCHAR(128)"),
 ]
 
 

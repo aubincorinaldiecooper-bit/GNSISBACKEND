@@ -240,6 +240,39 @@ def create_visual_grant(principal: Principal = Depends(current_principal)) -> di
     return issue_grant(settings, key)
 
 
+@router.get("/visual/usage")
+def read_visual_usage(
+    days: int = 30,
+    virtual_key_id: Optional[str] = None,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Panoptic usage for the caller's workspace.
+
+    Dashboard sessions see the whole workspace (optionally one key); a
+    ``visual:host`` key sees only its own usage.
+    """
+    if not 1 <= days <= 90:
+        raise PublicApiError(
+            ErrorCode.INVALID_REQUEST, "days must be between 1 and 90", status=400
+        )
+    if principal.key_id is not None:
+        principal.require(Scope.VISUAL_HOST)
+        if virtual_key_id not in (None, principal.key_id):
+            raise PublicApiError(
+                ErrorCode.AUTHORIZATION_FAILED,
+                "an API key can only read its own usage",
+                status=403,
+            )
+        virtual_key_id = principal.key_id
+
+    from .visual_usage import VisualUsageStore
+
+    summary = VisualUsageStore().summary(
+        principal.workspace_id, days=days, virtual_key_id=virtual_key_id
+    )
+    return {"workspace_id": principal.workspace_id, "days": days, **summary}
+
+
 # -- shared resolution --------------------------------------------------------
 
 def _require_repository(workspace_id: str, repository_id: str):

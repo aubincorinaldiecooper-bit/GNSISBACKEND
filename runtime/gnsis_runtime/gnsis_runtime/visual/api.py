@@ -163,6 +163,8 @@ def create_visual_api(
     def require_session_bearer(
         session_id: str,
         authorization: str | None = Header(default=None),
+        x_panoptic_client: str | None = Header(default=None),
+        user_agent: str | None = Header(default=None),
     ) -> SessionTenant | None:
         credential = bearer_credential(authorization)
         if settings.host_token and secrets.compare_digest(
@@ -174,7 +176,9 @@ def create_visual_api(
         if tenant is not None:
             service.authorize_tenant(session_id, tenant)
             return tenant
-        if service.authenticate_planner(session_id, credential):
+        if service.authenticate_planner(
+            session_id, credential, client=x_panoptic_client or user_agent
+        ):
             return None
         if service.is_planner_token(credential) and service.has_session(session_id):
             forbidden()
@@ -246,8 +250,12 @@ def create_visual_api(
     @app.post("/v1/visual/sessions")
     async def create_session(
         tenant: SessionTenant = Depends(require_host),
+        x_panoptic_client: str | None = Header(default=None),
+        user_agent: str | None = Header(default=None),
     ) -> dict[str, Any]:
-        credentials = service.create_session(tenant)
+        credentials = service.create_session(
+            tenant, host_client=x_panoptic_client or user_agent
+        )
         return {
             "session_id": credentials.session_id,
             "stream": {

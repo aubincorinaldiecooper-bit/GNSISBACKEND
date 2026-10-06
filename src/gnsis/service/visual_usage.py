@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timezone
-from typing import Mapping, Optional
+from datetime import datetime, time, timedelta, timezone
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -31,8 +31,29 @@ _REPORT_FIELDS = (
     "attempts_recorded",
     "inference_ms",
     "session_ms",
+    "inspections",
+    "pixel_reads",
+    "history_reads",
+    "host_client",
+    "planner_client",
     "closed",
     "reported_at",
+)
+
+#: Additive counters summed by the usage read API.
+SUMMED_FIELDS = (
+    "frames_accepted",
+    "frame_bytes",
+    "decisions",
+    "decisions_act",
+    "decisions_abstain",
+    "perceptions",
+    "attempts_recorded",
+    "inference_ms",
+    "session_ms",
+    "inspections",
+    "pixel_reads",
+    "history_reads",
 )
 
 
@@ -56,6 +77,11 @@ class VisualUsageRecordView:
     attempts_recorded: int
     inference_ms: int
     session_ms: int
+    inspections: int
+    pixel_reads: int
+    history_reads: int
+    host_client: Optional[str]
+    planner_client: Optional[str]
     closed: bool
     reported_at: Optional[datetime]
     created_at: str
@@ -81,6 +107,11 @@ def _to_view(row: orm.VisualUsageRecord) -> VisualUsageRecordView:
         attempts_recorded=row.attempts_recorded,
         inference_ms=row.inference_ms,
         session_ms=row.session_ms,
+        inspections=row.inspections or 0,
+        pixel_reads=row.pixel_reads or 0,
+        history_reads=row.history_reads or 0,
+        host_client=row.host_client,
+        planner_client=row.planner_client,
         closed=row.closed,
         reported_at=row.reported_at,
         created_at=row.created_at.isoformat() if row.created_at else "",
@@ -116,6 +147,65 @@ class VisualUsageStore:
                     raise
                 return _to_view(existing), False
             return _to_view(row), True
+
+    def summary(
+        self,
+        workspace_id: str,
+        *,
+        days: int,
+        virtual_key_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Usage totals for the last ``days`` UTC days, split by day, key and client.
+
+        The client is the agent holding the planner token when one reported
+        itself, otherwise the host that opened the session.
+        """
+
+        now = datetime.now(timezone.utc)
+        start = datetime.combine(
+            now.date() - timedelta(days=days - 1), time.min, tzinfo=timezone.utc
+        )
+        record = orm.VisualUsageRecord
+        event_time = func.coalesce(record.reported_at, record.created_at)
+        day = func.date(event_time)
+        client = func.coalesce(record.planner_client, record.host_client, "unknown")
+        sums = [
+            func.coalesce(func.sum(getattr(record, name)), 0) for name in SUMMED_FIELDS
+        ]
+        with session_scope() as s:
+            filters = [record.workspace_id == workspace_id, event_time >= start]
+            if virtual_key_id is not None:
+                filters.append(record.virtual_key_id == virtual_key_id)
+            aggregates = [func.count(func.distinct(record.session_id)), *sums]
+
+            def counters(row) -> dict[str, int]:
+                return dict(
+                    zip(("sessions", *SUMMED_FIELDS), (int(v or 0) for v in row))
+                )
+
+            totals = counters(s.query(*aggregates).filter(*filters).one())
+
+            def grouped(expression, label: str) -> list[dict[str, Any]]:
+                rows = (
+                    s.query(expression, *aggregates)
+                    .filter(*filters)
+                    .group_by(expression)
+                    .order_by(expression)
+                    .all()
+                )
+                return [{label: str(row[0]), **counters(row[1:])} for row in rows]
+
+            by_day = grouped(day, "day")
+            by_key = grouped(record.virtual_key_id, "virtual_key_id")
+            by_client = grouped(client, "client")
+        return {
+            "start": start.isoformat(),
+            "end": now.isoformat(),
+            "totals": totals,
+            "by_day": by_day,
+            "by_key": by_key,
+            "by_client": by_client,
+        }
 
     def decisions_today(self, virtual_key_id: str) -> int:
         now = datetime.now(timezone.utc)

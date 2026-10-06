@@ -981,6 +981,15 @@ class VisualUsageRecord(Base):
     attempts_recorded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     inference_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     session_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    inspections: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pixel_reads: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    history_reads: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Self-reported caller labels (X-Panoptic-Client or User-Agent): the host
+    # that opened the session and the agent holding its planner token.
+    host_client: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    planner_client: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # The runtime-reported time the usage was generated; quota attribution uses
     # this day rather than ingestion time so delayed reports land correctly.

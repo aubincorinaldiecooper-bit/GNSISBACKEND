@@ -31,6 +31,32 @@ from .schema import Decision, bounded_actions
 
 MAX_PERCEPTION_REUSE_ENTRIES = 8
 MAX_HISTORY_ENTRIES = 64
+MAX_CLIENT_LABEL_CHARS = 128
+
+USAGE_COUNTERS = (
+    "frames_accepted",
+    "frame_bytes",
+    "decisions",
+    "decisions_act",
+    "decisions_abstain",
+    "perceptions",
+    "attempts_recorded",
+    "inference_ms",
+    "session_ms",
+    "inspections",
+    "pixel_reads",
+    "history_reads",
+)
+
+
+def client_label(value: str | None) -> str | None:
+    """A bounded, printable caller label (``X-Panoptic-Client`` or User-Agent)."""
+
+    if not value:
+        return None
+    label = "".join(ch for ch in value if " " <= ch <= "~").strip()
+    return label[:MAX_CLIENT_LABEL_CHARS] or None
+
 
 PerceptionKey = tuple[str | None, tuple[int, int] | None, tuple[int, int]]
 
@@ -112,20 +138,15 @@ class VisualServiceSession:
         default_factory=OrderedDict
     )
     created_monotonic: float = field(default_factory=time.monotonic)
+    # Session time up to this instant has already been added to ``usage``.
+    session_clock_monotonic: float = field(default_factory=lambda: time.monotonic())
+    host_client: str | None = None
+    planner_client: str | None = None
     report_seq: int = 0
     reported_usage_by_day: dict[int, dict[str, int]] = field(default_factory=dict)
     usage_by_day: dict[int, dict[str, int]] = field(default_factory=dict)
     usage: dict[str, int] = field(
-        default_factory=lambda: {
-            "frames_accepted": 0,
-            "frame_bytes": 0,
-            "decisions": 0,
-            "decisions_act": 0,
-            "decisions_abstain": 0,
-            "perceptions": 0,
-            "attempts_recorded": 0,
-            "inference_ms": 0,
-        }
+        default_factory=lambda: dict.fromkeys(USAGE_COUNTERS, 0)
     )
 
 
@@ -171,7 +192,9 @@ class VisualService:
         self._pending_reports: deque[UsageReport] = deque()
         self._pending_report_drops = 0
 
-    def create_session(self, tenant: SessionTenant = OPERATOR) -> SessionCredentials:
+    def create_session(
+        self, tenant: SessionTenant = OPERATOR, *, host_client: str | None = None
+    ) -> SessionCredentials:
         with self._lock:
             if len(self._sessions) >= self.max_sessions:
                 raise VisualServiceError(
@@ -213,6 +236,7 @@ class VisualService:
                 tenant=tenant,
                 stream_token=stream_token,
                 planner_token=planner_token,
+                host_client=client_label(host_client),
             )
         return SessionCredentials(session_id, stream_token, planner_token)
 
@@ -248,12 +272,18 @@ class VisualService:
         session = self._session(session_id)
         return secrets.compare_digest(session.stream_token, stream_token)
 
-    def authenticate_planner(self, session_id: str, token: str) -> bool:
+    def authenticate_planner(
+        self, session_id: str, token: str, *, client: str | None = None
+    ) -> bool:
         with self._lock:
             session = self._sessions.get(session_id)
-        return session is not None and secrets.compare_digest(
-            session.planner_token, token
-        )
+        if session is None or not secrets.compare_digest(session.planner_token, token):
+            return False
+        label = client_label(client)
+        if label is not None:
+            with session.lock:
+                session.planner_client = label
+        return True
 
     def is_planner_token(self, token: str) -> bool:
         with self._lock:
@@ -637,6 +667,7 @@ class VisualService:
             self._require_open(session)
             frames = session.panoptic_session.screen_frames.recent_frames(limit=limit)
             remembered = list(reversed(session.perception_replay.values()))[:limit]
+            self._record_usage(session, history_reads=1)
         return {
             "frames": [
                 frame_entry(frame.frame_id, frame.captured_at_ms, frame.image.size)
@@ -669,6 +700,7 @@ class VisualService:
             view = inspect_region(frame.image, region, display_size)
         except InspectionError as exc:
             raise VisualServiceError("invalid_region", str(exc)) from exc
+        self._record_light_usage(session_id, inspections=1)
         return {
             **frame_entry(frame.frame_id, frame.captured_at_ms, frame.image.size),
             **view,
@@ -688,10 +720,17 @@ class VisualService:
             pixels = read_pixels(frame.image, region, step)
         except InspectionError as exc:
             raise VisualServiceError("invalid_region", str(exc)) from exc
+        self._record_light_usage(session_id, pixel_reads=1)
         return {
             **frame_entry(frame.frame_id, frame.captured_at_ms, frame.image.size),
             **pixels,
         }
+
+    def _record_light_usage(self, session_id: str, **deltas: int) -> None:
+        session = self._session(session_id)
+        with session.lock:
+            if not session.closed:
+                self._record_usage(session, **deltas)
 
     def _retained_frame(self, session_id: str, frame_id: str | None) -> ScreenFrame:
         session = self._session(session_id)
@@ -736,6 +775,9 @@ class VisualService:
             if session.tenant.workspace_id is None:
                 continue
             with session.lock:
+                if session.closed:
+                    continue
+                self._accrue_session_time(session)
                 for day_ms, usage in sorted(session.usage_by_day.items()):
                     reported = session.reported_usage_by_day.get(day_ms, {})
                     delta = {
@@ -763,6 +805,7 @@ class VisualService:
     def _enqueue_report(self, session: VisualServiceSession, *, closed: bool) -> None:
         if session.tenant.workspace_id is None:
             return
+        self._accrue_session_time(session)
         pending: list[tuple[int, dict[str, int]]] = []
         for day_ms, usage in sorted(session.usage_by_day.items()):
             reported = session.reported_usage_by_day.get(day_ms, {})
@@ -776,7 +819,6 @@ class VisualService:
                 session,
                 delta,
                 closed=closed and index == len(pending) - 1,
-                session_ms=int((time.monotonic() - session.created_monotonic) * 1000),
                 generated_at_ms=day_ms,
             )
             for index, (day_ms, delta) in enumerate(pending)
@@ -793,7 +835,6 @@ class VisualService:
         delta: dict[str, int],
         *,
         closed: bool,
-        session_ms: int = 0,
         generated_at_ms: int | None = None,
     ) -> UsageReport:
         session.report_seq += 1
@@ -813,23 +854,37 @@ class VisualService:
             perceptions=delta.get("perceptions", 0),
             attempts_recorded=delta.get("attempts_recorded", 0),
             inference_ms=delta.get("inference_ms", 0),
-            session_ms=session_ms,
+            session_ms=delta.get("session_ms", 0),
             closed=closed,
             generated_at_ms=generated_at_ms or int(time.time() * 1000),
+            inspections=delta.get("inspections", 0),
+            pixel_reads=delta.get("pixel_reads", 0),
+            history_reads=delta.get("history_reads", 0),
+            host_client=session.host_client,
+            planner_client=session.planner_client,
         )
 
     @staticmethod
     def _empty_usage() -> dict[str, int]:
-        return {
-            "frames_accepted": 0,
-            "frame_bytes": 0,
-            "decisions": 0,
-            "decisions_act": 0,
-            "decisions_abstain": 0,
-            "perceptions": 0,
-            "attempts_recorded": 0,
-            "inference_ms": 0,
-        }
+        return dict.fromkeys(USAGE_COUNTERS, 0)
+
+    def _accrue_session_time(self, session: VisualServiceSession) -> None:
+        """Accrue monotonic duration, splitting it across UTC report days."""
+
+        elapsed_ms = int((time.monotonic() - session.session_clock_monotonic) * 1000)
+        if elapsed_ms <= 0:
+            return
+        session.session_clock_monotonic += elapsed_ms / 1000
+        end_ms = int(time.time() * 1000)
+        cursor_ms = end_ms - elapsed_ms
+        while cursor_ms < end_ms:
+            boundary_ms = min(self._usage_day_ms(cursor_ms) + 86_400_000, end_ms)
+            self._record_usage(
+                session,
+                generated_at_ms=cursor_ms,
+                session_ms=boundary_ms - cursor_ms,
+            )
+            cursor_ms = boundary_ms
 
     @staticmethod
     def _usage_day_ms(now_ms: int | None = None) -> int:

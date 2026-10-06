@@ -616,7 +616,18 @@ def test_tenant_concurrency_and_per_session_quotas_are_enforced() -> None:
     assert service.state(other)["frame_seq"] == 0
 
 
-def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported() -> None:
+def _freeze_monotonic(monkeypatch, start: float = 1000.0) -> list[float]:
+    clock = [start]
+    monkeypatch.setattr(
+        "gnsis_runtime.visual.service.time.monotonic", lambda: clock[0]
+    )
+    return clock
+
+
+def test_usage_reports_are_deltas_and_operator_sessions_are_not_reported(
+    monkeypatch,
+) -> None:
+    _freeze_monotonic(monkeypatch)
     policy = FixedPolicy()
     service = _service(policy, decision_provider=policy)
     tenant = _tenant()
@@ -831,3 +842,62 @@ def test_service_inspection_requires_a_streamed_frame() -> None:
     with pytest.raises(VisualServiceError) as missing:
         service.inspect(session_id)
     assert missing.value.code == "frame_required"
+
+
+def test_open_sessions_report_session_time_every_cycle(monkeypatch) -> None:
+    clock = _freeze_monotonic(monkeypatch)
+    service = _service(FixedPolicy())
+    session_id = service.create_session(_tenant()).session_id
+    operator_id = service.create_session(OPERATOR).session_id
+
+    clock[0] += 10.0
+    first = service.collect_usage()
+    assert [(r.session_id, r.session_ms, r.closed) for r in first] == [
+        (session_id, 10_000, False)
+    ]
+    assert service.collect_usage() == []
+
+    clock[0] += 4.5
+    service.close_session(session_id)
+    service.close_session(operator_id)
+    closed = service.collect_usage()
+    assert [(r.session_ms, r.closed) for r in closed] == [(4_500, True)]
+    total = sum(r.session_ms for r in first + closed)
+    assert total == 14_500
+
+
+def test_light_tools_and_clients_are_metered(monkeypatch) -> None:
+    _freeze_monotonic(monkeypatch)
+    service = _service(FixedPolicy())
+    credentials = service.create_session(_tenant(), host_client="panoptic-host/1.0")
+    session_id = credentials.session_id
+    assert service.authenticate_planner(
+        session_id, credentials.planner_token, client="claude-code/2.1\n"
+    )
+    assert not service.authenticate_planner(session_id, "wrong", client="intruder")
+    service.publish_frame(session_id, _frame("f1", 1000))
+    service.history(session_id)
+    service.inspect(session_id, region=Region(0, 0, 10, 10))
+    service.read_pixels(session_id, Region(0, 0, 4, 4))
+
+    (report,) = service.collect_usage()
+    assert report.history_reads == 1
+    assert report.inspections == 1
+    assert report.pixel_reads == 1
+    assert report.host_client == "panoptic-host/1.0"
+    assert report.planner_client == "claude-code/2.1"
+
+
+def test_session_time_reports_split_at_midnight(monkeypatch) -> None:
+    clock = _freeze_monotonic(monkeypatch)
+    end_ms = 1_799_971_201_000
+    monkeypatch.setattr("gnsis_runtime.visual.service.time.time", lambda: end_ms / 1000)
+    service = _service(FixedPolicy())
+    session_id = service.create_session(_tenant()).session_id
+    clock[0] += 3
+    reports = service.collect_usage()
+    assert [r.session_ms for r in reports] == [2000, 1000]
+    assert sum(r.session_ms for r in reports) == 3000
+    assert reports[1].generated_at_ms - reports[0].generated_at_ms == 86_400_000
+    service.close_session(session_id)
+    assert service.collect_usage()[0].session_ms == 0

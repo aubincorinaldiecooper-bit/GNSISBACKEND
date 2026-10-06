@@ -171,10 +171,30 @@ environment, and bounded concurrent-session, frame, and decision limits; the
 runtime verifies them offline. Sessions from different workspaces cannot access
 each other's state. Usage callbacks meter accepted frames, frame bytes,
 perceptions, decisions (including act/abstain), recorded attempts, inference
-milliseconds, session milliseconds, and closed sessions. Perceptions have their
-own usage count so billing can price screen understanding separately from
-grounded decisions. Pricing, charging, and billing are intentionally not
-implemented.
+milliseconds, session milliseconds, inspections, pixel reads, history reads,
+and closed sessions. Session milliseconds are incremental deltas in periodic
+reports and the final close report, not a cumulative duration: sum them once
+per unique `event_id`. Time spanning midnight is split across UTC days.
+Pricing, charging, and billing are intentionally not implemented.
+
+`GET /v1/visual/usage?days=30` on the control plane returns `totals`, `by_day`,
+`by_key`, and `by_client` aggregates for the last 1–90 UTC days. A dashboard
+session can read its workspace (optionally `virtual_key_id=...`); a
+`visual:host` key can read only its own usage. Session counts are distinct
+within each aggregate, so grouped session counts need not sum to the total.
+
+The optional `X-Panoptic-Client` header (falling back to `User-Agent`) records
+the host creating the session and the most recent authenticated planner
+client. These bounded labels are self-reported diagnostics, not authenticated
+agent identity or a billing authority; never send credentials in them.
+Usage is attributed per reporting interval, not per individual client call.
+Legacy callbacks may omit the new counters and labels.
+
+Metering requires grant and usage-sink configuration on both the control plane
+and runtime. There is still no idle timeout: hosts must close sessions, and an
+abandoned session continues accruing time while the runtime is alive. Runtime
+queues remain process-local; a crash can lose undelivered reports and time
+since the last report. This ledger is not yet a crash-safe billing system.
 Grants remain valid until expiry (up to the configured TTL, 300 seconds by
 default) after a key is disabled or rotated. The daily decision quota is checked
 when issuing grants against ingested usage, so it is a soft limit that can lag
