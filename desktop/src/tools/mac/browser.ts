@@ -1,42 +1,38 @@
 /**
- * `browser`: the browser the person already has open, in their own tabs and
- * signed-in sessions.
+ * Browser control backed entirely by Cua Driver.
  *
- * Driven through the browser's own Apple Events scripting, which reaches the
- * running browser and its current profile without launching a copy or
- * touching cookies and passwords. macOS asks the person once per browser
- * ("GNSIS wants to control Google Chrome"). Page content is not read here —
- * GNSIS looks at the page on screen, the same way it sees everything else.
- *
- * Which browser: the one in front, else the first of the known ones running.
+ * Chrome and Edge prefer Cua's exact CDP browser binding. Other browsers use
+ * Cua's native accessibility/keyboard path. No extension and no JXA/Apple
+ * Events browser actuator are involved.
  */
 import { ActionProblem, required, str, type ActionTool, type PreparedAction } from "../actions.js";
 import { asWebAddress } from "./open.js";
-import { scriptProblem } from "./finder.js";
-import { jxa, literal, type Shell } from "./shell.js";
+import {
+  CuaToolError,
+  collectTabLabels,
+  listWindows,
+  windowArgs,
+  type CuaControl,
+  type CuaResponse,
+  type CuaWindow,
+} from "../cua/driver.js";
 
-type Family = "chromium" | "safari";
-/** How long new_tab checks for its tab, and how long one read of the tabs may take while it does. */
-const CHECK_FOR_MS = 8_000;
-const READ_MS = 2_000;
-
-/** The browser an action works in, and whether the person has it in front. */
-type Browser = { app: string; family: Family; inFront: boolean };
-const BROWSERS: Array<{ app: string; family: Family }> = [
-  { app: "Google Chrome", family: "chromium" },
-  { app: "Safari", family: "safari" },
-  { app: "Arc", family: "chromium" },
-  { app: "Brave Browser", family: "chromium" },
-  { app: "Microsoft Edge", family: "chromium" },
-  { app: "Chromium", family: "chromium" },
-  { app: "Vivaldi", family: "chromium" },
-];
+type Browser = CuaWindow & { family: "typed" | "native" };
+const BROWSER_SESSION = "gnsis-browser";
+const TYPED_BROWSERS = new Set(["Google Chrome", "Microsoft Edge"]);
+const BROWSER_NAMES = ["Google Chrome", "Microsoft Edge", "Safari", "Arc", "Brave Browser", "Chromium", "Vivaldi", "Firefox"];
 
 export interface Tab {
   n: number;
   title: string;
   url: string;
   active: boolean;
+  id?: string;
+}
+
+interface Binding {
+  targetId: string;
+  tabs: Tab[];
 }
 
 export class BrowserTool implements ActionTool {
@@ -44,8 +40,7 @@ export class BrowserTool implements ActionTool {
   readonly platforms = ["darwin"] as const;
 
   constructor(
-    private readonly shell: Shell,
-    private readonly keys: (combo: string) => Promise<void>,
+    private readonly cua: CuaControl,
     private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
   ) {}
 
@@ -58,41 +53,34 @@ export class BrowserTool implements ActionTool {
           tool: this.name,
           action,
           effect: "read",
-          summary: `List the tabs open in ${browser.app}`,
+          summary: `List the tabs open in ${browser.appName}`,
           scope: [],
           run: async () => {
             const tabs = await this.tabs(browser);
             return {
-              verified: "browser",
-              message: `${browser.app} has ${tabs.length} tab${tabs.length === 1 ? "" : "s"} in its front window.`,
-              detail: { browser: browser.app, tabs: tabs.slice(0, 15).map((t) => `${t.n}${t.active ? "*" : ""}. ${t.title.slice(0, 60)} — ${hostOf(t.url)}`) },
+              verified: browser.family === "typed" ? "browser" : "screen",
+              message: `${browser.appName} has ${tabs.length} visible tab candidate${tabs.length === 1 ? "" : "s"}.`,
+              detail: { browser: browser.appName, tabs: tabs.slice(0, 15).map((t) => `${t.n}${t.active ? "*" : ""}. ${t.title.slice(0, 60)}${t.url ? ` — ${hostOf(t.url)}` : ""}`) },
             };
           },
         };
       case "switch": {
         const n = Number(args.tab);
-        if (!Number.isInteger(n) || n < 1) throw new ActionProblem("failed", "Say which tab number.");
+        if (!Number.isInteger(n) || n < 1 || n > 100) throw new ActionProblem("failed", "Say which tab number.");
         return {
           tool: this.name,
           action,
           effect: "open_local",
-          summary: `Switch ${browser.app} to tab ${n}`,
+          summary: `Switch ${browser.appName} to tab ${n}`,
           scope: [],
           run: async () => {
-            const tabs = await this.tabs(browser);
-            if (n > tabs.length) throw new ActionProblem("not_found", `${browser.app} has only ${tabs.length} tabs.`);
-            await this.script(browser, browser.family === "chromium"
-              ? `Application(${literal(browser.app)}).windows[0].activeTabIndex = ${n}`
-              : `const w = Application("Safari").windows[0]; w.currentTab = w.tabs[${n - 1}]`);
-            const now = (await this.tabs(browser)).find((t) => t.active);
-            if (now?.n !== n) throw new ActionProblem("failed", `${browser.app} did not switch tabs.`);
-            return { verified: "browser", message: `Now on tab ${n}: ${now.title.slice(0, 80)}.`, detail: { url: hostOf(now.url) } };
+            await this.hotkey(browser, ["cmd", String(Math.min(n, 9))]);
+            await this.wait(150);
+            return { verified: "screen", message: `Asked ${browser.appName} to switch to tab ${n}. Panoptic will verify the visible tab.` };
           },
         };
       }
       case "new_tab": {
-        // A blank tab changes nothing and sends nothing away; one at an
-        // address is judged like going to that address.
         const given = typeof args.url === "string" && args.url.trim() ? args.url : null;
         const url = given ? asWebAddress(given) : null;
         if (given && !url) throw new ActionProblem("failed", "That is not a web address.");
@@ -101,50 +89,13 @@ export class BrowserTool implements ActionTool {
           tool: this.name,
           action,
           effect: url ? "open_remote" : "open_local",
-          summary: host ? `Open ${host} in a new tab in ${browser.app}` : `Open a new tab in ${browser.app}`,
+          summary: host ? `Open ${host} in a new tab in ${browser.appName}` : `Open a new tab in ${browser.appName}`,
           scope: host ? [{ value: host, source: "named", kind: "site" }] : [],
           run: async () => {
-            // A browser the person is using, in front with no window open,
-            // gets one. One running in the background with no window is not
-            // woken up: that is "no window open", as for every other action.
-            const before = await this.tabs(browser).then(
-              (tabs) => tabs.length,
-              (err: unknown) => {
-                if (!browser.inFront) throw err;
-                return 0;
-              },
-            );
-            await this.script(browser, newTabScript(browser, url ? url.toString() : null));
-            // From here the tab may well exist: a read that fails is "not
-            // checked", never "not done" — a retry would open a second one.
-            // The check is short, and so is each read, so a browser that stops
-            // answering cannot hold the action open past the runtime's wait.
-            let checked = false;
-            let failed = 0;
-            let count = before;
-            const until = Date.now() + CHECK_FOR_MS;
-            for (let i = 0; i < 20 && Date.now() < until && failed < 2; i += 1) {
-              const tabs = await this.tabs(browser, READ_MS).catch(() => null);
-              if (!tabs) failed += 1;
-              if (tabs) {
-                checked = true;
-                count = tabs.length;
-                const last = tabs[tabs.length - 1];
-                if (tabs.length > before && last && (!host || hostOf(last.url) === host)) {
-                  const on = host ? ` at ${host}` : "";
-                  const front = last.active ? "" : " It is not the tab in front.";
-                  return {
-                    verified: "browser",
-                    message: `${browser.app} opened a new tab${on}; it now has ${tabs.length} tab${tabs.length === 1 ? "" : "s"}.${front}`,
-                    detail: { url: hostOf(last.url), tabs: tabs.length },
-                  };
-                }
-              }
-              await this.wait(250);
-            }
-            if (!checked) return { verified: "screen", message: `Asked ${browser.app} to open a new tab; it could not be checked. Look at the screen.`, detail: { url: host } };
-            if (count > before) return { verified: "screen", message: `${browser.app} opened a new tab for ${host}; the page has not arrived yet. Look at the screen.`, detail: { url: host } };
-            throw new ActionProblem("failed", `${browser.app} did not open a new tab.`);
+            await this.hotkey(browser, ["cmd", "t"]);
+            await this.wait(120);
+            if (url) await this.go(browser, url.toString());
+            return { verified: "screen", message: host ? `Opened a new tab for ${host} in ${browser.appName}.` : `Opened a new tab in ${browser.appName}.`, detail: { url: host } };
           },
         };
       }
@@ -156,46 +107,99 @@ export class BrowserTool implements ActionTool {
           tool: this.name,
           action,
           effect: "open_remote",
-          summary: `Go to ${host} in ${browser.app}`,
+          summary: `Go to ${host} in ${browser.appName}`,
           scope: [{ value: host, source: "named", kind: "site" }],
           run: async () => {
-            await this.script(browser, browser.family === "chromium"
-              ? `Application(${literal(browser.app)}).windows[0].activeTab.url = ${literal(url.toString())}`
-              : `Application("Safari").windows[0].currentTab.url = ${literal(url.toString())}`);
-            for (let i = 0; i < 20; i += 1) {
-              await this.wait(250);
-              const active = (await this.tabs(browser)).find((t) => t.active);
-              if (active && hostOf(active.url) === host) {
-                return { verified: "browser", message: `${browser.app} is on ${host}${active.title ? `: ${active.title.slice(0, 80)}` : ""}.`, detail: { url: hostOf(active.url) } };
-              }
-            }
-            return { verified: "screen", message: `Asked ${browser.app} to go to ${host}; it has not arrived yet. Look at the screen.`, detail: { url: host } };
+            const route = await this.go(browser, url.toString());
+            return { verified: route === "typed" ? "browser" : "screen", message: `${browser.appName} is going to ${host} via Cua ${route === "typed" ? "browser binding" : "native control"}.`, detail: { url: host, route } };
           },
         };
       }
       case "back":
       case "forward":
-      case "reload": {
+      case "reload":
         return {
           tool: this.name,
           action,
           effect: "open_local",
-          summary: `${action === "reload" ? "Reload" : action === "back" ? "Go back" : "Go forward"} in ${browser.app}`,
+          summary: `${action === "reload" ? "Reload" : action === "back" ? "Go back" : "Go forward"} in ${browser.appName}`,
           scope: [],
-          needs: browser.family === "safari" && action !== "reload" ? [{ kind: "accessibility" }] : [],
           run: async () => {
-            if (browser.family === "chromium") {
-              const call = action === "reload" ? "reload()" : action === "back" ? "goBack()" : "goForward()";
-              await this.script(browser, `Application(${literal(browser.app)}).windows[0].activeTab.${call}`);
-            } else if (action === "reload") {
-              await this.script(browser, `const t = Application("Safari").windows[0].currentTab; t.url = t.url()`);
-            } else {
-              await this.script(browser, `Application("Safari").activate()`);
-              await this.keys(action === "back" ? "cmd+[" : "cmd+]");
-            }
-            await this.wait(400);
-            const active = (await this.tabs(browser)).find((t) => t.active);
-            return { verified: "screen", message: `Done in ${browser.app}${active ? `; now on ${hostOf(active.url)}` : ""}. Look at the screen to be sure.`, detail: { url: active ? hostOf(active.url) : null } };
+            await this.hotkey(browser, action === "reload" ? ["cmd", "r"] : action === "back" ? ["cmd", "["] : ["cmd", "]"]);
+            return { verified: "screen", message: `Done in ${browser.appName}. Panoptic will verify the visible page.` };
+          },
+        };
+      case "inspect":
+        return {
+          tool: this.name,
+          action,
+          effect: "read",
+          summary: `Inspect the active page in ${browser.appName}`,
+          scope: [],
+          run: async () => {
+            if (browser.family !== "typed") throw new ActionProblem("unsupported", "Semantic browser inspection is currently available for Chrome and Edge; Panoptic still sees other browsers visually.");
+            const binding = await this.bind(browser, true);
+            const active = activeTab(binding.tabs);
+            if (!active?.id) throw new ActionProblem("failed", "Cua could not identify the active tab.");
+            const state = await this.call("get_browser_state", { session: BROWSER_SESSION, target_id: binding.targetId, tab_id: active.id, format: "semantic_v2" });
+            return { verified: "browser", message: `Read the active ${browser.appName} page through Cua's exact browser binding.`, detail: { target_id: binding.targetId, tab_id: active.id, state: state.structured } };
+          },
+        };
+      case "upload": {
+        const ref = required(args, "ref", "which page element should receive the files");
+        const files = Array.isArray(args.files) ? args.files.filter((v): v is string => typeof v === "string" && v.length > 0) : [];
+        if (!files.length) throw new ActionProblem("failed", "Say which files to upload.");
+        return {
+          tool: this.name,
+          action,
+          effect: "open_remote",
+          summary: `Upload ${files.length} file${files.length === 1 ? "" : "s"} in ${browser.appName}`,
+          scope: files.map((value) => ({ value, source: "named" as const })),
+          consequential: "uploading files sends local data to a website",
+          run: async () => {
+            const { targetId, tab } = await this.activeTyped(browser);
+            await this.call("browser_set_input_files", { session: BROWSER_SESSION, target_id: targetId, tab_id: tab.id, ref, files });
+            return { verified: "screen", message: "Attached the requested file(s). Panoptic will verify the page state." };
+          },
+        };
+      }
+      case "download": {
+        const ref = required(args, "ref", "which page element starts the download");
+        const destination = required(args, "destination_root", "where to save the download");
+        return {
+          tool: this.name,
+          action,
+          effect: "change",
+          summary: `Download the selected item into ${destination}`,
+          scope: [{ value: destination, source: "named" }],
+          run: async () => {
+            const { targetId, tab } = await this.activeTyped(browser);
+            const result = await this.call("browser_download", { session: BROWSER_SESSION, target_id: targetId, tab_id: tab.id, ref, destination_root: destination });
+            return { verified: "browser", message: "The browser download completed through Cua.", detail: { result: result.structured } };
+          },
+        };
+      }
+      case "dialog": {
+        const dialogAction = str(args, "dialog_action") ?? "inspect";
+        if (!["inspect", "accept", "dismiss"].includes(dialogAction)) throw new ActionProblem("failed", "dialog_action must be inspect, accept, or dismiss.");
+        return {
+          tool: this.name,
+          action,
+          effect: dialogAction === "inspect" ? "read" : "input",
+          summary: `${dialogAction === "inspect" ? "Inspect" : dialogAction === "accept" ? "Accept" : "Dismiss"} the page dialog in ${browser.appName}`,
+          scope: [],
+          consequential: dialogAction === "inspect" ? undefined : "resolving a page dialog may confirm or cancel an action",
+          run: async () => {
+            const { targetId, tab } = await this.activeTyped(browser);
+            const result = await this.call("browser_dialog", {
+              session: BROWSER_SESSION,
+              target_id: targetId,
+              tab_id: tab.id,
+              action: dialogAction,
+              ...(str(args, "dialog_id") ? { dialog_id: str(args, "dialog_id") } : {}),
+              ...(typeof args.prompt_text === "string" ? { prompt_text: args.prompt_text } : {}),
+            });
+            return { verified: dialogAction === "inspect" ? "browser" : "screen", message: `Browser dialog ${dialogAction} completed.`, detail: { dialog: result.structured } };
           },
         };
       }
@@ -204,83 +208,136 @@ export class BrowserTool implements ActionTool {
     }
   }
 
-  /** The browser in front, else the first known one that is running. */
   private async pick(): Promise<Browser> {
-    const front = await this.frontApp();
-    const inFront = BROWSERS.find((b) => b.app === front);
-    if (inFront) return { ...inFront, inFront: true };
-    for (const browser of BROWSERS) {
-      // `is running` is answered locally and sends the browser no event,
-      // so it needs no permission and never launches it.
-      const running = await jxa(this.shell, `Application(${literal(browser.app)}).running()`, browser.app).catch(() => "false");
-      if (running === "true") return { ...browser, inFront: false };
+    const windows = await listWindows(this.cua, { onScreenOnly: true }).catch((e) => { throw problem(e); });
+    const candidates = windows.filter((w) => BROWSER_NAMES.includes(w.appName));
+    if (!candidates.length) throw new ActionProblem("not_found", "No web browser is open. Open one, or ask GNSIS to open a web address.");
+    const withZ = candidates.filter((w) => w.zIndex !== null);
+    const picked = withZ.length ? withZ.sort((a, b) => (b.zIndex ?? -1) - (a.zIndex ?? -1))[0] : candidates[0];
+    return { ...picked, family: TYPED_BROWSERS.has(picked.appName) ? "typed" : "native" };
+  }
+
+  private async tabs(browser: Browser): Promise<Tab[]> {
+    if (browser.family === "typed") {
+      const binding = await this.bind(browser, false).catch(() => null);
+      if (binding) return binding.tabs;
     }
-    throw new ActionProblem("not_found", "No web browser is open. Open one, or ask GNSIS to open a web address.");
+    const state = await this.call("get_window_state", {
+      ...windowArgs(browser),
+      query: "tab",
+      include_accessibility_tree: true,
+      include_screenshot: false,
+      max_elements: 300,
+    });
+    const labels = collectTabLabels(state.structured);
+    if (labels.length) return labels.map((t, i) => ({ n: i + 1, title: t.title, url: "", active: t.selected }));
+    return [{ n: 1, title: browser.title || browser.appName, url: "", active: true }];
   }
 
-  private async frontApp(): Promise<string | null> {
-    const front = await this.shell.run("/usr/bin/lsappinfo", ["front"], { timeoutMs: 3_000 });
-    const asn = front.stdout.trim();
-    if (front.code !== 0 || !asn) return null;
-    const info = await this.shell.run("/usr/bin/lsappinfo", ["info", "-only", "name", asn], { timeoutMs: 3_000 });
-    const match = /"(?:LSDisplayName|name)"\s*=\s*"([^"]+)"/i.exec(info.stdout);
-    return match ? match[1] : null;
-  }
-
-  async tabs(browser: { app: string; family: Family }, timeoutMs?: number): Promise<Tab[]> {
-    const source =
-      browser.family === "chromium"
-        ? `const w = Application(${literal(browser.app)}).windows[0]; const a = w.activeTabIndex(); JSON.stringify(w.tabs().map((t, i) => ({ n: i + 1, title: t.title(), url: t.url(), active: i + 1 === a })))`
-        : `const w = Application("Safari").windows[0]; const c = w.currentTab().index(); JSON.stringify(w.tabs().map((t, i) => ({ n: i + 1, title: t.name(), url: t.url() || "", active: i + 1 === c })))`;
-    const out = await this.script(browser, source, timeoutMs);
+  private async bind(browser: Browser, requireTyped: boolean): Promise<Binding> {
+    if (browser.family !== "typed") throw new ActionProblem("unsupported", "This browser does not expose Cua's typed browser route.");
+    const args = { ...windowArgs(browser), session: BROWSER_SESSION };
+    let response: CuaResponse;
     try {
-      const tabs = JSON.parse(out) as Tab[];
-      return Array.isArray(tabs) ? tabs : [];
-    } catch {
-      return [];
+      response = await this.cua.call("get_browser_state", args);
+    } catch (error) {
+      if (error instanceof CuaToolError && error.code === "browser_requires_setup") {
+        try {
+          await this.cua.call("browser_prepare", { ...args, strategy: { kind: "existing_profile" } });
+          response = await this.cua.call("get_browser_state", args);
+        } catch (setupError) {
+          if (!requireTyped) throw setupError;
+          throw problem(setupError);
+        }
+      } else {
+        throw problem(error);
+      }
     }
+    const root = asRecord(response.structured);
+    const targetId = text(root?.target_id ?? root?.targetId);
+    const rawTabs = Array.isArray(root?.tabs) ? root!.tabs as unknown[] : [];
+    const tabs = rawTabs.flatMap((value, i) => {
+      const t = asRecord(value);
+      if (!t) return [];
+      const id = text(t.tab_id ?? t.tabId ?? t.id);
+      return [{
+        n: i + 1,
+        title: text(t.title) || `Tab ${i + 1}`,
+        url: text(t.url),
+        active: t.selected === true || t.active === true,
+        id: id || undefined,
+      }];
+    });
+    if (!targetId || !tabs.length) throw new ActionProblem("failed", "Cua bound the browser but did not return a usable target and tab list.");
+    return { targetId, tabs };
   }
 
-  private async script(browser: { app: string }, source: string, timeoutMs?: number): Promise<string> {
+  private async activeTyped(browser: Browser): Promise<{ targetId: string; tab: Tab & { id: string } }> {
+    if (browser.family !== "typed") throw new ActionProblem("unsupported", "Uploads, downloads, dialogs and semantic inspection require Chrome or Edge right now.");
+    const binding = await this.bind(browser, true);
+    const tab = activeTab(binding.tabs);
+    if (!tab?.id) throw new ActionProblem("failed", "Cua could not identify the active browser tab.");
+    return { targetId: binding.targetId, tab: tab as Tab & { id: string } };
+  }
+
+  private async go(browser: Browser, url: string): Promise<"typed" | "native"> {
+    if (browser.family === "typed") {
+      try {
+        const { targetId, tab } = await this.activeTyped(browser);
+        await this.call("browser_navigate", { session: BROWSER_SESSION, target_id: targetId, tab_id: tab.id, url });
+        return "typed";
+      } catch (error) {
+        if (!(error instanceof ActionProblem) || error.status !== "needs_permission") {
+          // Browser binding is an optimization. Native Cua remains extensionless.
+        } else {
+          throw error;
+        }
+      }
+    }
+    await this.hotkey(browser, ["cmd", "l"]);
+    await this.call("type_text", { ...windowArgs(browser), text: url, delivery_mode: "foreground" });
+    await this.call("press_key", { ...windowArgs(browser), key: "enter", delivery_mode: "foreground" });
+    return "native";
+  }
+
+  private async hotkey(browser: Browser, keys: string[]): Promise<void> {
+    await this.call("hotkey", { ...windowArgs(browser), keys, delivery_mode: "foreground" });
+  }
+
+  private async call(tool: string, args: Record<string, unknown>): Promise<CuaResponse> {
     try {
-      return await jxa(this.shell, source, browser.app, timeoutMs);
-    } catch (err) {
-      throw scriptProblem(err, browser.app);
+      return await this.cua.call(tool, args);
+    } catch (error) {
+      throw problem(error);
     }
   }
 }
 
-/**
- * Open a tab at the end of the front window and bring it forward. With no
- * window open, a browser in front gets a new window, whose one tab is the new
- * tab; one in the background is left alone. Bringing the tab forward is
- * tried, not required: a browser that will not do it still has the tab.
- */
-function newTabScript(browser: Browser, url: string | null): string {
-  const props = url ? `{ url: ${literal(url)} }` : "{}";
-  const noWindow = browser.inFront
-    ? browser.family === "chromium"
-      ? `app.Window().make();${url ? ` app.windows[0].activeTab.url = ${literal(url)};` : ""}`
-      : `app.Document().make();${url ? ` app.windows[0].currentTab.url = ${literal(url)};` : ""}`
-    : `throw new Error("${browser.app} has no window open.");`;
-  if (browser.family === "chromium") {
-    return [
-      `const app = Application(${literal(browser.app)});`,
-      `if (app.windows.length === 0) { ${noWindow} }`,
-      `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); try { w.activeTabIndex = w.tabs.length; } catch (e) {} }`,
-    ].join(" ");
-  }
-  return [
-    `const app = Application("Safari");`,
-    `if (app.windows.length === 0) { ${noWindow} }`,
-    `else { const w = app.windows[0]; w.tabs.push(app.Tab(${props})); try { w.currentTab = w.tabs[w.tabs.length - 1]; } catch (e) {} }`,
-  ].join(" ");
+function activeTab(tabs: Tab[]): Tab | undefined {
+  return tabs.find((t) => t.active) ?? tabs[0];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url.slice(0, 60);
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url.slice(0, 60); }
+}
+
+function problem(error: unknown): ActionProblem {
+  if (error instanceof ActionProblem) return error;
+  if (error instanceof CuaToolError) {
+    if (error.code?.includes("consent") || error.code?.includes("permission")) {
+      return new ActionProblem("needs_permission", error.message, { provider: "cua", code: error.code });
+    }
+    if (error.code?.includes("not_found")) return new ActionProblem("not_found", error.message, { provider: "cua", code: error.code });
+    if (error.code?.includes("unsupported") || error.code?.includes("route_unavailable")) return new ActionProblem("unsupported", error.message, { provider: "cua", code: error.code });
+    return new ActionProblem("failed", error.message, { provider: "cua", code: error.code });
   }
+  return new ActionProblem("failed", String((error as Error)?.message ?? error), { provider: "cua" });
 }
