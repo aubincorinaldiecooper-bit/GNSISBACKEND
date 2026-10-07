@@ -257,6 +257,36 @@ test("browser: Safari remains extensionless by using Cua native keyboard/text co
   assert.deepEqual(cua.calls.slice(-3).map((c) => c.tool), ["hotkey", "type_text", "press_key"]);
 });
 
+test("browser: existing-profile typed binding requires the explicit GNSIS authorization lease", async () => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const grants: Array<[number, number]> = [];
+  const cua: CuaControl = {
+    async call(tool, args) {
+      calls.push({ tool, args });
+      if (tool === "list_windows") return {
+        text: "",
+        structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "Start", z_index: 20, is_on_screen: true }] },
+      };
+      if (tool === "get_browser_state") return {
+        text: "",
+        structured: { target_id: "bt-1", tabs: [{ tab_id: "tab-1", title: "Start", url: "https://example.org/", selected: true }] },
+      };
+      return { text: "ok" };
+    },
+    async withExistingProfileAuthorization(pid, windowId, run) {
+      grants.push([pid, windowId]);
+      return await run();
+    },
+  };
+  const browser = new BrowserTool(cua, noWait);
+  const prepare = await browser.prepare({ action: "prepare" });
+  assert.ok(prepare.consequential);
+  await prepare.run();
+  assert.deepEqual(grants, [[81, 9]]);
+  const attach = calls.find((entry) => entry.tool === "browser_prepare");
+  assert.deepEqual(attach?.args.strategy, { kind: "existing_profile" });
+});
+
 test("browser: upload and dialog capabilities are exposed through the typed binding", async () => {
   const cua = fakeCua((tool) => {
     if (tool === "list_windows") return {
