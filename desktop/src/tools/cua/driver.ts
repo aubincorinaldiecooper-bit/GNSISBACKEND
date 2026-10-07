@@ -18,6 +18,16 @@ export interface CuaResponse {
 
 export interface CuaControl {
   call(tool: string, args: CuaArgs): Promise<CuaResponse>;
+  /**
+   * Opens Cua's protected existing-profile boundary for one exact browser
+   * window while `run` executes. GNSIS must have approved that high-level
+   * action before calling this.
+   */
+  withExistingProfileAuthorization?<T>(
+    pid: number,
+    windowId: number,
+    run: () => Promise<T>,
+  ): Promise<T>;
   close?(): Promise<void>;
 }
 
@@ -55,12 +65,60 @@ export class CuaToolError extends Error {
 export class NativeCuaControl implements CuaControl {
   private driver: NativeDriver | null = null;
   private loading: Promise<NativeDriver> | null = null;
+  private profileAuthorization: { pid: number; windowId: number; expiresAtMs: number } | null = null;
 
   private async getDriver(): Promise<NativeDriver> {
     if (this.driver) return this.driver;
     if (!this.loading) {
       this.loading = import("@trycua/cua-driver").then((mod) => {
-        const driver = mod.CuaDriver.create(undefined) as unknown as NativeDriver;
+        // Standard mode keeps Cua promptless for ordinary automation. The only
+        // protected boundary we open from GNSIS is existing-profile browser
+        // attachment, and only while withExistingProfileAuthorization() holds
+        // an exact pid/window lease after GNSIS has asked the person.
+        const driver = mod.CuaDriver.createConfiguredWithAuthorizationHost(
+          {
+            claudeCodeCompatibility: false,
+            authorization: {
+              allowedModes: [mod.SessionPermissionMode.Standard],
+              compatibilityMode: mod.SessionPermissionMode.Standard,
+              compatibilityCapabilityManifestPath: undefined,
+              compatibilityBoundedManifestPath: undefined,
+              unrestrictedAcknowledged: false,
+              maxSessionTtlSeconds: 28_800n,
+              maxIdleTtlSeconds: 1_800n,
+            },
+          },
+          {
+            authorize: async (request) => {
+              const lease = this.profileAuthorization;
+              let exact = false;
+              if (
+                lease &&
+                Date.now() <= lease.expiresAtMs &&
+                request.adapterId === "browser_prepare.existing_profile"
+              ) {
+                try {
+                  const resource = JSON.parse(request.resourceJson) as {
+                    pid?: unknown;
+                    window_id?: unknown;
+                    windowId?: unknown;
+                  };
+                  exact =
+                    Number(resource.pid) === lease.pid &&
+                    Number(resource.window_id ?? resource.windowId) === lease.windowId;
+                } catch {
+                  exact = false;
+                }
+              }
+              return {
+                action: exact
+                  ? mod.DriverAuthorizationAction.Allow
+                  : mod.DriverAuthorizationAction.Deny,
+                requestDigest: request.requestDigest,
+              };
+            },
+          },
+        ) as unknown as NativeDriver;
         this.driver = driver;
         return driver;
       });
@@ -91,6 +149,27 @@ export class NativeCuaControl implements CuaControl {
       verified: result.verified,
       degraded: result.degraded,
     };
+  }
+
+  async withExistingProfileAuthorization<T>(
+    pid: number,
+    windowId: number,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    if (this.profileAuthorization) {
+      throw new CuaToolError(
+        "browser_prepare",
+        "Another protected browser attachment is already being authorized.",
+        "authorization_busy",
+      );
+    }
+    const lease = { pid, windowId, expiresAtMs: Date.now() + 30_000 };
+    this.profileAuthorization = lease;
+    try {
+      return await run();
+    } finally {
+      if (this.profileAuthorization === lease) this.profileAuthorization = null;
+    }
   }
 
   async close(): Promise<void> {
