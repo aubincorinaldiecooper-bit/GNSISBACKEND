@@ -33,6 +33,23 @@ jobs:
         run: npm run typecheck
       - working-directory: desktop
         run: npm test
+      - name: Smoke-test the real Cua native SDK
+        working-directory: desktop
+        run: |
+          node --input-type=module <<'NODE'
+          const sdk = await import("@trycua/cua-driver");
+          const driver = sdk.CuaDriver.create(undefined);
+          try {
+            const catalog = JSON.parse(await driver.listToolsJson());
+            const names = new Set((catalog.tools ?? []).map((tool) => tool.name));
+            for (const required of ["list_windows", "click", "type_text", "get_browser_state"]) {
+              if (!names.has(required)) throw new Error(`Cua tool missing: ${required}`);
+            }
+          } finally {
+            await driver.shutdown();
+            driver.uniffiDestroy?.();
+          }
+          NODE
       - name: Install both macOS Cua native slices for universal packaging
         working-directory: desktop
         run: |
