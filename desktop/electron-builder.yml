@@ -36,6 +36,10 @@ mac:
   # packages instead of trying to lipo unrelated arm64/x64 resource files.
   mergeASARs: true
   singleArchFiles: "{node_modules/@trycua/cua-driver-darwin-*/**,node_modules/@ubjs/node-darwin-*/**}"
+  # Both architecture packages intentionally exist in both temporary slices.
+  # @electron/universal requires identical Mach-O resources to be explicitly
+  # exempted from lipo; runtime selection happens by package name/process.arch.
+  x64ArchFiles: "{**/node_modules/@trycua/cua-driver-darwin-*/**,**/node_modules/@ubjs/node-darwin-*/**}"
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
