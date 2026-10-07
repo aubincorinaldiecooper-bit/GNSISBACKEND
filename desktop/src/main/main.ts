@@ -43,6 +43,9 @@ import { MacFinder } from "../tools/mac/finder.js";
 import { OpenTool } from "../tools/mac/open.js";
 import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
+import { WindowTool } from "../tools/mac/window.js";
+import { ClipboardTool } from "../tools/mac/clipboard.js";
+import { NativeCuaControl } from "../tools/cua/driver.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
 import { applyWindowRules } from "./windowRules.js";
@@ -97,13 +100,16 @@ const tools = new ToolRegistry({ runtimeUrl: RUNTIME_URL });
 // them (host/runtimeTrust.ts).
 const finder = process.platform === "darwin" ? new MacFinder(systemShell) : undefined;
 const filesTool = new FilesTool({ home: os.homedir(), finder });
-const inputTool = new InputTool(systemShell, {
+const cua = new NativeCuaControl();
+const inputTool = new InputTool(cua, {
   bounds: () => displays.getPrimaryDisplay().bounds,
 });
 tools.registerAction(new OpenTool(systemShell, filesTool));
 tools.registerAction(filesTool);
-tools.registerAction(new BrowserTool(systemShell, (combo) => inputTool.press(combo)));
+tools.registerAction(new BrowserTool(cua));
 tools.registerAction(inputTool);
+tools.registerAction(new WindowTool(cua));
+tools.registerAction(new ClipboardTool(cua));
 const ACTIONS_TRUST = actionsAllowed(
   RUNTIME_URL,
   process.env.GNSIS_ACTIONS === "on" || process.env.GNSIS_ACTIONS === "off"
@@ -379,12 +385,11 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
-app.whenReady().then(async () => {
-  // Browser control is native on macOS: the existing browser tool owns tabs
-  // and navigation, while the input tool clicks/types into the front browser.
-  // Screen perception already streams through the canonical screen.frame path,
-  // so no Chrome extension or localhost browser hub is part of launch.
-  hostLog("browser", "native browser control enabled; no extension required");
+app.on("before-quit", () => {\n  void cua.close().catch((error) => hostLog("execution", `Cua shutdown failed: ${String(error)}`));\n});\n\napp.whenReady().then(async () => {
+  // Cua Driver owns desktop/browser actuation. Chrome and Edge prefer its
+  // exact browser binding; other browsers stay on Cua native accessibility
+  // and keyboard control. Panoptic remains the only continuous visual path.
+  hostLog("browser", "Cua desktop/browser control enabled; no extension or JXA actuator required");
 
   hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
   hostLog(
