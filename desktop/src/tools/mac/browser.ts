@@ -286,12 +286,11 @@ export class BrowserTool implements ActionTool {
         const { targetId, tab } = await this.activeTyped(browser);
         await this.call("browser_navigate", { session: BROWSER_SESSION, target_id: targetId, tab_id: tab.id, url });
         return "typed";
-      } catch (error) {
-        if (!(error instanceof ActionProblem) || error.status !== "needs_permission") {
-          // Browser binding is an optimization. Native Cua remains extensionless.
-        } else {
-          throw error;
-        }
+      } catch {
+        // Exact CDP binding is preferred, but ordinary navigation must remain
+        // available when existing-profile attachment is not yet authorized or
+        // the browser exposes no typed route. Native Cua is still extensionless
+        // and remains inside the same GNSIS approval/verification path.
       }
     }
     await this.hotkey(browser, ["cmd", "l"]);
