@@ -13,6 +13,13 @@ files:
   - package.json
   - "!**/*.map"
 
+# Cua's TypeScript package loads Rust/UniFFI libraries from platform packages
+# at runtime. Keep those native resources outside app.asar so dlopen can read
+# them. Production node_modules are included by electron-builder automatically.
+asarUnpack:
+  - "node_modules/@trycua/**"
+  - "node_modules/@ubjs/**"
+
 mac:
   category: public.app-category.productivity
   # Temporary icon — electron-builder converts the PNG to .icns at package
@@ -25,6 +32,10 @@ mac:
       arch:
         - universal
   hardenedRuntime: true
+  # Universal packaging must preserve Cua/UBJS's per-architecture native
+  # packages instead of trying to lipo unrelated arm64/x64 resource files.
+  mergeASARs: true
+  singleArchFiles: "{node_modules/@trycua/cua-driver-darwin-*/**,node_modules/@ubjs/node-darwin-*/**}"
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -44,9 +55,9 @@ dmg:
       type: link
       path: /Applications
 
-# Universal suitability (audit): the only runtime dependency is `ws` (pure
-# JS); `files:` ships only dist/ + package.json — no native modules or vendored
-# binaries, so the standard electron-builder universal merge is safe.
+# Universal suitability: Cua adds architecture-specific native runtime
+# packages. They are deliberately kept as single-arch resources while the
+# Electron executable/framework remain universal.
 #
 # Signing/notarization: enabled automatically when credentials exist.
 #   CSC_LINK / CSC_KEY_PASSWORD            — Developer ID certificate
