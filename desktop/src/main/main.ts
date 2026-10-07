@@ -385,7 +385,11 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
-app.on("before-quit", () => {\n  void cua.close().catch((error) => hostLog("execution", `Cua shutdown failed: ${String(error)}`));\n});\n\napp.whenReady().then(async () => {
+app.on("before-quit", () => {
+  void cua.close().catch((error) => hostLog("execution", `Cua shutdown failed: ${String(error)}`));
+});
+
+app.whenReady().then(async () => {
   // Cua Driver owns desktop/browser actuation. Chrome and Edge prefer its
   // exact browser binding; other browsers stay on Cua native accessibility
   // and keyboard control. Panoptic remains the only continuous visual path.
