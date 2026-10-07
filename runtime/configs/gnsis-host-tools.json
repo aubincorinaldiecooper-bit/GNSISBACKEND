@@ -1,5 +1,5 @@
 {
-  "version": "desktop-v2",
+  "version": "desktop-v3",
   "tools": [
     {
       "name": "open",
@@ -65,7 +65,7 @@
     },
     {
       "name": "browser",
-      "description": "Use the web browser the person already has open, in their own tabs.",
+      "description": "Use the person's open browser without an extension. Chrome/Edge prefer Cua browser bindings; other browsers use Cua native control.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -82,7 +82,11 @@
               "go",
               "back",
               "forward",
-              "reload"
+              "reload",
+              "inspect",
+              "upload",
+              "download",
+              "dialog"
             ]
           },
           "url": {
@@ -95,13 +99,46 @@
             "minimum": 1,
             "maximum": 100,
             "description": "For switch, the tab number from tabs."
+          },
+          "ref": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Live Cua browser element ref for upload/download."
+          },
+          "files": {
+            "type": "array",
+            "description": "Absolute local file paths for upload."
+          },
+          "destination_root": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Existing absolute directory for a download."
+          },
+          "dialog_action": {
+            "type": "string",
+            "enum": [
+              "inspect",
+              "accept",
+              "dismiss"
+            ],
+            "description": "For browser dialog handling."
+          },
+          "dialog_id": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Opaque current dialog id returned by inspect."
+          },
+          "prompt_text": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Optional prompt response text when accepting a browser prompt."
           }
         }
       }
     },
     {
       "name": "input",
-      "description": "Type, press keys, or click in the app in front, when the other tools cannot do it. Look at the screen afterwards.",
+      "description": "Type, press keys, click, right-click, scroll, or drag on the desktop through Cua. Optional app/window fields target a specific window. Panoptic verifies visual effects.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -114,7 +151,10 @@
             "enum": [
               "type",
               "keys",
-              "click"
+              "click",
+              "right_click",
+              "scroll",
+              "drag"
             ]
           },
           "text": {
@@ -143,6 +183,154 @@
             "minimum": 0,
             "maximum": 1,
             "description": "0 to 1 down the shared screen."
+          },
+          "app": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional app name to target instead of the frontmost app."
+          },
+          "window": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Optional window title to target."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              "left",
+              "right"
+            ],
+            "description": "For scroll."
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "For scroll, number of lines."
+          },
+          "from_x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "For drag, start x across the shared screen."
+          },
+          "from_y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "For drag, start y down the shared screen."
+          },
+          "to_x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "For drag, end x across the shared screen."
+          },
+          "to_y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "For drag, end y down the shared screen."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Optional drag duration."
+          }
+        }
+      }
+    },
+    {
+      "name": "window",
+      "description": "List, focus, move, or resize application windows through Cua Driver.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "focus",
+              "move_resize"
+            ]
+          },
+          "app": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "App name to target."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Window title to target."
+          },
+          "on_screen_only": {
+            "type": "boolean",
+            "description": "For list, return only visible/on-screen windows."
+          },
+          "x": {
+            "type": "number",
+            "description": "For move_resize, new left edge."
+          },
+          "y": {
+            "type": "number",
+            "description": "For move_resize, new top edge."
+          },
+          "width": {
+            "type": "number",
+            "minimum": 1,
+            "description": "For move_resize, new width."
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1,
+            "description": "For move_resize, new height."
+          }
+        }
+      }
+    },
+    {
+      "name": "clipboard",
+      "description": "Read clipboard types/text or replace the clipboard with text, an image path, or a file URL through Cua Driver.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "include_text": {
+            "type": "boolean",
+            "description": "For read, include privacy-sensitive plain text."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 20000,
+            "description": "For write, plain text."
+          },
+          "file_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "For write, absolute local file path."
+          },
+          "image_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "For write, absolute local image path."
           }
         }
       }
