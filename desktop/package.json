@@ -19,7 +19,8 @@
     "ui:preview": "node scripts/ui-preview.mjs"
   },
   "dependencies": {
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "@trycua/cua-driver": "0.34.0"
   },
   "devDependencies": {
     "@types/node": "^25.0.8",
