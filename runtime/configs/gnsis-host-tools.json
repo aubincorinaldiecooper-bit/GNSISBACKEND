@@ -1,5 +1,5 @@
 {
-  "version": "desktop-v3",
+  "version": "desktop-v4",
   "tools": [
     {
       "name": "open",
@@ -83,6 +83,7 @@
               "back",
               "forward",
               "reload",
+              "prepare",
               "inspect",
               "upload",
               "download",
