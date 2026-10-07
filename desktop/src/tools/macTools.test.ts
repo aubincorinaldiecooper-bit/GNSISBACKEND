@@ -224,7 +224,22 @@ test("browser: Chrome navigation prefers Cua's exact browser binding", async () 
   const done = await go.run();
   assert.equal(done.verified, "browser");
   assert.ok(cua.calls.some((c) => c.tool === "browser_navigate"));
-  assert.ok(!cua.calls.some((c) => c.tool === "hotkey" && c.args.keys?.[1] === "l"));
+  assert.ok(!cua.calls.some((c) => c.tool === "hotkey" && Array.isArray(c.args.keys) && c.args.keys[1] === "l"));
+});
+
+test("browser: Chrome falls back to native Cua when typed profile attachment is unavailable", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return {
+      text: "",
+      structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "GitHub", z_index: 20, is_on_screen: true }] },
+    };
+    if (tool === "get_browser_state") throw new Error("typed binding unavailable");
+    return { text: "ok" };
+  });
+  const browser = new BrowserTool(cua, noWait);
+  const done = await (await browser.prepare({ action: "go", url: "https://github.com" })).run();
+  assert.equal(done.verified, "screen");
+  assert.deepEqual(cua.calls.slice(-3).map((c) => c.tool), ["hotkey", "type_text", "press_key"]);
 });
 
 test("browser: Safari remains extensionless by using Cua native keyboard/text control", async () => {
