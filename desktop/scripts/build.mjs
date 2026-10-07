@@ -9,7 +9,7 @@ const shared = {
   format: "esm",
   platform: "node",
   target: "node22",
-  external: ["electron"],
+  external: ["electron", "@trycua/cua-driver", "@trycua/cua-driver/*"],
   sourcemap: false,
 };
 
