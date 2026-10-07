@@ -129,6 +129,37 @@ export class BrowserTool implements ActionTool {
             return { verified: "screen", message: `Done in ${browser.appName}. Panoptic will verify the visible page.` };
           },
         };
+      case "prepare":
+        if (browser.family !== "typed") {
+          throw new ActionProblem("unsupported", "Cua's typed browser binding currently supports Chrome and Edge.");
+        }
+        return {
+          tool: this.name,
+          action,
+          effect: "input",
+          summary: `Connect GNSIS to this ${browser.appName} profile for extensionless typed browser control`,
+          scope: [{ value: browser.appName, source: "named" }],
+          consequential: "attaches to the signed-in browser profile and enables its local DevTools connection",
+          needs: [{ kind: "accessibility" }],
+          run: async () => {
+            if (!this.cua.withExistingProfileAuthorization) {
+              throw new ActionProblem("unsupported", "This Cua host does not expose protected existing-profile authorization.");
+            }
+            await this.cua.withExistingProfileAuthorization(browser.pid, browser.windowId, async () => {
+              await this.call("browser_prepare", {
+                ...windowArgs(browser),
+                session: BROWSER_SESSION,
+                strategy: { kind: "existing_profile" },
+              });
+            });
+            const binding = await this.bind(browser, true);
+            return {
+              verified: "browser",
+              message: `Connected ${browser.appName} to Cua's extensionless typed browser route.`,
+              detail: { tabs: binding.tabs.length },
+            };
+          },
+        };
       case "inspect":
         return {
           tool: this.name,
@@ -242,16 +273,16 @@ export class BrowserTool implements ActionTool {
       response = await this.cua.call("get_browser_state", args);
     } catch (error) {
       if (error instanceof CuaToolError && error.code === "browser_requires_setup") {
-        try {
-          await this.cua.call("browser_prepare", { ...args, strategy: { kind: "existing_profile" } });
-          response = await this.cua.call("get_browser_state", args);
-        } catch (setupError) {
-          if (!requireTyped) throw setupError;
-          throw problem(setupError);
+        if (requireTyped) {
+          throw new ActionProblem(
+            "needs_permission",
+            `${browser.appName} needs a one-time approved Cua profile connection before typed browser tools can be used. Ask GNSIS to connect this browser.`,
+            { provider: "cua", code: error.code, action: "browser.prepare" },
+          );
         }
-      } else {
-        throw problem(error);
+        throw error;
       }
+      throw problem(error);
     }
     const root = asRecord(response.structured);
     const targetId = text(root?.target_id ?? root?.targetId);
