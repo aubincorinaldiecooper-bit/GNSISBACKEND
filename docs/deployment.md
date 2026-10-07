@@ -1,5 +1,11 @@
 # Running GNSIS on Railway
 
+> **Migration note (October 2026):** Railway is the current rollback/reference
+> environment while the control plane moves to self-hosting. The target service
+> map and cutover gates are in [self_hosted_coolify.md](self_hosted_coolify.md).
+> Do not delete or reconfigure the Railway production stack until that migration
+> passes verification.
+
 GNSIS runs as **two long-lived services** plus **two managed datastores**:
 
 | Component | What it is | Why |
