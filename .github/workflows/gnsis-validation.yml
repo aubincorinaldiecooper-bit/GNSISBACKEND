@@ -137,7 +137,7 @@ jobs:
 
       - name: Run the lightweight non-optional runtime suite
         run: |
-          pytest -q runtime/gnsis_runtime/tests             --ignore=runtime/gnsis_runtime/tests/test_visual_head.py             -k 'not test_reading_real_pixels_when_the_ocr_model_is_installed'
+          pytest -q runtime/gnsis_runtime/tests             --ignore=runtime/gnsis_runtime/tests/test_visual_head.py             -k 'not test_reading_real_pixels_with_rapidocr'
 
       - name: Compile the deploy checks
         run: |
