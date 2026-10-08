@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import pytest
-
-torch = pytest.importorskip("torch")
+import torch
 
 from gnsis_runtime.visual.batching import HEAD_INPUTS, collate
 from gnsis_runtime.visual.decode import decode
