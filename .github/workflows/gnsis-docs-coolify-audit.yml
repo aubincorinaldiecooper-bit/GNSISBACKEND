@@ -28,7 +28,7 @@ jobs:
                   with urllib.request.urlopen(request, timeout=15) as r:
                       data = json.load(r)
               except Exception as e:
-                  print('Could not read '+url+': '+type(e).__name__)
+                  print('Could not read '+url+': '+type(e).__name__+' HTTP status '+str(getattr(e,'code','n/a')))
                   return []
               return data.get('data',[]) if isinstance(data,dict) and isinstance(data.get('data'),list) else data if isinstance(data,list) else []
           for kind in ('servers','projects','applications'):
