@@ -1,0 +1,40 @@
+name: Read-only Coolify docs placement audit
+on:
+  push:
+    branches: [feat/gnsis-docs-coolify-provision]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Coolify servers, projects and applications without changes
+        shell: python
+        env:
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          import json, os, urllib.request, urllib.parse
+          endpoint = os.environ.get('COOLIFY_URL', 'https://coolify.gnsis.studio').rstrip('/')
+          if endpoint != 'https://coolify.gnsis.studio':
+              raise SystemExit('Unexpected Coolify URL; audit aborted.')
+          token = os.environ.get('COOLIFY_API_TOKEN', '')
+          if not token: raise SystemExit('COOLIFY_API_TOKEN secret unavailable')
+          def safe(url):
+              request = urllib.request.Request(endpoint+'/api/v1/'+url,
+                  headers={'Authorization':'Bearer '+token,'Accept':'application/json'})
+              try:
+                  with urllib.request.urlopen(request, timeout=15) as r:
+                      data = json.load(r)
+              except Exception as e:
+                  print('Could not read '+url+': '+type(e).__name__)
+                  return []
+              return data.get('data',[]) if isinstance(data,dict) and isinstance(data.get('data'),list) else data if isinstance(data,list) else []
+          for kind in ('servers','projects','applications'):
+              data = safe(kind)
+              print('=== '+kind+' count='+str(len(data)))
+              for item in data:
+                  if not isinstance(item,dict): continue
+                  fields=('name','uuid','environment_id','destination_id','server_id','project_id','git_repository','git_branch','status')
+                  print(json.dumps({key:item.get(key) for key in fields if key in item},sort_keys=True))
