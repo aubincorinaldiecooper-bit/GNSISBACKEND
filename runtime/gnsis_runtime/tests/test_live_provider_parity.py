@@ -336,13 +336,13 @@ def test_native_text_is_a_chunk_the_coordinator_saw(harness):
             assert chunk["text"] == "Done, it is in Projects."
             assert chunk["end_of_turn"] is True
             assert chunk["metrics"]["provider"] == "venus"
+            coordinator = h.coordinators[0]
+            replies = [
+                entry
+                for entry in coordinator.gateway.ledger.list_realtime_context(
+                    coordinator.owner_id
+                )
+                if entry.kind == "frontbrain_reply"
+            ]
+            assert [entry.text for entry in replies] == ["Done, it is in Projects."]
             _stop(ws)
-    coordinator = h.coordinators[0]
-    replies = [
-        entry
-        for entry in coordinator.gateway.ledger.list_realtime_context(
-            coordinator.owner_id
-        )
-        if entry.kind == "frontbrain_reply"
-    ]
-    assert [entry.text for entry in replies] == ["Done, it is in Projects."]
