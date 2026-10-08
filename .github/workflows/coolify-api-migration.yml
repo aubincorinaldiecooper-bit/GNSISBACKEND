@@ -1,0 +1,55 @@
+name: Coolify API migration audit
+
+# No automatic DNS cutover, database writes, or Railway resource changes.
+# The optional API-only deployment is gated on verified data migration and dependencies.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/coolify-api-migration.yml'
+      - 'scripts/coolify_inventory.py'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect Coolify or deploy the verified API application only
+        required: true
+        type: choice
+        options:
+          - audit
+          - deploy_api
+        default: audit
+      data_restored_and_verified:
+        description: I verified the Railway Postgres restore and production row counts in Coolify
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gnsis-coolify-migration
+  cancel-in-progress: false
+
+jobs:
+  inspect_and_optional_deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Automatically discover GNSISBACKEND and inspect migration prerequisites
+        shell: bash
+        env:
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_APPLICATION_UUID: ${{ secrets.COOLIFY_APPLICATION_UUID }}
+          OPERATION: ${{ inputs.operation || 'audit' }}
+          DATA_VERIFIED: ${{ inputs.data_restored_and_verified }}
+        run: |
+          set -euo pipefail
+          args=(--operation "$OPERATION")
+          if [[ "$DATA_VERIFIED" == "true" ]]; then args+=(--data-verified); fi
+          python scripts/coolify_inventory.py "${args[@]}"
