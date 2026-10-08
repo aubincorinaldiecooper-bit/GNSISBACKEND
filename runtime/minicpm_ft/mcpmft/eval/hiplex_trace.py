@@ -79,7 +79,7 @@ class SpeechEpisode:
 
 
 def map_foreground_action(action: str) -> dict[str, Any]:
-    """Return the HiPLEX-compatible role without changing Gander's action space."""
+    """Return the HiPLEX-compatible role without changing foreground's action space."""
     key = str(action or "").strip().lower()
     if key not in ACTION_MAP:
         raise ValueError(f"unknown foreground action: {action!r}")
