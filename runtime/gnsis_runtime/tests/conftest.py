@@ -209,6 +209,11 @@ class StubCoordinator:
     def observe_frontbrain(self, _event: Any) -> None:
         return None
 
+    def note_playback_ack(self, _payload: dict[str, Any]) -> bool:
+        # The stub has no delivery gate; accept the device ACK so parity tests
+        # can verify that the native provider receives it.
+        return True
+
     def pending_external_dispatch(self) -> None:
         # No external tool call is ever waiting on a stub.
         return None
