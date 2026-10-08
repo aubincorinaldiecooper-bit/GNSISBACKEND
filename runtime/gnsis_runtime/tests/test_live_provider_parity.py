@@ -32,7 +32,7 @@ from test_duplex_lifecycle import (
 
 PROVIDERS = ("thinker", "venus")
 ONE_UNIT = b"\x00\x00" * 16000
-DESKTOP = "/ws/duplex?session_id=s1&host_tools=files,open&host_tools_version=desktop-v2"
+DESKTOP = "/ws/duplex?session_id=s1&host_tools=files,open&host_tools_version=desktop-v4"
 
 
 def _audio_header(sequence: int, captured_at_ms: int) -> dict:
