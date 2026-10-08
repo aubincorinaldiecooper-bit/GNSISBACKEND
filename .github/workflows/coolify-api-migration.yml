@@ -3,6 +3,11 @@ name: Coolify API migration audit
 # No automatic DNS cutover, database writes, or Railway resource changes.
 # The optional API-only deployment is gated on verified data migration and dependencies.
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/coolify-api-migration.yml'
+      - 'scripts/coolify_inventory.py'
   workflow_dispatch:
     inputs:
       operation:
@@ -41,7 +46,7 @@ jobs:
           COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_APPLICATION_UUID: ${{ secrets.COOLIFY_APPLICATION_UUID }}
-          OPERATION: ${{ inputs.operation }}
+          OPERATION: ${{ inputs.operation || 'audit' }}
           DATA_VERIFIED: ${{ inputs.data_restored_and_verified }}
         run: |
           set -euo pipefail
