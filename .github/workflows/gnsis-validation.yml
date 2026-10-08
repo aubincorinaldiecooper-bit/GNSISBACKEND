@@ -27,6 +27,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -77,7 +78,7 @@ jobs:
         run: python -m compileall -q runtime/gnsis_runtime/gnsis_runtime runtime/minicpm_ft/mcpmft
 
       - name: Run the runtime's lifecycle, live-page and Ornith provider tests
-        run: pytest -q runtime/gnsis_runtime/tests
+        run: pytest -vv runtime/gnsis_runtime/tests
 
       # Importing the definition builds the app object without talking to
       # Modal, so a wrong resource name, a renamed function or an API that
