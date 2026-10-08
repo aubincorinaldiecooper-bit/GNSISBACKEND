@@ -509,6 +509,35 @@ class TaskToolsRealtimeCoordinator:
         """Dispatch a completed native call without blocking the model thread."""
 
         self._ensure_open()
+        decision = getattr(event, "decision", None)
+        if not decision:
+            decision = (
+                "tool"
+                if event.is_tool_call
+                else (
+                    "interrupt"
+                    if bool(getattr(event, "interrupted", False))
+                    else ("listen" if event.is_listen else "speak")
+                )
+            )
+        generation_id = getattr(event, "generation_id", None)
+        timeline_kwargs: dict[str, Any] = {}
+        if isinstance(generation_id, int) and not isinstance(generation_id, bool) and generation_id > 0:
+            timeline_kwargs["output_epoch"] = generation_id
+        self.timeline.emit(
+            "foreground.decision",
+            component="frontbrain",
+            fields={
+                "action": str(decision),
+                "index": int(getattr(event, "index", 0) or 0),
+                "unit_id": getattr(event, "unit_id", None),
+                "generation_id": generation_id,
+                "end_of_turn": bool(getattr(event, "end_of_turn", False)),
+                "has_text": bool(str(getattr(event, "text", "") or "").strip()),
+                "is_tool_call": bool(getattr(event, "is_tool_call", False)),
+            },
+            **timeline_kwargs,
+        )
         if not event.is_tool_call:
             text = event.text
             if (

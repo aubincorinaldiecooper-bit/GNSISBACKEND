@@ -69,6 +69,7 @@ class ForegroundModelEvent:
     tool_parse_valid: bool = False
     tool_schema_valid: bool = False
     tool_response_expected: bool = False
+    decision: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -87,6 +88,7 @@ class ForegroundModelEvent:
             "generation_id": self.generation_id,
             "unit_id": self.unit_id,
             "interrupted": self.interrupted,
+            "decision": self.decision,
             "tool_calls": self.tool_calls,
             "tool_error": self.tool_error,
             "raw_tool_text": self.raw_tool_text,
@@ -406,6 +408,7 @@ class NativeForegroundSession:
         tool_calls: list[dict[str, Any]] | None = None,
         tool_error: str | None = None,
         raw: dict[str, Any] | None = None,
+        decision: str | None = None,
     ) -> ForegroundModelEvent:
         self._unit_index += 1
         metrics: dict[str, Any] = {
@@ -425,6 +428,7 @@ class NativeForegroundSession:
             generation_id=generation_id,
             unit_id=self._unit_index,
             is_tool_call=tool_calls is not None,
+            decision=decision,
             tool_calls=list(tool_calls or ()),
             tool_error=tool_error,
             tool_generation_complete=tool_calls is not None,
@@ -480,6 +484,7 @@ class NativeForegroundSession:
                     text=text,
                     end_of_turn=end_of_turn,
                     raw=event.raw,
+                    decision="speak",
                 )
             ]
         if event.kind == "tool_call":
@@ -499,6 +504,7 @@ class NativeForegroundSession:
                     tool_calls=calls,
                     tool_error=payload.get("error"),
                     raw=event.raw,
+                    decision="tool",
                 )
             ]
         if event.kind == "interrupt":
@@ -518,6 +524,7 @@ class NativeForegroundSession:
                     is_listen=True,
                     end_of_turn=True,
                     raw=event.raw,
+                    decision="interrupt",
                 ),
             ]
         if event.kind == "turn":
@@ -534,6 +541,7 @@ class NativeForegroundSession:
                         is_listen=True,
                         end_of_turn=True,
                         raw=event.raw,
+                        decision="listen",
                     )
                 )
             else:

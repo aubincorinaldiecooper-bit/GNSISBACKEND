@@ -148,6 +148,7 @@ class DuplexStepEvent:
     tool_parse_valid: bool = False
     tool_schema_valid: bool = False
     tool_response_expected: bool = False
+    decision: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -166,6 +167,7 @@ class DuplexStepEvent:
             "generation_id": self.generation_id,
             "unit_id": self.unit_id,
             "interrupted": self.interrupted,
+            "decision": self.decision,
             "tool_calls": self.tool_calls,
             "tool_error": self.tool_error,
             "raw_tool_text": self.raw_tool_text,
@@ -652,6 +654,10 @@ class DuplexLiveSession:
             ),
             unit_id=unit_id,
             interrupted=is_interrupt,
+            decision=str(
+                out.get("duplex_action")
+                or ("tool" if is_tool_call else ("interrupt" if is_interrupt else ("listen" if is_listen else "speak")))
+            ),
             is_tool_call=is_tool_call,
             tool_calls=list(out.get("tool_calls") or []),
             tool_error=out.get("tool_error"),
@@ -666,11 +672,7 @@ class DuplexLiveSession:
             "consumed_frame_ids=%s input_rms=%.6f input_peak=%.6f "
             "input_has_speech=%s text=%r",
             event.index,
-            (
-                "tool"
-                if event.is_tool_call
-                else ("interrupt" if event.interrupted else ("listen" if event.is_listen else "speak"))
-            ),
+            event.decision,
             unit_id,
             prefill_mode,
             consumed_frame_ids,

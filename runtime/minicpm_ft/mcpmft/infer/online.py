@@ -488,7 +488,8 @@ class OnlineRunner:
             output["text"] = stable_text
         generated_token_ids = list(self.duplex.total_ids[before:])
         output["generated_token_ids"] = generated_token_ids
-        if self.interrupt_token_id in generated_token_ids:
+        is_interrupt = self.interrupt_token_id in generated_token_ids
+        if is_interrupt:
             self._reset_after_interrupt()
             output.update(
                 {
@@ -501,6 +502,21 @@ class OnlineRunner:
                     "n_tts_tokens": 0,
                 }
             )
+        if output.get("is_tool_call"):
+            duplex_action = "tool"
+        elif is_interrupt:
+            duplex_action = "interrupt"
+        elif self.backchannel_token_id in generated_token_ids:
+            duplex_action = "backchannel"
+        elif self.speak_token_id in generated_token_ids:
+            duplex_action = "speak"
+        elif bool(output.get("is_listen")):
+            duplex_action = "listen"
+        else:
+            # A non-listen dialogue unit is a speaking decision even if the
+            # provider did not preserve the first action token in its suffix.
+            duplex_action = "speak"
+        output["duplex_action"] = duplex_action
         if not self.params.generate_audio:
             output["audio_waveform"] = None
         return output
@@ -809,6 +825,11 @@ class OnlineRunner:
         speak_id = required("<|speak|>")
         self.interrupt_token_id = required("<|interrupt|>")
         backchannel_id = required("<|backchannel|>")
+        # Keep the action IDs on the runner so live traces can preserve the
+        # distinction between ordinary speech and a learned backchannel.
+        self.listen_token_id = listen_id
+        self.speak_token_id = speak_id
+        self.backchannel_token_id = backchannel_id
 
         if backchannel_id not in self.duplex.chunk_speak_token_ids:
             self.duplex.chunk_speak_token_ids.append(backchannel_id)
