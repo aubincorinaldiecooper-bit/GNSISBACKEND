@@ -24,15 +24,10 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Verify Railway production environment access
+      - name: Verify Railway production environment access via Public API
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           PROBE_SCHEDULED: ${{ github.event_name == 'schedule' }}
