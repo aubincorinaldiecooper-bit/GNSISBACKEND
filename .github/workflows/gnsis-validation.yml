@@ -69,6 +69,7 @@ jobs:
       - name: Verify the actual visual dependency surface
         run: |
           python - <<'PY'
+          import importlib.metadata
           import onnxruntime
           import rapidocr
           import torch
@@ -76,12 +77,10 @@ jobs:
           import transformers
           import xgrammar
 
+          for package in ("rapidocr", "onnxruntime", "transformers", "xgrammar"):
+              print(package, importlib.metadata.version(package))
           print("torch", torch.__version__)
           print("torchvision", torchvision.__version__)
-          print("transformers", transformers.__version__)
-          print("rapidocr", rapidocr.__version__)
-          print("onnxruntime", onnxruntime.__version__)
-          print("xgrammar", getattr(xgrammar, "__version__", "installed"))
           assert not torch.cuda.is_available()
           PY
 
