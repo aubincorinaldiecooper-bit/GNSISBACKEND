@@ -296,8 +296,7 @@ def test_a_description_without_text_cues_is_left_to_other_judges():
     assert (result.status, result.judge) == ("success", "vlm")
 
 
-def test_reading_real_pixels_when_the_ocr_model_is_installed():
-    pytest.importorskip("rapidocr")
+def test_reading_real_pixels_with_rapidocr():
     from PIL import ImageFont
 
     def rendered(frame_id, at, text):

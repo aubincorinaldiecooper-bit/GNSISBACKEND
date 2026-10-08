@@ -1,14 +1,15 @@
-name: Live runtime validation
+name: Panoptic-first runtime validation
 
-# The realtime stack under runtime/ is isolated from the standard service
-# dependency surface. This job validates that stack independently with the
-# production model stubbed exactly as the runtime tests expect.
+# Panoptic is the primary visual system. Its real dependency surface is validated
+# first; the small dependency runtime suite follows as a secondary compatibility
+# check. GitHub Actions' needs relationship makes the ordering explicit.
 
 on:
   pull_request:
     paths:
       - 'runtime/**'
       - 'modal/gnsis_voice.py'
+      - 'modal/gnsis_visual.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-gnsis.py'
       - 'scripts/verify-modal-ornith.py'
@@ -19,15 +20,17 @@ on:
     paths:
       - 'runtime/**'
       - 'modal/gnsis_voice.py'
+      - 'modal/gnsis_visual.py'
       - 'modal/ornith.py'
       - 'scripts/verify-modal-gnsis.py'
       - 'scripts/verify-modal-ornith.py'
       - '.github/workflows/gnsis-validation.yml'
 
 jobs:
-  validate:
+  panoptic-vision:
+    name: Panoptic visual validation
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -35,17 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The retired names are written with a one-character class so the
-          # patterns do not contain the words they ban. Spelled plainly, this
-          # step matched its own source and failed on a clean tree. Broken this
-          # way it still scans every tracked file, this one included, rather
-          # than exempting itself and going blind to the file most likely to
-          # mention the old names.
           RETIRED='(g[a]nder|cl[i]pit)'
-          # Source naming only: docs/ and the root AGENTS.md design brief are
-          # exempt. Design docs and audits have to name the upstream project
-          # and the retired products to discuss provenance — the gate exists
-          # for code, configs and APIs.
           if git ls-files -- . ':!docs/' | grep -iE "$RETIRED"; then
             echo "Retired product naming found in a tracked path." >&2
             exit 1
@@ -54,10 +47,6 @@ jobs:
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi
-          # The verified Talker asset lives under the upstream project's
-          # directory on the Modal volume, so the two Path B files that
-          # address it may name it; the retired product name stays banned
-          # everywhere else, including in every other file here.
           if git grep -nIiE "g[a]nder" -- . ':!docs/' ':!AGENTS.md' ':!modal/gnsis_voice.py' ':!runtime/configs/gnsis-voice.yaml' ':!runtime/gnsis_runtime/tests/test_live_surface.py'; then
             echo "Retired product naming found in tracked source content." >&2
             exit 1
@@ -66,6 +55,74 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Install Panoptic visual validation stack
+        run: |
+          python -m pip install --upgrade pip
+          # Match the production visual stack. PyTorch publishes the matching
+          # CPU wheels through its own index; this runner does not need a GPU.
+          python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install             pytest pytest-asyncio fastapi httpx pillow pyyaml websockets             "mcp==2.2.0" "PyJWT[crypto]>=2.8" "modal==1.5.0" "numpy==2.5.2"             "transformers==5.16.1" "accelerate==1.14.0" "huggingface_hub==1.33.0"             "rapidocr==3.9.2" "onnxruntime==1.30.0" "opencv-python==5.0.0.93"             "xgrammar==0.2.8"
+          python -m pip install --no-deps -e ./runtime/minicpm_ft
+          python -m pip install --no-deps -e ./runtime/gnsis_runtime
+
+      - name: Verify the actual visual dependency surface
+        run: |
+          python - <<'PY'
+          import importlib.metadata
+          import onnxruntime
+          import rapidocr
+          import torch
+          import torchvision
+          import transformers
+          import xgrammar
+
+          for package in ("rapidocr", "onnxruntime", "transformers", "xgrammar"):
+              print(package, importlib.metadata.version(package))
+          print("torch", torch.__version__)
+          print("torchvision", torchvision.__version__)
+          assert not torch.cuda.is_available()
+          PY
+
+      - name: Compile the visual runtime
+        run: python -m compileall -q runtime/gnsis_runtime/gnsis_runtime runtime/minicpm_ft/mcpmft
+
+      - name: Run the full Panoptic runtime test suite
+        run: pytest -q runtime/gnsis_runtime/tests
+
+      - name: Import and validate the Panoptic Modal definition
+        env:
+          GNSIS_VISUAL_DATA_VOLUME: placeholder-visual-volume
+          MINICPM_V46_CACHE_VOLUME: placeholder-minicpm-cache
+          GNSIS_MODELS_VOLUME: placeholder-existing-volume
+          GNSIS_SECRET_NAME: placeholder-existing-secret
+        run: |
+          python - <<'PY'
+          import runpy
+
+          visual = runpy.run_path("modal/gnsis_visual.py")
+          assert visual["app"].name == "gnsis-visual"
+          assert "gnsis_visual_server" in visual
+          assert "visual_tunnel" in visual
+          PY
+
+      - name: Validate the existing Modal deploy definitions
+        env:
+          GNSIS_MODELS_VOLUME: placeholder-existing-volume
+          GNSIS_SECRET_NAME: placeholder-existing-secret
+        run: |
+          python -c "import runpy; m = runpy.run_path('modal/gnsis_voice.py'); assert m['app'].name == 'gnsis-voice', m['app'].name; assert 'gnsis_server' in m"
+          python -m py_compile scripts/verify-modal-gnsis.py
+          python -c "import runpy; m = runpy.run_path('modal/ornith.py'); assert m['app'].name == 'gnsis-ornith', m['app'].name; assert 'ornith_server_v2' in m"
+          python -m py_compile scripts/verify-modal-ornith.py
+
+  lightweight-runtime:
+    name: Lightweight runtime compatibility
+    needs: panoptic-vision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install lightweight test dependencies
         run: |
@@ -77,20 +134,11 @@ jobs:
       - name: Compile the vendored runtime
         run: python -m compileall -q runtime/gnsis_runtime/gnsis_runtime runtime/minicpm_ft/mcpmft
 
-      - name: Run the runtime's lifecycle, live-page and Ornith provider tests
-        run: pytest -q runtime/gnsis_runtime/tests
-
-      # Importing the definition builds the app object without talking to
-      # Modal, so a wrong resource name, a renamed function or an API that
-      # this Modal version no longer has fails here, not on deploy day.
-      - name: Import the Modal definitions and compile the deploy checks
-        env:
-          GNSIS_MODELS_VOLUME: placeholder-existing-volume
-          GNSIS_SECRET_NAME: placeholder-existing-secret
+      - name: Run the lightweight non-optional runtime suite
         run: |
-          python -c "import runpy; m = runpy.run_path('modal/gnsis_voice.py'); assert m['app'].name == 'gnsis-voice', m['app'].name; assert 'gnsis_server' in m"
+          pytest -q runtime/gnsis_runtime/tests             --ignore=runtime/gnsis_runtime/tests/test_visual_head.py             -k 'not test_reading_real_pixels_with_rapidocr'
+
+      - name: Compile the deploy checks
+        run: |
           python -m py_compile scripts/verify-modal-gnsis.py
-          # The brain, under its own name. The assertion is what keeps a
-          # publish from this repository off the running previous-ornith-service.
-          python -c "import runpy; m = runpy.run_path('modal/ornith.py'); assert m['app'].name == 'gnsis-ornith', m['app'].name; assert 'ornith_server_v2' in m"
           python -m py_compile scripts/verify-modal-ornith.py
