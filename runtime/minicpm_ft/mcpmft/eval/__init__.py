@@ -1,1 +1,1 @@
-"""Offline evaluators for GNSIS/Gander training traces."""
+"""Offline evaluators for GNSIS foreground training traces."""

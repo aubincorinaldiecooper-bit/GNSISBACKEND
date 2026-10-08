@@ -1,9 +1,9 @@
-"""HiPLEX-style event-causal scoring for GNSIS/Gander timeline traces.
+"""HiPLEX-style event-causal scoring for GNSIS foreground timeline traces.
 
 This module does not copy HiPLEX's {pad, epad, cont} action vocabulary.
-Gander already has richer learned actions: listen, speak, backchannel and
+The foreground model already has richer learned actions: listen, speak, backchannel and
 interrupt. We reuse the event-causal credit-assignment idea and preserve
-Gander's native actions.
+the native actions.
 
 The scorer consumes the existing shared SessionTimeline JSONL plus a small
 annotation file describing conversational events. It never requires raw
@@ -78,11 +78,11 @@ class SpeechEpisode:
         return max(0, self.end_ms - self.start_ms)
 
 
-def map_gander_action(action: str) -> dict[str, Any]:
+def map_foreground_action(action: str) -> dict[str, Any]:
     """Return the HiPLEX-compatible role without changing Gander's action space."""
     key = str(action or "").strip().lower()
     if key not in ACTION_MAP:
-        raise ValueError(f"unknown Gander action: {action!r}")
+        raise ValueError(f"unknown foreground action: {action!r}")
     return {"action": key, **ACTION_MAP[key]}
 
 
@@ -231,7 +231,7 @@ def _decisions_between(
 
 
 def _target(decision: Decision, *, reason: str, polarity: str) -> dict[str, Any]:
-    mapped = map_gander_action(decision.action)
+    mapped = map_foreground_action(decision.action)
     return {
         "seq": decision.seq,
         "ts_ms": decision.ts_ms,
@@ -554,10 +554,10 @@ def evaluate_trace(
             f"{incomplete_spans} playback span(s) have no terminal ACK"
         )
     return {
-        "method": "gander_event_causal_v1",
+        "method": "foreground_event_causal_v1",
         "clock": clock,
         "mapping": {
-            action: map_gander_action(action) for action in ACTION_MAP
+            action: map_foreground_action(action) for action in ACTION_MAP
         },
         "trace": {
             "timeline_events": len(events),

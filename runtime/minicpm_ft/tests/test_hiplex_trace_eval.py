@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from mcpmft.eval.hiplex_trace import (
     evaluate_trace,
-    map_gander_action,
+    map_foreground_action,
 )
 
 
@@ -21,12 +21,12 @@ def _event(seq, kind, ts, **fields):
     }
 
 
-def test_gander_action_mapping_preserves_explicit_interrupt_and_backchannel():
-    assert map_gander_action("listen")["hiplex_group"] == "pad_like"
-    assert map_gander_action("speak")["hiplex_group"] == "cont_like"
-    assert map_gander_action("backchannel")["timing_role"] == "short_acknowledgement"
-    assert map_gander_action("interrupt")["hiplex_group"] == "explicit_yield"
-    assert map_gander_action("tool")["hiplex_group"] == "excluded"
+def test_foreground_action_mapping_preserves_explicit_interrupt_and_backchannel():
+    assert map_foreground_action("listen")["hiplex_group"] == "pad_like"
+    assert map_foreground_action("speak")["hiplex_group"] == "cont_like"
+    assert map_foreground_action("backchannel")["timing_role"] == "short_acknowledgement"
+    assert map_foreground_action("interrupt")["hiplex_group"] == "explicit_yield"
+    assert map_foreground_action("tool")["hiplex_group"] == "excluded"
 
 
 def test_interruption_uses_real_playback_terminal_and_explicit_interrupt():

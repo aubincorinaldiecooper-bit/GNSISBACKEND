@@ -656,7 +656,15 @@ class DuplexLiveSession:
             interrupted=is_interrupt,
             decision=str(
                 out.get("duplex_action")
-                or ("tool" if is_tool_call else ("interrupt" if is_interrupt else ("listen" if is_listen else "speak")))
+                or (
+                    "tool"
+                    if is_tool_call
+                    else (
+                        "interrupt"
+                        if is_interrupt
+                        else ("listen" if is_listen else "speak")
+                    )
+                )
             ),
             is_tool_call=is_tool_call,
             tool_calls=list(out.get("tool_calls") or []),

@@ -522,7 +522,11 @@ class TaskToolsRealtimeCoordinator:
             )
         generation_id = getattr(event, "generation_id", None)
         timeline_kwargs: dict[str, Any] = {}
-        if isinstance(generation_id, int) and not isinstance(generation_id, bool) and generation_id > 0:
+        if (
+            isinstance(generation_id, int)
+            and not isinstance(generation_id, bool)
+            and generation_id > 0
+        ):
             timeline_kwargs["output_epoch"] = generation_id
         self.timeline.emit(
             "foreground.decision",
