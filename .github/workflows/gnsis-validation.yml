@@ -76,8 +76,8 @@ jobs:
       - name: Compile the vendored runtime
         run: python -m compileall -q runtime/gnsis_runtime/gnsis_runtime runtime/minicpm_ft/mcpmft
 
-      - name: Run the runtime's lifecycle, live-page and Ornith provider tests
-        run: pytest -q runtime/gnsis_runtime/tests
+      - name: Run the runtime's lifecycle, live-page, provider and event-causal tests
+        run: pytest -q runtime/gnsis_runtime/tests runtime/minicpm_ft/tests/test_hiplex_trace_eval.py
 
       # Importing the definition builds the app object without talking to
       # Modal, so a wrong resource name, a renamed function or an API that

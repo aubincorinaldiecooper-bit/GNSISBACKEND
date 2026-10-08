@@ -37,6 +37,7 @@ mcpmft-launch = "mcpmft.launch:main"
 mcpmft-infer = "mcpmft.infer.cli:main"
 mcpmft-asr = "mcpmft.infer.asr:main"
 mcpmft-data = "mcpmft.data_cli:main"
+mcpmft-hiplex-eval = "mcpmft.eval.hiplex_trace:main"
 
 [tool.setuptools.packages.find]
 include = ["mcpmft*"]
