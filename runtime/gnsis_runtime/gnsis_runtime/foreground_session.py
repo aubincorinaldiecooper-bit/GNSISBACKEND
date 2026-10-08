@@ -447,8 +447,38 @@ class NativeForegroundSession:
             self._drained = True
             self._turn_ended = True
             return []
-        generation_id = self._generation_for(event)
         payload = event.payload
+        if event.kind == "interrupt":
+            # An interrupt retires the generation that was already playing.
+            # A provider may report the interrupt under a new epoch; resolving
+            # that epoch first would incorrectly cancel the new generation
+            # instead of the audio currently on the device.
+            cancelled = self._generation_id
+            self._generation_id += 1
+            key = (
+                event.correlation_id
+                if event.correlation_id is not None
+                else (f"epoch:{event.epoch}" if event.epoch is not None else None)
+            )
+            if key is not None:
+                self._generation_keys[key] = self._generation_id
+            self._speech_sequence = 0
+            self._drained = True
+            self._turn_ended = True
+            return [
+                SpeechCancel(
+                    generation_id=self._generation_id,
+                    cancelled_generation_id=cancelled,
+                    reason=str(payload.get("reason") or "model_interrupt"),
+                ),
+                self._model_event(
+                    generation_id=self._generation_id,
+                    is_listen=True,
+                    end_of_turn=True,
+                    raw=event.raw,
+                ),
+            ]
+        generation_id = self._generation_for(event)
         if event.kind == "audio":
             pcm16 = payload.get("pcm16")
             if not isinstance(pcm16, (bytes, bytearray)):
@@ -500,25 +530,6 @@ class NativeForegroundSession:
                     tool_error=payload.get("error"),
                     raw=event.raw,
                 )
-            ]
-        if event.kind == "interrupt":
-            cancelled = generation_id
-            self._generation_id += 1
-            self._speech_sequence = 0
-            self._drained = True
-            self._turn_ended = True
-            return [
-                SpeechCancel(
-                    generation_id=self._generation_id,
-                    cancelled_generation_id=cancelled,
-                    reason=str(payload.get("reason") or "model_interrupt"),
-                ),
-                self._model_event(
-                    generation_id=self._generation_id,
-                    is_listen=True,
-                    end_of_turn=True,
-                    raw=event.raw,
-                ),
             ]
         if event.kind == "turn":
             finished = payload.get("turn_finished")

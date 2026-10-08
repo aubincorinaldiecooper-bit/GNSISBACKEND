@@ -33,6 +33,31 @@ jobs:
         run: npm run typecheck
       - working-directory: desktop
         run: npm test
+      - name: Smoke-test the real Cua native SDK
+        working-directory: desktop
+        run: |
+          node --input-type=module <<'NODE'
+          const sdk = await import("@trycua/cua-driver");
+          const driver = sdk.CuaDriver.create(undefined);
+          try {
+            const catalog = JSON.parse(await driver.listToolsJson());
+            const names = new Set((catalog.tools ?? []).map((tool) => tool.name));
+            for (const required of ["list_windows", "click", "type_text", "get_browser_state"]) {
+              if (!names.has(required)) throw new Error(`Cua tool missing: ${required}`);
+            }
+          } finally {
+            await driver.shutdown();
+            driver.uniffiDestroy?.();
+          }
+          NODE
+      - name: Install both macOS Cua native slices for universal packaging
+        working-directory: desktop
+        run: |
+          npm install --ignore-scripts --no-save --force \
+            @trycua/cua-driver-darwin-arm64@0.34.0 \
+            @trycua/cua-driver-darwin-x64@0.34.0 \
+            @ubjs/node-darwin-arm64@0.31.0-3 \
+            @ubjs/node-darwin-x64@0.31.0-3
       - name: Package unsigned development DMG (universal)
         working-directory: desktop
         run: npm run package:mac
@@ -46,9 +71,19 @@ jobs:
           single=0
           while IFS= read -r f; do
             info="$(lipo -info "$f" 2>/dev/null || true)"
-            case "$info" in
-              *x86_64*arm64*|*arm64*x86_64*) ;;
-              *) echo "NOT universal: $f -> $info"; single=1 ;;
+            case "$f" in
+              *node_modules/@trycua/cua-driver-darwin-arm64/*|*node_modules/@ubjs/node-darwin-arm64/*)
+                case "$info" in *arm64*) ;; *) echo "WRONG Cua arm64 slice: $f -> $info"; single=1 ;; esac
+                ;;
+              *node_modules/@trycua/cua-driver-darwin-x64/*|*node_modules/@ubjs/node-darwin-x64/*)
+                case "$info" in *x86_64*) ;; *) echo "WRONG Cua x64 slice: $f -> $info"; single=1 ;; esac
+                ;;
+              *)
+                case "$info" in
+                  *x86_64*arm64*|*arm64*x86_64*) ;;
+                  *) echo "NOT universal: $f -> $info"; single=1 ;;
+                esac
+                ;;
             esac
           done < <(
             find "$APP" -type f | while IFS= read -r f; do
@@ -56,6 +91,9 @@ jobs:
             done
           )
           [ "$single" -eq 0 ] || exit 1
+          test -d "$APP/Contents/Resources/app.asar.unpacked/node_modules/@trycua" || {
+            echo "Cua native runtime was not unpacked into the app"; exit 1;
+          }
           lipo -info "$APP/Contents/MacOS/GNSIS"
       - name: Inspect packaged app for accidental secrets
         working-directory: desktop

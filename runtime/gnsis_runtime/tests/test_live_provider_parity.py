@@ -32,7 +32,7 @@ from test_duplex_lifecycle import (
 
 PROVIDERS = ("thinker", "venus")
 ONE_UNIT = b"\x00\x00" * 16000
-DESKTOP = "/ws/duplex?session_id=s1&host_tools=files,open&host_tools_version=desktop-v2"
+DESKTOP = "/ws/duplex?session_id=s1&host_tools=files,open&host_tools_version=desktop-v4"
 
 
 def _audio_header(sequence: int, captured_at_ms: int) -> dict:
@@ -185,7 +185,7 @@ def test_native_speech_arrives_as_desktop_audio_and_is_cancelled_by_interrupts(h
                     correlation_id="out-5",
                 ),
             )
-            chunk = _drain_until(ws, "audio.chunk")
+            chunk = _expect(ws, "audio.chunk")
             assert chunk["audio_sample_rate"] == 24000 and chunk["audio_bytes"] == 20
             assert ws.receive_bytes() == b"\x02\x00" * 10
             generation = chunk["generation_id"]
@@ -199,7 +199,7 @@ def test_native_speech_arrives_as_desktop_audio_and_is_cancelled_by_interrupts(h
                     correlation_id="out-5",
                 ),
             )
-            done = _drain_until(ws, "audio.done")
+            done = _expect(ws, "audio.done")
             assert done["generation_id"] == generation and done["end_of_turn"] is True
 
             ws.send_text(
@@ -212,14 +212,14 @@ def test_native_speech_arrives_as_desktop_audio_and_is_cancelled_by_interrupts(h
                     }
                 )
             )
-            _drain_until(ws, "playback.ack.done")
+            _expect(ws, "playback.ack.done")
 
             _emit(
                 client,
                 session,
                 ProviderEvent(kind="interrupt", payload={"reason": "user"}, epoch=6),
             )
-            cancel = _drain_until(ws, "playback.cancel")
+            cancel = _expect(ws, "playback.cancel")
             assert cancel["cancelled_generation_id"] == generation
             assert cancel["generation_id"] > generation
             _stop(ws)
@@ -336,13 +336,13 @@ def test_native_text_is_a_chunk_the_coordinator_saw(harness):
             assert chunk["text"] == "Done, it is in Projects."
             assert chunk["end_of_turn"] is True
             assert chunk["metrics"]["provider"] == "venus"
+            coordinator = h.coordinators[0]
+            replies = [
+                entry
+                for entry in coordinator.gateway.ledger.list_realtime_context(
+                    coordinator.owner_id
+                )
+                if entry.kind == "frontbrain_reply"
+            ]
+            assert [entry.text for entry in replies] == ["Done, it is in Projects."]
             _stop(ws)
-    coordinator = h.coordinators[0]
-    replies = [
-        entry
-        for entry in coordinator.gateway.ledger.list_realtime_context(
-            coordinator.owner_id
-        )
-        if entry.kind == "frontbrain_reply"
-    ]
-    assert [entry.text for entry in replies] == ["Done, it is in Projects."]

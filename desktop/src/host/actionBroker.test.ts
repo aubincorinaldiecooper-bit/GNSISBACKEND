@@ -321,3 +321,61 @@ test("an allowed action that types or clicks runs through the host's input hook;
   await answer(sent, "c2");
   assert.deepEqual(ran, ["files:run"], "a file move does not touch the front app");
 });
+
+
+test("foreground desktop actions never overlap", async () => {
+  const registry = new ToolRegistry({ runtimeUrl: "http://127.0.0.1:1" });
+  let releaseFirst: () => void = () => {};
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const order: string[] = [];
+  let runs = 0;
+  const input: ActionTool = {
+    name: "input",
+    platforms: [process.platform],
+    async prepare(args) {
+      const id = String(args.keys);
+      return {
+        tool: "input",
+        action: "keys",
+        effect: "input",
+        summary: `Press ${id}`,
+        scope: [{ value: id, source: "named" }],
+        run: async () => {
+          runs += 1;
+          const n = runs;
+          order.push(`start:${n}`);
+          if (n === 1) await firstGate;
+          order.push(`end:${n}`);
+          return { verified: "none", message: "Done." };
+        },
+      };
+    },
+  };
+  registry.registerAction(input);
+  const sent: Array<Record<string, unknown>> = [];
+  const broker = new ActionBroker({
+    registry,
+    send: (control) => sent.push(control),
+    event: () => {},
+    confirm: async () => true,
+    accessibility: () => true,
+    latestTurn: () => null,
+    log: () => {},
+  });
+  broker.handleControl({ type: "ready", host_tools: { accepted: ["input"] } });
+  const request = (id: string, keys: string) => ({
+    type: "tool.call",
+    call_id: id,
+    dispatch: "client",
+    tool_calls: [{ name: "input", arguments: { action: "keys", keys } }],
+    tool_response_expected: true,
+  });
+
+  broker.handleControl(request("lease-1", "cmd+c"));
+  broker.handleControl(request("lease-2", "cmd+v"));
+  await sleep(20);
+  assert.deepEqual(order, ["start:1"], "the second desktop mutation must wait");
+  releaseFirst();
+  await Promise.all([answer(sent, "lease-1"), answer(sent, "lease-2")]);
+  assert.deepEqual(order, ["start:1", "end:1", "start:2", "end:2"]);
+});
