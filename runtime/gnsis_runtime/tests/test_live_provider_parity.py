@@ -185,7 +185,7 @@ def test_native_speech_arrives_as_desktop_audio_and_is_cancelled_by_interrupts(h
                     correlation_id="out-5",
                 ),
             )
-            chunk = _drain_until(ws, "audio.chunk")
+            chunk = _expect(ws, "audio.chunk")
             assert chunk["audio_sample_rate"] == 24000 and chunk["audio_bytes"] == 20
             assert ws.receive_bytes() == b"\x02\x00" * 10
             generation = chunk["generation_id"]
@@ -199,7 +199,7 @@ def test_native_speech_arrives_as_desktop_audio_and_is_cancelled_by_interrupts(h
                     correlation_id="out-5",
                 ),
             )
-            done = _drain_until(ws, "audio.done")
+            done = _expect(ws, "audio.done")
             assert done["generation_id"] == generation and done["end_of_turn"] is True
 
             ws.send_text(
@@ -212,14 +212,14 @@ def test_native_speech_arrives_as_desktop_audio_and_is_cancelled_by_interrupts(h
                     }
                 )
             )
-            _drain_until(ws, "playback.ack.done")
+            _expect(ws, "playback.ack.done")
 
             _emit(
                 client,
                 session,
                 ProviderEvent(kind="interrupt", payload={"reason": "user"}, epoch=6),
             )
-            cancel = _drain_until(ws, "playback.cancel")
+            cancel = _expect(ws, "playback.cancel")
             assert cancel["cancelled_generation_id"] == generation
             assert cancel["generation_id"] > generation
             _stop(ws)
