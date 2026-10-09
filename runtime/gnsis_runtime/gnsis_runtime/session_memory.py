@@ -56,6 +56,69 @@ class SessionMemoryRecall:
         self.top_k = top_k
         self.timeout_s = timeout_s
 
+    def write_perception_episode(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        user_text: str,
+        model_text: str,
+        frame_ids: list[str],
+    ) -> bool:
+        """Persist one semantic episode backed by consumed live frame IDs."""
+        user = " ".join(user_text.split())[:1200]
+        observation = " ".join(model_text.split())[:2400]
+        if not observation or not frame_ids:
+            return False
+        summary = f"User: {user}\\nPerception: {observation}"[:3600]
+        body = json.dumps(
+            {
+                "text": summary,
+                "summary": summary,
+                "type": "visual_event",
+                "session_id": session_id,
+                "tags": ["gnsis-live", "perception", "auto"],
+                "provenance": {
+                    "source_session_id": session_id,
+                    "source_turn_id": turn_id,
+                    "source_frame_ids": frame_ids[:128],
+                    "source_frame_count": len(frame_ids),
+                    "source": "gnsis-realtime-consumed-frames",
+                },
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/namespaces/{quote(self.namespace, safe='')}/text",
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-GNSIS-SimpleMem-Token": self.token,
+            },
+            method="PUT",
+        )
+        start = time.monotonic()
+        try:
+            with urlopen(request, timeout=self.timeout_s) as response:
+                decoded = json.loads(response.read(2 * 1024 * 1024))
+        except (HTTPError, URLError, OSError, ValueError) as exc:
+            LOGGER.warning(
+                "session.memory_write latency_ms=%.1f status=error",
+                (time.monotonic() - start) * 1000,
+            )
+            raise RuntimeError(f"session memory write failed: {exc}") from exc
+        LOGGER.info(
+            "session.memory_write op=visual_episode latency_ms=%.1f status=ok "
+            "session=%s turn=%s frames=%d",
+            (time.monotonic() - start) * 1000,
+            session_id,
+            turn_id,
+            len(frame_ids),
+        )
+        return bool(decoded.get("ok", True))
+
     def search(self, query: str) -> list[dict[str, Any]]:
         """Return raw sidecar hits for ``query`` in the configured namespace."""
         body = json.dumps(
