@@ -2344,6 +2344,7 @@ def create_online_duplex_app(
             # event when it goes out. Every model event passes through here,
             # so each is observed exactly once.
             event = split.remainder
+            coordinator.observe_perception_output(event)
             coordinator.observe_frontbrain(event)
             await send_model_event(
                 event,
