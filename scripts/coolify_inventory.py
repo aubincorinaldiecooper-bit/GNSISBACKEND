@@ -122,7 +122,40 @@ class Coolify:
 
 
 def inventory(client, expected_uuid):
-    app = select_backend(records(client.request("GET", "/applications")), expected_uuid)
+    applications = records(client.request("GET", "/applications"))
+    app = select_backend(applications, expected_uuid)
+    # Read-only inventory of GNSIS/worker/SimpleMem apps. Only resource
+    # metadata and variable names are retained; secret values are never read
+    # into the report.
+    relevant_apps = []
+    for candidate in applications:
+        name = str(candidate.get("name") or "")
+        lowered = name.lower()
+        if "gnsis" not in lowered and "simplemem" not in lowered:
+            continue
+        env_items = records(
+            client.request("GET", "/applications/" + str(candidate["uuid"]) + "/envs")
+        )
+        env_names = sorted(
+            item["key"] for item in env_items
+            if isinstance(item.get("key"), str)
+        )
+        relevant_apps.append({
+            "name": name,
+            "uuid": str(candidate.get("uuid") or ""),
+            "status": str(candidate.get("status") or "unknown"),
+            "environment_id": str(candidate.get("environment_id") or ""),
+            "simplemem_url_configured": "GNSIS_SIMPLEMEM_URL" in env_names,
+            "simplemem_token_configured": (
+                "GNSIS_SIMPLEMEM_TOKEN" in env_names
+                or "GNSIS_SIMPLEMEM_INTERNAL_TOKEN" in env_names
+            ),
+            "modal_credentials_configured": (
+                "MODAL_TOKEN_ID" in env_names
+                and "MODAL_TOKEN_SECRET" in env_names
+            ),
+            "env_names": env_names,
+        })
     databases = records(client.request("GET", "/databases"))
     pg = choose_database(databases, "postgres")
     redis = choose_database(databases, "redis")
@@ -150,6 +183,14 @@ def inventory(client, expected_uuid):
         "redis_found": redis is not None,
         "redis_running": bool(redis and str(redis.get("status") or "").startswith("running")),
         "missing_keys": sorted(API_ENV_KEYS - names),
+        "relevant_apps": sorted(relevant_apps, key=lambda item: item["name"].lower()),
+        "simplemem_apps": [
+            item for item in relevant_apps if "simplemem" in item["name"].lower()
+        ],
+        "worker_apps": [
+            item for item in relevant_apps
+            if "worker" in item["name"].lower() and "gnsis" in item["name"].lower()
+        ],
     }
 
 
@@ -186,6 +227,32 @@ def summary_lines(result, issues):
         "- Backend and database same destination: "
         + str(bool(result["app_destination_id"] and result["app_destination_id"] == result["pg_destination_id"])),
         "- Missing API env names: " + (", ".join(result["missing_keys"]) or "none"),
+        "",
+        "### Coolify realtime memory resources",
+        "- SimpleMem application candidates: "
+        + (
+            ", ".join(
+                item["name"] + " (" + item["uuid"] + "; " + item["status"] + ")"
+                for item in result["simplemem_apps"]
+            ) or "none found"
+        ),
+        "- GNSIS worker application candidates: "
+        + (
+            ", ".join(
+                item["name"] + " (" + item["uuid"] + "; " + item["status"] + ")"
+                for item in result["worker_apps"]
+            ) or "none found"
+        ),
+    ]
+    for item in result["relevant_apps"]:
+        lines.append(
+            "- " + item["name"] + ": SimpleMem URL key="
+            + str(item["simplemem_url_configured"])
+            + ", SimpleMem token key=" + str(item["simplemem_token_configured"])
+            + ", Modal credentials=" + str(item["modal_credentials_configured"])
+            + ", env names=" + (", ".join(item["env_names"]) or "none")
+        )
+    lines += [
         "",
         "### Deployment gates",
     ]
