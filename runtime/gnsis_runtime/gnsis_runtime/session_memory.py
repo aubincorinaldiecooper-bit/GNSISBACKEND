@@ -70,7 +70,7 @@ class SessionMemoryRecall:
         observation = " ".join(model_text.split())[:2400]
         if not observation or not frame_ids:
             return False
-        summary = f"User: {user}\\nPerception: {observation}"[:3600]
+        summary = f"User: {user}\nPerception: {observation}"[:3600]
         body = json.dumps(
             {
                 "text": summary,
