@@ -170,6 +170,7 @@ class MemoryConfig:
     session_recall_token_env: str = "GNSIS_SIMPLEMEM_TOKEN"
     session_recall_top_k: int = 8
     session_recall_timeout_sec: float = 10.0
+    session_recall_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,9 @@ def load_config(path: str | Path) -> ReleaseConfig:
         or memory_document.get("session_recall_url")
     )
     memory_document.setdefault("session_recall_token_env", "GNSIS_SIMPLEMEM_TOKEN")
+    required_override = os.environ.get("GNSIS_SIMPLEMEM_REQUIRED", "").strip().lower()
+    if required_override in {"1", "true", "yes"}:
+        memory_document["session_recall_required"] = True
     sections = {
         "model",
         "server",
@@ -277,6 +281,17 @@ def validate_release_config(config: ReleaseConfig) -> None:
     if not isinstance(config.worker.settings, dict):
         raise ValueError("worker.settings must be a YAML mapping")
     validate_asr_config(config.asr)
+    if config.memory.session_recall_required:
+        if not config.memory.session_recall_url:
+            raise ValueError(
+                "memory.session_recall_url is required when "
+                "memory.session_recall_required is true"
+            )
+        memory_token = os.environ.get(config.memory.session_recall_token_env, "")
+        if len(memory_token) < 32:
+            raise ValueError(
+                f"{config.memory.session_recall_token_env} must contain at least 32 characters"
+            )
     if config.asr.mode == "managed" and config.asr.port == server.port:
         raise ValueError("managed ASR and the GNSIS server must use different ports")
     # A remote foreground provider has no Thinker to load, so the bench config
