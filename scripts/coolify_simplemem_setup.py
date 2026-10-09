@@ -117,15 +117,15 @@ def choose_unique(items: list[dict[str, Any]], label: str) -> dict[str, Any]:
     return items[0]
 
 
-def get_identity(detail: dict[str, Any], key: str, nested: str | None = None) -> str:
+def get_identity(
+    detail: dict[str, Any], key: str, container_key: str, nested_key: str = "uuid"
+) -> str:
     value = detail.get(key)
     if value:
         return str(value)
-    if nested:
-        for container_key in ("project", "server", "environment", "destination"):
-            container = detail.get(container_key)
-            if isinstance(container, dict) and container.get(nested):
-                return str(container[nested])
+    container = detail.get(container_key)
+    if isinstance(container, dict) and container.get(nested_key):
+        return str(container[nested_key])
     return ""
 
 
@@ -214,6 +214,14 @@ def main() -> int:
         and "beat" not in str(app.get("name") or "").lower()
         and repo_name(app.get("git_repository") or app.get("git_full_url")) == TARGET_REPO
     ]
+    if not api_matches:
+        api_matches = [
+            app for app in relevant
+            if "worker" not in str(app.get("name") or "").lower()
+            and "beat" not in str(app.get("name") or "").lower()
+            and "simplemem" not in str(app.get("name") or "").lower()
+            and repo_name(app.get("git_repository") or app.get("git_full_url")) == TARGET_REPO
+        ]
     api_app = choose_unique(api_matches, "GNSIS API")
     api_envs = app_envs(client, str(api_app["uuid"]))
     api_key = env_value(api_envs, "GNSIS_API_KEY")
@@ -226,8 +234,8 @@ def main() -> int:
     worker_repo = repo_name(worker_detail.get("git_repository") or worker_detail.get("git_full_url"))
     if worker_repo != TARGET_REPO:
         raise SetupError("The selected worker is not sourced from the expected GNSISBACKEND repository.")
-    project_uuid = get_identity(worker_detail, "project_uuid", "uuid")
-    server_uuid = get_identity(worker_detail, "server_uuid", "uuid")
+    project_uuid = get_identity(worker_detail, "project_uuid", "project")
+    server_uuid = get_identity(worker_detail, "server_uuid", "server")
     environment_uuid = str(worker_detail.get("environment_id") or worker_detail.get("environment_uuid") or "")
     environment_name = str(worker_detail.get("environment_name") or "")
     if not environment_name and isinstance(worker_detail.get("environment"), dict):
@@ -236,6 +244,8 @@ def main() -> int:
     git_repository = str(worker_detail.get("git_repository") or worker_detail.get("git_full_url") or "")
     git_branch = str(worker_detail.get("git_branch") or "main")
     destination_uuid = str(worker_detail.get("destination_id") or worker_detail.get("destination_uuid") or "")
+    if not destination_uuid:
+        destination_uuid = get_identity(worker_detail, "destination_uuid", "destination")
     if not all((project_uuid, server_uuid, environment_uuid or environment_name, github_app_uuid, git_repository)):
         raise SetupError(
             "The GNSIS worker does not expose the project/server/environment/GitHub-App identifiers "
@@ -257,6 +267,9 @@ def main() -> int:
         simplemem_app = simplemem_matches[0]
         simplemem_uuid = str(simplemem_app["uuid"])
         print(f"- Reusing existing SimpleMem application: {simplemem_app.get('name')} ({simplemem_uuid}).")
+        old_token = env_value(app_envs(client, simplemem_uuid), "SIMPLEMEM_INTERNAL_TOKEN")
+        if len(old_token) >= 32:
+            token = old_token
     else:
         create_body: dict[str, Any] = {
             "project_uuid": project_uuid,
