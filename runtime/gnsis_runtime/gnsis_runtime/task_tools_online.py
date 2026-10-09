@@ -453,7 +453,10 @@ class TaskToolsRealtimeCoordinator:
         if isinstance(text, str) and text.strip():
             self._perception_output_chunks.append(text.strip())
         metrics = getattr(event, "metrics", None)
-        consumed = getattr(metrics, "consumed_frame_ids", None)
+        if isinstance(metrics, Mapping):
+            consumed = metrics.get("consumed_frame_ids")
+        else:
+            consumed = getattr(metrics, "consumed_frame_ids", None)
         if consumed:
             self._perception_frame_ids.update(
                 str(value).strip() for value in consumed if str(value).strip()
