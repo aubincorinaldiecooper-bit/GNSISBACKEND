@@ -65,6 +65,8 @@ class SessionMemoryRecall:
         model_text: str,
         frame_ids: list[str],
         namespace: str | None = None,
+        source_start_sec: float | None = None,
+        source_end_sec: float | None = None,
     ) -> bool:
         """Persist one semantic episode backed by consumed live frame IDs."""
         user = " ".join(user_text.split())[:1200]
@@ -84,6 +86,9 @@ class SessionMemoryRecall:
                     "source_turn_id": turn_id,
                     "source_frame_ids": frame_ids[:128],
                     "source_frame_count": len(frame_ids),
+                    "source_start_sec": source_start_sec,
+                    "source_end_sec": source_end_sec,
+                    "source_time_basis": "consumed-frame model-step current_time milliseconds",
                     "source": "gnsis-realtime-consumed-frames",
                 },
             },
