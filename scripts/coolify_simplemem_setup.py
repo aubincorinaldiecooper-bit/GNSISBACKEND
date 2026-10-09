@@ -236,14 +236,16 @@ def main() -> int:
         raise SetupError("The selected worker is not sourced from the expected GNSISBACKEND repository.")
     project_uuid = get_identity(worker_detail, "project_uuid", "project")
     server_uuid = get_identity(worker_detail, "server_uuid", "server")
-    environment_uuid = str(worker_detail.get("environment_id") or worker_detail.get("environment_uuid") or "")
+    environment_uuid = str(worker_detail.get("environment_uuid") or worker_detail.get("environment_id") or "")
     environment_name = str(worker_detail.get("environment_name") or "")
     if not environment_name and isinstance(worker_detail.get("environment"), dict):
         environment_name = str(worker_detail["environment"].get("name") or "")
     github_app_uuid = str(worker_detail.get("github_app_uuid") or "")
+    if not github_app_uuid and isinstance(worker_detail.get("github_app"), dict):
+        github_app_uuid = str(worker_detail["github_app"].get("uuid") or "")
     git_repository = str(worker_detail.get("git_repository") or worker_detail.get("git_full_url") or "")
     git_branch = str(worker_detail.get("git_branch") or "main")
-    destination_uuid = str(worker_detail.get("destination_id") or worker_detail.get("destination_uuid") or "")
+    destination_uuid = str(worker_detail.get("destination_uuid") or worker_detail.get("destination_id") or "")
     if not destination_uuid:
         destination_uuid = get_identity(worker_detail, "destination_uuid", "destination")
     if not all((project_uuid, server_uuid, environment_uuid or environment_name, github_app_uuid, git_repository)):
@@ -252,10 +254,19 @@ def main() -> int:
             "needed to create a private-repository app safely. No service or worker settings were changed."
         )
 
-    # Prefer an already configured HTTPS endpoint; otherwise use the dedicated
-    # hostname. The health gate below prevents wiring the worker to a dead URL.
+    # Reuse an existing endpoint only when a SimpleMem app already exists or
+    # the worker explicitly points at the dedicated hostname. Do not accidentally
+    # claim an unrelated external URL as the domain for a newly created app.
     existing_url = env_value(worker_envs, "GNSIS_SIMPLEMEM_URL").strip().rstrip("/")
-    simplemem_url = existing_url or SIMPLEMEM_URL_DEFAULT
+    if simplemem_matches:
+        simplemem_url = existing_url or SIMPLEMEM_URL_DEFAULT
+    else:
+        existing_host = urllib.parse.urlsplit(existing_url).hostname if existing_url else None
+        simplemem_url = (
+            existing_url
+            if existing_host == urllib.parse.urlsplit(SIMPLEMEM_URL_DEFAULT).hostname
+            else SIMPLEMEM_URL_DEFAULT
+        )
     parsed = urllib.parse.urlsplit(simplemem_url)
     if parsed.scheme != "https" or not parsed.netloc or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         raise SetupError("GNSIS_SIMPLEMEM_URL must be a base HTTPS URL with no path, query, or fragment.")
