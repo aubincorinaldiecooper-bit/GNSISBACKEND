@@ -219,6 +219,15 @@ def load_config(path: str | Path) -> ReleaseConfig:
         document = yaml.safe_load(handle) or {}
     if not isinstance(document, dict):
         raise ValueError("Top-level YAML must be a mapping")
+    # Deployment environment is authoritative for the self-hosted endpoint.
+    memory_document = document.setdefault("memory", {})
+    if not isinstance(memory_document, dict):
+        raise ValueError("memory must be a YAML mapping")
+    memory_document["session_recall_url"] = (
+        os.environ.get("GNSIS_SIMPLEMEM_URL", "").strip()
+        or memory_document.get("session_recall_url")
+    )
+    memory_document.setdefault("session_recall_token_env", "GNSIS_SIMPLEMEM_TOKEN")
     sections = {
         "model",
         "server",
@@ -787,9 +796,18 @@ def build_app(config: ReleaseConfig):
     )
     from .session_memory import SessionMemoryRecall
 
+    session_recall_url = (
+        config.memory.session_recall_url
+        or os.environ.get("GNSIS_SIMPLEMEM_URL", "").strip()
+    )
+    if not session_recall_url:
+        LOGGER.warning(
+            "session memory disabled: set GNSIS_SIMPLEMEM_URL in the Modal "
+            "deployment environment to enable durable recall and perception writes"
+        )
     session_memory = (
         SessionMemoryRecall(
-            config.memory.session_recall_url,
+            session_recall_url,
             namespace=config.memory.session_recall_namespace,
             token=os.environ.get(config.memory.session_recall_token_env, ""),
             top_k=config.memory.session_recall_top_k,
