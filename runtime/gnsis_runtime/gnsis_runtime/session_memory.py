@@ -64,6 +64,7 @@ class SessionMemoryRecall:
         user_text: str,
         model_text: str,
         frame_ids: list[str],
+        namespace: str | None = None,
     ) -> bool:
         """Persist one semantic episode backed by consumed live frame IDs."""
         user = " ".join(user_text.split())[:1200]
@@ -89,8 +90,9 @@ class SessionMemoryRecall:
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
+        target_namespace = namespace or self.namespace
         request = Request(
-            f"{self.base_url}/namespaces/{quote(self.namespace, safe='')}/text",
+            f"{self.base_url}/namespaces/{quote(target_namespace, safe='')}/text",
             data=body,
             headers={
                 "Accept": "application/json",
@@ -119,7 +121,9 @@ class SessionMemoryRecall:
         )
         return bool(decoded.get("ok", True))
 
-    def search(self, query: str) -> list[dict[str, Any]]:
+    def search(
+        self, query: str, *, namespace: str | None = None
+    ) -> list[dict[str, Any]]:
         """Return raw sidecar hits for ``query`` in the configured namespace."""
         body = json.dumps(
             {"query": query, "top_k": self.top_k},
@@ -132,8 +136,9 @@ class SessionMemoryRecall:
         }
         if self.token:
             headers["X-GNSIS-SimpleMem-Token"] = self.token
+        target_namespace = namespace or self.namespace
         request = Request(
-            f"{self.base_url}/namespaces/{quote(self.namespace, safe='')}/query",
+            f"{self.base_url}/namespaces/{quote(target_namespace, safe='')}/query",
             data=body,
             headers=headers,
             method="POST",
@@ -159,7 +164,9 @@ class SessionMemoryRecall:
         )
         return hits
 
-    def episodes_for_turn(self, turn_text: str) -> list[dict[str, Any]]:
+    def episodes_for_turn(
+        self, turn_text: str, *, namespace: str | None = None
+    ) -> list[dict[str, Any]]:
         """Shape relevant memories as ``memory.episode`` entries.
 
         Each episode keeps the memory's identity in ``key`` so a re-recalled
@@ -171,7 +178,7 @@ class SessionMemoryRecall:
         if not query:
             return []
         try:
-            items = self.search(query)
+            items = self.search(query, namespace=namespace)
         except Exception:
             # Recall failure must never break the live turn. The memory simply
             # does not participate this turn; the error is logged for telemetry.
