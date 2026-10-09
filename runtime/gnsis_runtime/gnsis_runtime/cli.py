@@ -813,7 +813,7 @@ def build_app(config: ReleaseConfig):
             top_k=config.memory.session_recall_top_k,
             timeout_s=config.memory.session_recall_timeout_sec,
         )
-        if config.memory.session_recall_url
+        if session_recall_url
         else None
     )
 
