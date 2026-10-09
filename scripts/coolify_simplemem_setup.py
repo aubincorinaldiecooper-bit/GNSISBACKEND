@@ -225,7 +225,7 @@ def main() -> int:
     api_app = choose_unique(api_matches, "GNSIS API")
     api_envs = app_envs(client, str(api_app["uuid"]))
     api_key = env_value(api_envs, "GNSIS_API_KEY")
-    if not api_key:
+    if len(api_key) < 32:
         raise SetupError(
             "The GNSIS API application does not expose GNSIS_API_KEY to the Coolify automation token. "
             "No service or worker settings were changed; configure the internal deploy key's API access first."
