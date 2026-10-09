@@ -243,12 +243,13 @@ def main() -> int:
     github_app_uuid = str(worker_detail.get("github_app_uuid") or "")
     if not github_app_uuid and isinstance(worker_detail.get("github_app"), dict):
         github_app_uuid = str(worker_detail["github_app"].get("uuid") or "")
+    private_key_uuid = str(worker_detail.get("private_key_uuid") or "")
     git_repository = str(worker_detail.get("git_repository") or worker_detail.get("git_full_url") or "")
     git_branch = str(worker_detail.get("git_branch") or "main")
     destination_uuid = str(worker_detail.get("destination_uuid") or worker_detail.get("destination_id") or "")
     if not destination_uuid:
         destination_uuid = get_identity(worker_detail, "destination_uuid", "destination")
-    if not all((project_uuid, server_uuid, environment_uuid or environment_name, github_app_uuid, git_repository)):
+    if not all((project_uuid, server_uuid, environment_uuid or environment_name, github_app_uuid or private_key_uuid, git_repository)):
         raise SetupError(
             "The GNSIS worker does not expose the project/server/environment/GitHub-App identifiers "
             "needed to create a private-repository app safely. No service or worker settings were changed."
@@ -287,7 +288,6 @@ def main() -> int:
             "server_uuid": server_uuid,
             "environment_name": environment_name or "production",
             "environment_uuid": environment_uuid,
-            "github_app_uuid": github_app_uuid,
             "git_repository": git_repository,
             "git_branch": git_branch,
             "build_pack": "dockerfile",
@@ -297,9 +297,15 @@ def main() -> int:
             "domains": simplemem_url,
             "instant_deploy": False,
         }
+        if github_app_uuid:
+            create_route = "/applications/private-github-app"
+            create_body["github_app_uuid"] = github_app_uuid
+        else:
+            create_route = "/applications/private-deploy-key"
+            create_body["private_key_uuid"] = private_key_uuid
         if destination_uuid:
             create_body["destination_uuid"] = destination_uuid
-        created = client.request("POST", "/applications/private-github-app", create_body)
+        created = client.request("POST", create_route, create_body)
         if not isinstance(created, dict) or not created.get("uuid"):
             raise SetupError("Coolify did not return a UUID for the new SimpleMem application.")
         simplemem_uuid = str(created["uuid"])
