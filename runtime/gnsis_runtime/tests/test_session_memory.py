@@ -124,6 +124,8 @@ def test_write_perception_episode_is_bounded_and_carries_frame_provenance(recall
         user_text="  What is on screen?  ",
         model_text="A red build badge is visible.",
         frame_ids=["frame-12", "frame-13"],
+        source_start_sec=2.0,
+        source_end_sec=3.0,
     )
     write = _Sidecar.writes[-1]
     assert write["path"] == "/namespaces/session%3Atest/text"
@@ -132,6 +134,8 @@ def test_write_perception_episode_is_bounded_and_carries_frame_provenance(recall
     assert "A red build badge is visible." in write["body"]["summary"]
     assert write["body"]["provenance"]["source_frame_ids"] == ["frame-12", "frame-13"]
     assert write["body"]["provenance"]["source_turn_id"] == "turn-4"
+    assert write["body"]["provenance"]["source_start_sec"] == 2.0
+    assert write["body"]["provenance"]["source_end_sec"] == 3.0
 
 
 def test_write_perception_episode_skips_without_frame_evidence(recall):
