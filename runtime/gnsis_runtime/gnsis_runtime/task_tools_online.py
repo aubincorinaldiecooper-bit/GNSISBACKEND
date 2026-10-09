@@ -179,6 +179,7 @@ class TaskToolsRealtimeCoordinator:
         self._perception_turn_id: str | None = None
         self._perception_output_chunks: list[str] = []
         self._perception_frame_ids: set[str] = set()
+        self._perception_source_times_ms: list[int] = []
         self._turns: dict[str, TurnEnvelope] = {}
         self._turn_identities: dict[str, tuple[Any, ...]] = {}
         self._next_context_revision = 0
@@ -461,6 +462,9 @@ class TaskToolsRealtimeCoordinator:
             self._perception_frame_ids.update(
                 str(value).strip() for value in consumed if str(value).strip()
             )
+            current_time = getattr(event, "current_time", None)
+            if isinstance(current_time, (int, float)) and current_time >= 0:
+                self._perception_source_times_ms.append(int(current_time))
 
     def _take_perception_episode(self, turn: TurnEnvelope) -> dict[str, Any] | None:
         if self._perception_turn_id != turn.turn_id:
@@ -468,16 +472,22 @@ class TaskToolsRealtimeCoordinator:
         chunks = self._perception_output_chunks
         frame_ids = sorted(self._perception_frame_ids)
         self._perception_turn_id = None
+        source_times_ms = self._perception_source_times_ms
         self._perception_output_chunks = []
         self._perception_frame_ids = set()
+        self._perception_source_times_ms = []
         if not frame_ids or not chunks or self.session_memory is None:
             return None
+        source_start_sec = min(source_times_ms) / 1000.0 if source_times_ms else None
+        source_end_sec = max(source_times_ms) / 1000.0 if source_times_ms else None
         return {
             "session_id": self.session_id,
             "turn_id": turn.turn_id,
             "user_text": turn.final_asr,
             "model_text": " ".join(chunks),
             "frame_ids": frame_ids,
+            "source_start_sec": source_start_sec,
+            "source_end_sec": source_end_sec,
             "namespace": (
                 f"{self.session_memory.namespace}:session:{self.session_id}"
             ),
@@ -488,8 +498,44 @@ class TaskToolsRealtimeCoordinator:
         if not callable(writer):
             return
         try:
-            await asyncio.to_thread(writer, **episode)
-        except Exception:
+            written = await asyncio.to_thread(writer, **episode)
+            self.timeline.emit(
+                "memory.episode_created" if written else "memory.episode_write_failed",
+                component="memory",
+                correlation_id=str(episode["turn_id"]),
+                source_ts_ms=(
+                    int(float(episode["source_end_sec"]) * 1000)
+                    if episode.get("source_end_sec") is not None
+                    else None
+                ),
+                fields={
+                    "turn_id": episode["turn_id"],
+                    "frame_ids": episode["frame_ids"],
+                    "frame_count": len(episode["frame_ids"]),
+                    "source_start_sec": episode.get("source_start_sec"),
+                    "source_end_sec": episode.get("source_end_sec"),
+                    "namespace": episode["namespace"],
+                },
+            )
+        except Exception as exc:
+            self.timeline.emit(
+                "memory.episode_write_failed",
+                component="memory",
+                correlation_id=str(episode["turn_id"]),
+                source_ts_ms=(
+                    int(float(episode["source_end_sec"]) * 1000)
+                    if episode.get("source_end_sec") is not None
+                    else None
+                ),
+                fields={
+                    "turn_id": episode["turn_id"],
+                    "frame_ids": episode["frame_ids"],
+                    "frame_count": len(episode["frame_ids"]),
+                    "source_start_sec": episode.get("source_start_sec"),
+                    "source_end_sec": episode.get("source_end_sec"),
+                    "error_type": type(exc).__name__,
+                },
+            )
             LOGGER.warning("session perception memory write failed", exc_info=True)
 
     async def _recall_durable(self, turn: TurnEnvelope) -> None:
