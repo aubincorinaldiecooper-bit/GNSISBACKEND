@@ -89,6 +89,7 @@ simplemem_secret = modal.Secret.from_dict(
         "GNSIS_SIMPLEMEM_URL": simplemem_url,
         "GNSIS_SIMPLEMEM_TOKEN": simplemem_token,
         "GNSIS_SIMPLEMEM_INTERNAL_TOKEN": simplemem_token,
+        "GNSIS_SIMPLEMEM_REQUIRED": "true",
     }
 )
 
