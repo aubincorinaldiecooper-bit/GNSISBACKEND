@@ -19,6 +19,7 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: write
 
 concurrency:
   group: gnsis-simplemem-rollout
@@ -36,8 +37,8 @@ jobs:
       - name: Provision SimpleMem, persist data, wire worker, and deploy Modal runtime
         shell: bash
         env:
-          COOLIFY_URL: \${{ secrets.COOLIFY_URL }}
-          COOLIFY_API_TOKEN: \${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
           set -uo pipefail
           python scripts/coolify_simplemem_setup.py 2>&1 | tee simplemem-rollout-report.md
