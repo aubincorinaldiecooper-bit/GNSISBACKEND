@@ -8,6 +8,13 @@ on:
     paths:
       - '.github/workflows/coolify-api-migration.yml'
       - 'scripts/coolify_inventory.py'
+      - 'modal/gnsis_voice.py'
+      - 'runtime/configs/gnsis-voice.yaml'
+      - 'runtime/gnsis_runtime/gnsis_runtime/session_memory.py'
+      - 'runtime/gnsis_runtime/gnsis_runtime/task_tools_online.py'
+      - 'runtime/gnsis_runtime/gnsis_runtime/online_duplex.py'
+      - 'tools/simplemem/**'
+      - 'Dockerfile.simplemem'
   workflow_dispatch:
     inputs:
       operation:
