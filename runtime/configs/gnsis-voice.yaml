@@ -87,6 +87,15 @@ duplex:
   max_tool_schemas: 8
   max_tool_schema_tokens: 1792
 
+# Server-owned persistent recall and episodic writes. Endpoint and token are
+# injected into Modal at deploy time; secrets are never committed here.
+memory:
+  session_recall_url: null
+  session_recall_namespace: gnsis
+  session_recall_token_env: GNSIS_SIMPLEMEM_TOKEN
+  session_recall_top_k: 8
+  session_recall_timeout_sec: 10.0
+
 # No background worker runs next to the voice runtime, so task_start answers
 # that nothing can take the task. Actions on the person's Mac do not come
 # through here: they go to the connected desktop (duplex.host_tools_path).
