@@ -175,6 +175,10 @@ class TaskToolsRealtimeCoordinator:
         self._delivery_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._latest_turn: TurnEnvelope | None = None
+        # Aggregate output only for turns with consumed live frame IDs.
+        self._perception_turn_id: str | None = None
+        self._perception_output_chunks: list[str] = []
+        self._perception_frame_ids: set[str] = set()
         self._turns: dict[str, TurnEnvelope] = {}
         self._turn_identities: dict[str, tuple[Any, ...]] = {}
         self._next_context_revision = 0
@@ -406,6 +410,11 @@ class TaskToolsRealtimeCoordinator:
                 end_ms,
                 timestamp_ms,
             )
+            previous_turn = self._latest_turn
+            if previous_turn is not None and previous_turn.turn_id != turn.turn_id:
+                episode = self._take_perception_episode(previous_turn)
+                if episode is not None:
+                    self._spawn(self._persist_perception_episode(episode), "memory-write")
             self._latest_turn = turn
             self._next_context_revision = revision
             self._recent_media.clear()
@@ -433,6 +442,53 @@ class TaskToolsRealtimeCoordinator:
                 self._spawn(self._recall_durable(turn), "memory-recall")
             return turn
 
+    def observe_perception_output(self, event: Any) -> None:
+        """Collect model output and evidence that live frames were consumed."""
+        turn = self._latest_turn
+        if turn is None or self._perception_turn_id not in {None, turn.turn_id}:
+            return
+        if self._perception_turn_id is None:
+            self._perception_turn_id = turn.turn_id
+        text = getattr(event, "text", "")
+        if isinstance(text, str) and text.strip():
+            self._perception_output_chunks.append(text.strip())
+        metrics = getattr(event, "metrics", None)
+        consumed = getattr(metrics, "consumed_frame_ids", None)
+        if consumed:
+            self._perception_frame_ids.update(
+                str(value).strip() for value in consumed if str(value).strip()
+            )
+
+    def _take_perception_episode(self, turn: TurnEnvelope) -> dict[str, Any] | None:
+        if self._perception_turn_id != turn.turn_id:
+            return None
+        chunks = self._perception_output_chunks
+        frame_ids = sorted(self._perception_frame_ids)
+        self._perception_turn_id = None
+        self._perception_output_chunks = []
+        self._perception_frame_ids = set()
+        if not frame_ids or not chunks or self.session_memory is None:
+            return None
+        return {
+            "session_id": self.session_id,
+            "turn_id": turn.turn_id,
+            "user_text": turn.final_asr,
+            "model_text": " ".join(chunks),
+            "frame_ids": frame_ids,
+            "namespace": (
+                f"{self.session_memory.namespace}:session:{self.session_id}"
+            ),
+        }
+
+    async def _persist_perception_episode(self, episode: dict[str, Any]) -> None:
+        writer = getattr(self.session_memory, "write_perception_episode", None)
+        if not callable(writer):
+            return
+        try:
+            await asyncio.to_thread(writer, **episode)
+        except Exception:
+            LOGGER.warning("session perception memory write failed", exc_info=True)
+
     async def _recall_durable(self, turn: TurnEnvelope) -> None:
         """Feed durable Omni-SimpleMem memories into pinned context.
 
@@ -443,7 +499,9 @@ class TaskToolsRealtimeCoordinator:
         """
         try:
             episodes = await asyncio.to_thread(
-                self.session_memory.episodes_for_turn, turn.final_asr
+                self.session_memory.episodes_for_turn,
+                turn.final_asr,
+                namespace=f"{self.session_memory.namespace}:session:{self.session_id}",
             )
         except Exception:
             LOGGER.warning(
@@ -1073,6 +1131,10 @@ class TaskToolsRealtimeCoordinator:
             if self._closed:
                 return
             self._closed = True
+        if self._latest_turn is not None:
+            episode = self._take_perception_episode(self._latest_turn)
+            if episode is not None:
+                await self._persist_perception_episode(episode)
         await self.stop_model_jobs()
         with self._state_lock:
             pending_outputs = tuple(self._delivery_outputs_pending)

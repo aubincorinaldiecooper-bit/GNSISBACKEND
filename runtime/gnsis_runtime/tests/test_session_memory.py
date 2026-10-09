@@ -14,6 +14,7 @@ from gnsis_runtime.session_memory import SessionMemoryRecall
 class _Sidecar(BaseHTTPRequestHandler):
     items = []
     seen = []
+    writes = []
 
     def log_message(self, *args):
         pass
@@ -28,11 +29,26 @@ class _Sidecar(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_PUT(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        _Sidecar.writes.append({
+            "path": self.path,
+            "token": self.headers.get("X-GNSIS-SimpleMem-Token"),
+            "body": json.loads(self.rfile.read(length) or b"{}"),
+        })
+        body = json.dumps({"ok": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
 
 @pytest.fixture()
 def recall():
     _Sidecar.items = []
     _Sidecar.seen = []
+    _Sidecar.writes = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Sidecar)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -97,3 +113,33 @@ def test_repeated_recall_reuses_identity(recall):
     keys1 = {e["key"] for e in recall.episodes_for_turn("a")}
     keys2 = {e["key"] for e in recall.episodes_for_turn("b")}
     assert keys1 == keys2  # dedupe key is stable across turns
+
+
+
+def test_write_perception_episode_is_bounded_and_carries_frame_provenance(recall):
+    recall.token = "x" * 40
+    assert recall.write_perception_episode(
+        session_id="sess-7",
+        turn_id="turn-4",
+        user_text="  What is on screen?  ",
+        model_text="A red build badge is visible.",
+        frame_ids=["frame-12", "frame-13"],
+    )
+    write = _Sidecar.writes[-1]
+    assert write["path"] == "/namespaces/session%3Atest/text"
+    assert write["token"] == "x" * 40
+    assert write["body"]["type"] == "visual_event"
+    assert "A red build badge is visible." in write["body"]["summary"]
+    assert write["body"]["provenance"]["source_frame_ids"] == ["frame-12", "frame-13"]
+    assert write["body"]["provenance"]["source_turn_id"] == "turn-4"
+
+
+def test_write_perception_episode_skips_without_frame_evidence(recall):
+    assert not recall.write_perception_episode(
+        session_id="sess-7",
+        turn_id="turn-4",
+        user_text="What is on screen?",
+        model_text="A red badge.",
+        frame_ids=[],
+    )
+    assert _Sidecar.writes == []
