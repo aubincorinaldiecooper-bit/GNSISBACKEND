@@ -77,6 +77,20 @@ models = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=False)
 edge_secret = modal.Secret.from_dict(
     {"GNSIS_EDGE_SECRET": os.environ.get("GNSIS_EDGE_SECRET", "")}
 )
+# Self-hosted SimpleMem endpoint and token are injected at deploy time, never
+# baked into the image. Expose both historical token names as aliases.
+simplemem_url = os.environ.get("GNSIS_SIMPLEMEM_URL", "").strip()
+simplemem_token = (
+    os.environ.get("GNSIS_SIMPLEMEM_TOKEN", "").strip()
+    or os.environ.get("GNSIS_SIMPLEMEM_INTERNAL_TOKEN", "").strip()
+)
+simplemem_secret = modal.Secret.from_dict(
+    {
+        "GNSIS_SIMPLEMEM_URL": simplemem_url,
+        "GNSIS_SIMPLEMEM_TOKEN": simplemem_token,
+        "GNSIS_SIMPLEMEM_INTERNAL_TOKEN": simplemem_token,
+    }
+)
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -168,7 +182,7 @@ def cache_gnsis_models() -> dict[str, str]:
 @app.function(
     gpu="L40S:2",
     volumes={"/models": models},
-    secrets=[edge_secret],
+    secrets=[edge_secret, simplemem_secret],
     # The session ceiling that actually bounds cost is the runtime's own
     # (OnlineDuplexSettings.max_session_sec), which is enforced where a session
     # is a known thing and can be tested. What this parameter bounds for a
