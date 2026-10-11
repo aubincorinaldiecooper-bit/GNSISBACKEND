@@ -121,6 +121,9 @@ class Settings:
     # configured, approved records are also mirrored into Omni-SimpleMem as
     # typed semantic memories preserving the Postgres memory_id.
     simplemem_token_env: str = "GNSIS_SIMPLEMEM_INTERNAL_TOKEN"
+    # Only these person IDs may create private reference voices. Regular
+    # accounts are intentionally limited to operator-approved presets.
+    voice_upload_person_ids: List[str] = field(default_factory=list)
 
     # Legacy Docker sandbox knobs. RETAINED ONLY for designing the hardened
     # container command inside GitHub Actions and for explicitly isolated tests.
@@ -505,6 +508,13 @@ class Settings:
             simplemem_token_env=os.environ.get(
                 "GNSIS_SIMPLEMEM_TOKEN_ENV", "GNSIS_SIMPLEMEM_INTERNAL_TOKEN"
             ),
+            voice_upload_person_ids=[
+                value.strip()
+                for value in os.environ.get(
+                    "GNSIS_VOICE_UPLOAD_PERSON_IDS", ""
+                ).split(",")
+                if value.strip()
+            ],
             sandbox=os.environ.get("GNSIS_SANDBOX", "none"),
             sandbox_image=os.environ.get("GNSIS_SANDBOX_IMAGE", "gnsis-sandbox:latest"),
             sandbox_network=os.environ.get("GNSIS_SANDBOX_NETWORK", "bridge"),

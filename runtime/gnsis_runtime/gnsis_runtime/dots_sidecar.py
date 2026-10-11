@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import io
 import os
 import re
+import subprocess
 import threading
+import wave
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -28,6 +32,13 @@ class TokenRequest(GenerationRequest):
     token_id: int
 
 
+class PreferencesRequest(BaseModel):
+    voice_profile_id: str = "gnsis-default"
+    voice_pace: str = "relaxed"
+    prompt_audio_wav_b64: str | None = None
+    prompt_text: str | None = None
+
+
 @dataclass
 class DotsRenderer:
     runtime: Any
@@ -42,6 +53,10 @@ class DotsRenderer:
         self._pending_text = ""
         self._finish_iterator: Iterator[Any] | None = None
         self._patch_index = 0
+        self._voice_profile_id = "gnsis-default"
+        self._voice_pace = "relaxed"
+        self._active_prompt_audio_path = self.prompt_audio_path
+        self._active_prompt_text = self.prompt_text
 
     def health(self) -> dict[str, Any]:
         return {
@@ -49,7 +64,78 @@ class DotsRenderer:
             "model_sample_rate": int(self.runtime.sample_rate),
             "output_sample_rate": self.output_sample_rate,
             "generation_id": self._generation_id,
+            "voice_profile_id": self._voice_profile_id,
+            "voice_pace": self._voice_pace,
         }
+
+    def set_preferences(self, request: PreferencesRequest) -> dict[str, Any]:
+        if request.voice_pace not in {"relaxed", "normal", "quick"}:
+            raise HTTPException(422, "Unsupported voice pace")
+        with self._lock:
+            if self._session is not None:
+                raise HTTPException(409, "Cannot change voice during active speech")
+            prompt_audio_path = self.prompt_audio_path
+            prompt_text = self.prompt_text
+            if request.prompt_audio_wav_b64:
+                try:
+                    wav = base64.b64decode(
+                        request.prompt_audio_wav_b64,
+                        validate=True,
+                    )
+                    with wave.open(io.BytesIO(wav), "rb") as reader:
+                        if reader.getsampwidth() != 2:
+                            raise ValueError("reference must be 16-bit PCM")
+                except (ValueError, wave.Error, EOFError) as exc:
+                    raise HTTPException(422, "Invalid reference WAV") from exc
+                digest = hashlib.sha256(wav).hexdigest()[:24]
+                prompt_audio_path = f"/tmp/gnsis-dots-reference-{digest}.wav"
+                if not os.path.exists(prompt_audio_path):
+                    with open(prompt_audio_path, "wb") as handle:
+                        handle.write(wav)
+                prompt_text = (request.prompt_text or "").strip()
+            prompt_audio_path = self._paced_reference(
+                prompt_audio_path,
+                request.voice_pace,
+            )
+            self._voice_profile_id = request.voice_profile_id
+            self._voice_pace = request.voice_pace
+            self._active_prompt_audio_path = prompt_audio_path
+            self._active_prompt_text = prompt_text
+            return {
+                "ok": True,
+                "voice_profile_id": self._voice_profile_id,
+                "voice_pace": self._voice_pace,
+            }
+
+    @staticmethod
+    def _paced_reference(path: str, pace: str) -> str:
+        ratio = {"relaxed": 0.85, "normal": 1.0, "quick": 1.12}[pace]
+        if ratio == 1.0:
+            return path
+        digest = hashlib.sha256(f"{path}:{pace}".encode()).hexdigest()[:24]
+        output = f"/tmp/gnsis-dots-paced-{digest}.wav"
+        if os.path.exists(output):
+            return output
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    path,
+                    "-filter:a",
+                    f"atempo={ratio}",
+                    output,
+                ],
+                check=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HTTPException(500, "Unable to prepare voice pace") from exc
+        return output
 
     def append_text(self, request: TextRequest) -> dict[str, Any]:
         with self._lock:
@@ -96,8 +182,8 @@ class DotsRenderer:
             return
         self._clear_session()
         self._session = self.runtime.start_double_streaming(
-            prompt_audio_path=self.prompt_audio_path,
-            prompt_text=self.prompt_text or None,
+            prompt_audio_path=self._active_prompt_audio_path,
+            prompt_text=self._active_prompt_text or None,
         )
         self._generation_id = generation_id
 
@@ -156,6 +242,10 @@ def build_app(renderer: DotsRenderer) -> FastAPI:
     @app.post("/v1/session/text")
     def append_text(request: TextRequest) -> dict[str, Any]:
         return renderer.append_text(request)
+
+    @app.post("/v1/session/preferences")
+    def set_preferences(request: PreferencesRequest) -> dict[str, Any]:
+        return renderer.set_preferences(request)
 
     @app.post("/v1/session/push")
     def push_token(request: TokenRequest) -> dict[str, Any]:

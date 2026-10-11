@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import threading
+import wave
 from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
 import pytest
-from gnsis_runtime.dots_sidecar import DotsRenderer, TextRequest
+from gnsis_runtime.dots_sidecar import DotsRenderer, PreferencesRequest, TextRequest
 from mcpmft.infer.detached_talker import (
     DotsTalkerRuntime,
     SpeechSynthesisRequest,
@@ -108,6 +110,35 @@ def test_dots_adapter_drops_output_when_cancelled_mid_push(monkeypatch):
     assert emitted == []
 
 
+def test_dots_adapter_applies_account_voice_preferences(monkeypatch):
+    runtime = DotsTalkerRuntime(device="cuda:1")
+    calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        runtime,
+        "_post",
+        lambda path, payload: calls.append((path, payload)) or {"ok": True},
+    )
+
+    runtime.configure(
+        voice_profile_id="voice_private",
+        voice_pace="relaxed",
+        prompt_audio_wav_b64="UklGRg==",
+        prompt_text="Reference transcript.",
+    )
+
+    assert calls == [
+        (
+            "/v1/session/preferences",
+            {
+                "voice_profile_id": "voice_private",
+                "voice_pace": "relaxed",
+                "prompt_audio_wav_b64": "UklGRg==",
+                "prompt_text": "Reference transcript.",
+            },
+        )
+    ]
+
+
 class _FakeTokenizer:
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
         assert add_special_tokens is False
@@ -160,6 +191,44 @@ def test_sidecar_holds_partial_words_and_reuses_generation_session():
     assert "".join(chr(value) for value in second["token_ids"]) == "Hello "
     assert "".join(chr(value) for value in final["token_ids"]) == "world!"
     assert dots.starts == 1
+
+
+def test_sidecar_uses_selected_private_voice_and_pace(tmp_path, monkeypatch):
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(16_000)
+        writer.writeframes(bytes(16_000 * 2 * 3))
+    dots = _FakeDotsRuntime()
+    renderer = DotsRenderer(
+        runtime=dots,
+        prompt_audio_path="/models/default.wav",
+        prompt_text="Default transcript.",
+    )
+    paced = tmp_path / "paced.wav"
+    monkeypatch.setattr(
+        renderer,
+        "_paced_reference",
+        lambda path, pace: str(paced) if pace == "relaxed" else path,
+    )
+
+    applied = renderer.set_preferences(
+        PreferencesRequest(
+            voice_profile_id="voice_private",
+            voice_pace="relaxed",
+            prompt_audio_wav_b64=base64.b64encode(buffer.getvalue()).decode(),
+            prompt_text="Private transcript.",
+        )
+    )
+    renderer.append_text(
+        TextRequest(generation_id=10, text="Hello.", end_of_turn=True)
+    )
+
+    assert applied["voice_profile_id"] == "voice_private"
+    assert applied["voice_pace"] == "relaxed"
+    assert renderer._active_prompt_audio_path == str(paced)
+    assert renderer._active_prompt_text == "Private transcript."
 
 
 def test_dots_benchmark_config_keeps_gander_production_config_unchanged():

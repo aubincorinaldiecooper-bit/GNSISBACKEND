@@ -39,6 +39,13 @@ class Enrollment:
     recovery_key: str | None
 
 
+@dataclass(frozen=True)
+class DesktopGrant:
+    person_id: str
+    device_id: str
+    scopes: frozenset[str]
+
+
 def _decode_b64(value: str, *, name: str) -> bytes:
     try:
         raw = base64.b64decode(value, validate=True)
@@ -257,7 +264,7 @@ def issue_grant(settings, enrollment: Enrollment) -> dict:
             "jti": f"dgr_{secrets.token_hex(16)}",
             "iat": now,
             "exp": expires_at,
-            "scp": ["live:connect", "memory:owner"],
+            "scp": ["live:connect", "memory:owner", "account:preferences"],
         },
         private_key,
         algorithm="EdDSA",
@@ -265,7 +272,12 @@ def issue_grant(settings, enrollment: Enrollment) -> dict:
     return {"grant": token, "expires_at": expires_at}
 
 
-def verify_approval_grant(settings, token: str) -> str:
+def verify_desktop_grant(
+    settings,
+    token: str,
+    *,
+    required_scopes: frozenset[str] = frozenset(),
+) -> DesktopGrant:
     private_key = settings.desktop_grant_private_key
     issuer = settings.desktop_grant_issuer.strip()
     if not private_key or not issuer:
@@ -288,13 +300,29 @@ def verify_approval_grant(settings, token: str) -> str:
     device_id = claims.get("device")
     if (
         not isinstance(scopes, list)
-        or "memory:owner" not in scopes
         or not isinstance(person_id, str)
         or not isinstance(device_id, str)
     ):
-        raise DesktopIdentityError("device approval is invalid", status=401)
+        raise DesktopIdentityError("desktop grant is invalid", status=401)
+    scope_set = frozenset(value for value in scopes if isinstance(value, str))
+    if not required_scopes.issubset(scope_set):
+        raise DesktopIdentityError(
+            "desktop grant is missing required scope", status=403
+        )
     with session_scope() as session:
         device = session.get(orm.DesktopDevice, device_id)
         if device is None or device.person_id != person_id or device.status != "active":
-            raise DesktopIdentityError("approving device is not active", status=401)
-    return person_id
+            raise DesktopIdentityError("desktop device is not active", status=401)
+    return DesktopGrant(
+        person_id=person_id,
+        device_id=device_id,
+        scopes=scope_set,
+    )
+
+
+def verify_approval_grant(settings, token: str) -> str:
+    return verify_desktop_grant(
+        settings,
+        token,
+        required_scopes=frozenset({"memory:owner"}),
+    ).person_id

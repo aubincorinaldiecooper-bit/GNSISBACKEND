@@ -141,7 +141,10 @@ class DesktopIdentityTests(unittest.TestCase):
         )
         self.assertEqual(claims["sub"], enrollment.person_id)
         self.assertEqual(claims["device"], enrollment.device_id)
-        self.assertEqual(claims["scp"], ["live:connect", "memory:owner"])
+        self.assertEqual(
+            claims["scp"],
+            ["live:connect", "memory:owner", "account:preferences"],
+        )
 
     def test_recovery_key_registers_second_device_under_same_person(self):
         from gnsis.service.desktop_identity import (

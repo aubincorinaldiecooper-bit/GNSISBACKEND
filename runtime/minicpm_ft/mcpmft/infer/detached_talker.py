@@ -610,6 +610,24 @@ class DotsTalkerRuntime:
     def reset(self) -> None:
         self._post("/v1/session/reset", {})
 
+    def configure(
+        self,
+        *,
+        voice_profile_id: str,
+        voice_pace: str,
+        prompt_audio_wav_b64: str | None = None,
+        prompt_text: str | None = None,
+    ) -> None:
+        self._post(
+            "/v1/session/preferences",
+            {
+                "voice_profile_id": voice_profile_id,
+                "voice_pace": voice_pace,
+                "prompt_audio_wav_b64": prompt_audio_wav_b64,
+                "prompt_text": prompt_text,
+            },
+        )
+
     def warm_token2wav(self) -> None:
         self._post("/health", {})
 
@@ -807,6 +825,14 @@ class AsyncTalkerWorker:
         startup_timing.observe_once("talker_generation_submit")
         self._requests.put(queued)
         return request
+
+    def configure(self, **preferences: Any) -> None:
+        with self._lock:
+            if self._active or self._pending:
+                raise RuntimeError("Cannot change voice while speech is active")
+        configure = getattr(self.runtime, "configure", None)
+        if callable(configure):
+            configure(**preferences)
 
     def cancel(self, reason: str) -> PlaybackCancel:
         with self._lock:

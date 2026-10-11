@@ -280,6 +280,20 @@ class DesktopChallengeCompleteRequest(BaseModel):
     )
 
 
+class DesktopPreferencesUpdateRequest(BaseModel):
+    persona_description: Optional[str] = Field(default=None, max_length=800)
+    voice_profile_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=64
+    )
+    voice_pace: Optional[str] = Field(default=None, min_length=1, max_length=16)
+
+
+class DesktopVoiceProfileCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    transcript: str = Field(min_length=1, max_length=1000)
+    audio_wav_b64: str = Field(min_length=1, max_length=7_000_000)
+
+
 class InternalCreateJobRequest(BaseModel):
     repo: str = Field(..., examples=["owner/name"])
     instruction: str
@@ -429,6 +443,143 @@ def desktop_identity_complete(req: DesktopChallengeCompleteRequest) -> dict:
         "public_id": enrollment.public_id,
         "recovery_key": enrollment.recovery_key,
         **grant,
+    }
+
+
+def _desktop_preference_person(authorization: Optional[str]) -> str:
+    from .desktop_identity import DesktopIdentityError, verify_desktop_grant
+
+    token = (
+        authorization[7:].strip()
+        if authorization and authorization.lower().startswith("bearer ")
+        else ""
+    )
+    try:
+        return verify_desktop_grant(
+            get_settings(),
+            token,
+            required_scopes=frozenset({"account:preferences"}),
+        ).person_id
+    except DesktopIdentityError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+
+
+@app.get("/v1/desktop/preferences")
+def desktop_preferences(
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    from .desktop_preferences import DesktopPreferenceError, get_preferences
+
+    person_id = _desktop_preference_person(authorization)
+    can_upload = person_id in set(get_settings().voice_upload_person_ids)
+    try:
+        return get_preferences(
+            person_id,
+            can_upload_voice=can_upload,
+        ).to_dict()
+    except DesktopPreferenceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/v1/desktop/preferences")
+def update_desktop_preferences(
+    req: DesktopPreferencesUpdateRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    from .desktop_preferences import DesktopPreferenceError, update_preferences
+
+    person_id = _desktop_preference_person(authorization)
+    can_upload = person_id in set(get_settings().voice_upload_person_ids)
+    try:
+        return update_preferences(
+            person_id,
+            persona_description=req.persona_description,
+            voice_profile_id=req.voice_profile_id,
+            voice_pace=req.voice_pace,
+            can_upload_voice=can_upload,
+        ).to_dict()
+    except DesktopPreferenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/desktop/voice-profiles")
+def create_desktop_voice_profile(
+    req: DesktopVoiceProfileCreateRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    from .desktop_preferences import (
+        DesktopPreferenceError,
+        create_custom_voice_profile,
+    )
+
+    person_id = _desktop_preference_person(authorization)
+    try:
+        return create_custom_voice_profile(
+            person_id,
+            name=req.name,
+            transcript=req.transcript,
+            audio_wav_b64=req.audio_wav_b64,
+            can_upload_voice=person_id
+            in set(get_settings().voice_upload_person_ids),
+        ).to_dict()
+    except DesktopPreferenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/v1/desktop/voice-profiles/{profile_id}")
+def delete_desktop_voice_profile(
+    profile_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    from .desktop_preferences import (
+        DesktopPreferenceError,
+        delete_custom_voice_profile,
+    )
+
+    person_id = _desktop_preference_person(authorization)
+    try:
+        return delete_custom_voice_profile(
+            person_id,
+            profile_id,
+            can_upload_voice=person_id
+            in set(get_settings().voice_upload_person_ids),
+        ).to_dict()
+    except DesktopPreferenceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/v1/desktop/voice-reference")
+def desktop_voice_reference(
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    import base64
+
+    from .desktop_preferences import (
+        DesktopPreferenceError,
+        get_preferences,
+        get_voice_reference,
+    )
+
+    person_id = _desktop_preference_person(authorization)
+    try:
+        preferences = get_preferences(person_id)
+        reference = get_voice_reference(
+            person_id,
+            preferences.voice_profile_id,
+        )
+    except DesktopPreferenceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if reference is None:
+        return {
+            "voice_profile_id": preferences.voice_profile_id,
+            "audio_wav_b64": None,
+            "transcript": None,
+        }
+    audio_wav, transcript = reference
+    return {
+        "voice_profile_id": preferences.voice_profile_id,
+        "audio_wav_b64": base64.b64encode(audio_wav).decode("ascii"),
+        "transcript": transcript,
     }
 
 

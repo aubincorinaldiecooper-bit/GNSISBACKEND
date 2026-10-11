@@ -119,6 +119,15 @@ _ADDITIVE_COLUMNS = [
     ("visual_usage_records", "history_reads", "INTEGER DEFAULT 0"),
     ("visual_usage_records", "host_client", "VARCHAR(128)"),
     ("visual_usage_records", "planner_client", "VARCHAR(128)"),
+    # Person-owned GNSIS persona and voice preferences. Existing people inherit
+    # the server-approved default voice and the slower, user-approved pace.
+    ("desktop_people", "persona_description", "TEXT DEFAULT ''"),
+    (
+        "desktop_people",
+        "voice_profile_id",
+        "VARCHAR(64) DEFAULT 'gnsis-default'",
+    ),
+    ("desktop_people", "voice_pace", "VARCHAR(16) DEFAULT 'relaxed'"),
 ]
 
 

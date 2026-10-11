@@ -18,6 +18,23 @@ export interface LinkState {
   closed: boolean;
 }
 
+export interface VoiceProfile {
+  id: string;
+  name: string;
+  description: string;
+  kind: "preset" | "custom";
+}
+
+export interface VoicePreferences {
+  person_id: string;
+  persona_description: string;
+  voice_profile_id: string;
+  voice_pace: "relaxed" | "normal" | "quick";
+  available_voice_profiles: VoiceProfile[];
+  available_voice_paces: Array<"relaxed" | "normal" | "quick">;
+  can_upload_voice: boolean;
+}
+
 export interface GnsisBridge {
   /** Backend used for desktop identity enrollment and grant renewal. */
   readonly apiUrl?: string;
@@ -61,6 +78,20 @@ export interface GnsisBridge {
   ): Promise<string>;
   /** Remove the OS-protected identity and stop authenticated sockets. */
   eraseDesktopIdentity?(): Promise<void>;
+  voicePreferences?(): Promise<VoicePreferences>;
+  updateVoicePreferences?(
+    values: Partial<
+      Pick<
+        VoicePreferences,
+        "persona_description" | "voice_profile_id" | "voice_pace"
+      >
+    >,
+  ): Promise<VoicePreferences>;
+  uploadVoiceProfile?(
+    name: string,
+    transcript: string,
+  ): Promise<VoicePreferences | null>;
+  deleteVoiceProfile?(profileId: string): Promise<VoicePreferences>;
   startCall(): void;
   /** Close the call on the timeline; the daemon session stays alive. */
   endCall(reason: string): void;

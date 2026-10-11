@@ -20,6 +20,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -66,6 +67,11 @@ class DesktopPerson(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     legacy_public_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     recovery_key_hash: Mapped[str] = mapped_column(String(64))
+    persona_description: Mapped[str] = mapped_column(Text, default="")
+    voice_profile_id: Mapped[str] = mapped_column(
+        String(64), default="gnsis-default"
+    )
+    voice_pace: Mapped[str] = mapped_column(String(16), default="relaxed")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
@@ -74,6 +80,9 @@ class DesktopPerson(Base):
     )
 
     devices: Mapped[list["DesktopDevice"]] = relationship(
+        back_populates="person", cascade="all, delete-orphan"
+    )
+    voice_profiles: Mapped[list["DesktopVoiceProfile"]] = relationship(
         back_populates="person", cascade="all, delete-orphan"
     )
 
@@ -101,6 +110,25 @@ class DesktopDevice(Base):
     )
 
     person: Mapped[DesktopPerson] = relationship(back_populates="devices")
+
+
+class DesktopVoiceProfile(Base):
+    """Private reference voice owned by one desktop person."""
+
+    __tablename__ = "desktop_voice_profiles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    person_id: Mapped[str] = mapped_column(
+        ForeignKey("desktop_people.id"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(64))
+    transcript: Mapped[str] = mapped_column(Text)
+    audio_wav: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    person: Mapped[DesktopPerson] = relationship(back_populates="voice_profiles")
 
 
 class DesktopAuthChallenge(Base):
