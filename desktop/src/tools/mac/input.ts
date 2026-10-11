@@ -1,9 +1,9 @@
 /**
  * GNSIS input contract backed by Cua Driver.
  *
- * The public input schema remains stable. Panoptic still provides visual
- * perception and post-action verification; Cua is only the actuator and AX
- * grounding layer.
+ * The public input schema remains stable. The persistent live screen stream
+ * provides visual state before and after actions; Cua is only the actuator and
+ * accessibility grounding layer.
  */
 import { ActionProblem, required, str, type ActionTool, type PreparedAction } from "../actions.js";
 import {
@@ -68,7 +68,7 @@ export class InputTool implements ActionTool {
           run: async () => {
             const w = target ?? await this.window();
             await this.call("type_text", { text, ...windowArgs(w), delivery_mode: "foreground" });
-            return { verified: "screen", message: "Typed it. Panoptic will verify the result from the live screen." };
+            return { verified: "screen", message: "Typed it. Check the result from a fresh live screen view." };
           },
         };
       }
@@ -84,7 +84,7 @@ export class InputTool implements ActionTool {
           needs,
           run: async () => {
             await this.press(combo, target ?? undefined);
-            return { verified: "screen", message: `Pressed ${combo}. Panoptic will verify the result from the live screen.` };
+            return { verified: "screen", message: `Pressed ${combo}. Check the result from a fresh live screen view.` };
           },
         };
       }
@@ -186,7 +186,7 @@ export class InputTool implements ActionTool {
               Object.assign(callArgs, windowArgs(w));
             }
             await this.call("scroll", callArgs);
-            return { verified: "screen", message: `Scrolled ${direction}. Panoptic will verify the new visual state.` };
+            return { verified: "screen", message: `Scrolled ${direction}. Check the new state from a fresh live screen view.` };
           },
         };
       }
@@ -209,7 +209,7 @@ export class InputTool implements ActionTool {
               to_y: to.y,
               duration_ms: optionalNumber(args.duration_ms, 350, 0, 10_000),
             });
-            return { verified: "screen", message: "Dragged it. Panoptic will verify the result from the live screen." };
+            return { verified: "screen", message: "Dragged it. Check the result from a fresh live screen view." };
           },
         };
       }
