@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { AgentFace, Face, ThinkingDots } from "../lib/face";
+import { AgentFace, Face, ThinkingDots, GNSIS_ICON_NAME } from "../lib/face";
 import { actions, isWorking, liveInfoFor, phrase, presence, setState, useStore, type State } from "../store/store";
 import { barHeights } from "../store/live";
 import * as I from "./Icons";
@@ -48,7 +48,7 @@ function DockLayer({ s, hidden }: { s: State; hidden: boolean }) {
   return (
     <div className="dock-layer" aria-hidden={hidden} style={{ opacity: hidden ? 0 : 1, pointerEvents: hidden ? "none" : "auto" }}>
       <button type="button" className="dock-sun" aria-label={news ? "Open your chat with GNSIS, new result" : "Open your chat with GNSIS"} onClick={() => actions.openAgent("gnsis")}>
-        <Face name={s.identity?.publicId ?? "GNSIS"} size={50} gnsis />
+        <Face name={s.identity?.publicId ?? GNSIS_ICON_NAME} size={50} gnsis />
         {/* Something landed in GNSIS's chat while it was closed. */}
         {news && <span className="mark-badge dock-news" aria-hidden="true">1</span>}
       </button>
@@ -119,7 +119,7 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
   return (
     <div className="bar-layer" aria-hidden={hidden} style={{ width, opacity: hidden ? 0 : 1, pointerEvents: hidden ? "none" : "auto" }}>
       <button type="button" className="addr-face" aria-label={closeLabel} title={closeLabel} onClick={actions.toDock}>
-        <Face name={isHome ? s.identity?.publicId ?? "GNSIS" : addressee.title} gnsis={isHome} size={34} style={faceStyle} pop={!!addressee.bornT && s.t - addressee.bornT < 8} />
+        <Face name={isHome ? s.identity?.publicId ?? GNSIS_ICON_NAME : addressee.title} gnsis={isHome} size={34} style={faceStyle} pop={!!addressee.bornT && s.t - addressee.bornT < 8} />
       </button>
       {canSee ? (
         <button

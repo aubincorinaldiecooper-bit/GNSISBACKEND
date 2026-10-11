@@ -24,7 +24,16 @@ export class SimulatedLiveHost implements LiveHost {
    * defaults suit design review; the preview's `?mac` claims what the Mac
    * app can do today, so the screens show what a person there would see.
    */
-  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; overlay?: boolean; tenthMs?: number } = {}) {
+  /** Where the preview draws its stand-in menu bar icon, when it has one. */
+  private readonly iconAt?: () => { x: number; y: number } | null;
+  /** Whether GNSIS is out, as far as the menu bar icon is concerned. */
+  private out = true;
+  /** What "Quit GNSIS" does here, when the preview is given a way to quit. */
+  private readonly onQuit?: () => void;
+
+  constructor(opts: { script?: () => LiveSegment[]; transcript?: boolean; text?: boolean; screen?: boolean; camera?: boolean; overlay?: boolean; menuBarIcon?: () => { x: number; y: number } | null; quit?: () => void; tenthMs?: number } = {}) {
+    this.iconAt = opts.menuBarIcon;
+    this.onQuit = opts.quit;
     this.script = opts.script ?? (() => liveScript(null));
     this.tenth = opts.tenthMs ?? 100;
     this.caps = {
@@ -34,6 +43,8 @@ export class SimulatedLiveHost implements LiveHost {
       camera: opts.camera ?? false,
       transcript: opts.transcript ?? true,
       overlay: opts.overlay ?? false,
+      menuBar: !!opts.menuBarIcon,
+      quit: !!opts.quit,
     };
   }
 
@@ -55,6 +66,24 @@ export class SimulatedLiveHost implements LiveHost {
     this.emit({ type: "link", state: "ready" });
     this.at(connect, () => this.emit({ type: "mic", state: "on" }));
     for (const seg of this.script()) this.play(seg, connect);
+  }
+
+  /** The preview's stand-in menu bar icon was clicked. */
+  pressMenuBarIcon(): void {
+    this.out = !this.out;
+    this.emit({ type: "menubar", want: this.out ? "show" : "hide" });
+  }
+
+  hideToMenuBar(): void {
+    this.out = false;
+  }
+
+  quit(): void {
+    this.onQuit?.();
+  }
+
+  menuBarIcon(): { x: number; y: number } | null {
+    return this.iconAt?.() ?? null;
   }
 
   async endLive(): Promise<void> {

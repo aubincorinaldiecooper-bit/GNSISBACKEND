@@ -8,6 +8,7 @@ import { SimulatedLiveHost } from "../hosts/simulated";
 import { actions, configure, enterDesktop, getState, hasConversation, resetStore, setState } from "../store/store";
 import { ChatWindow } from "./ChatWindow";
 import { AgentPanel } from "./AgentPanel";
+import { DockMenu } from "./Overlays";
 
 // The test runner compiles JSX the classic way, which looks for a global React.
 (globalThis as { React?: typeof React }).React = React;
@@ -70,6 +71,28 @@ test("Thinking counts the seconds GNSIS has been at it, and says “Thinking som
   assert.match(after(4_999), />4s ·<\/span><span class="shimmer">Thinking<\/span>/);
   assert.match(after(5_000), />5s ·<\/span><span class="shimmer">Thinking some more<\/span>/);
   assert.match(after(83_000), />83s ·<\/span><span class="shimmer">Thinking some more<\/span>/);
+});
+
+test("the ≡ menu offers “Hide to menu bar” only where GNSIS has a menu bar icon", () => {
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);
+  enterDesktop(identity, false);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Hide to menu bar/);
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false, menuBarIcon: () => ({ x: 1390, y: -16 }) }), ids);
+  enterDesktop(identity, false);
+  assert.match(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Hide to menu bar/);
+});
+
+test("the ≡ menu offers “Quit GNSIS” only where the host can close GNSIS", () => {
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false }), ids);
+  enterDesktop(identity, false);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Quit GNSIS/);
+  resetStore();
+  configure(new SimulatedLiveHost({ text: false, transcript: false, quit: () => {} }), ids);
+  enterDesktop(identity, false);
+  assert.match(renderToStaticMarkup(createElement(DockMenu, { left: 0 })), /Quit GNSIS/);
 });
 
 test("the chat shows the person's words only: no voice tags, bars or times", () => {

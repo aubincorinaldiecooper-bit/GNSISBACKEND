@@ -23,6 +23,16 @@ export interface GnsisBridge {
   readonly overlay?: boolean;
   /** Where the page's cards are, in page pixels, so clicks elsewhere fall through. */
   reportHitRects?(rects: Array<[number, number, number, number]>): void;
+  /** GNSIS has an icon in the Mac menu bar to tuck into. Missing means it has none. */
+  readonly menuBar?: boolean;
+  /** GNSIS's face for the menu bar icon, as a PNG data URL (black on transparent; macOS tints it). */
+  setMenuBarFace?(png: string): void;
+  /** GNSIS has tucked itself away: hide the window until the icon is clicked. */
+  hideToMenuBar?(): void;
+  /** The icon was clicked (`want`), or where it is changed (`at`, page pixels from the window's top left). */
+  onMenuBar?(fn: (message: unknown) => void): void;
+  /** Close GNSIS entirely ("Quit GNSIS"). */
+  quit?(): void;
   /** A native yes/no question; resolves true only for the confirming button. */
   confirm?(message: string, confirmLabel: string): Promise<boolean>;
   mediaPermissions(): Promise<Record<string, unknown>>;

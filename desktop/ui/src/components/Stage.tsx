@@ -219,7 +219,7 @@ export function Stage() {
   const move = useMoveable(w, h, { left: shellLeft, right: shellLeft + shellW, top: h - BOTTOM - shellH, bottom: h - BOTTOM });
 
   return (
-    <div className="desktop">
+    <div className={"desktop" + (s.tucked ? " is-tucked" : "")} style={s.tuckAt ? { transformOrigin: `${s.tuckAt.x}px ${s.tuckAt.y}px` } : undefined}>
       <div ref={move.ref} className={"cluster" + (move.dragging ? " is-dragging" : "")} style={move.style} onPointerDown={move.onPointerDown}>
         <div className="stack" style={{ left, width: stackW, bottom: BOTTOM + BAR_H + GAP }}>
           {/* News goes above an open chat, never over its newest lines. */}

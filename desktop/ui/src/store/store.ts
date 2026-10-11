@@ -7,6 +7,7 @@ import {
 import type { HostCapabilities, Identity, IdentityStore, LinkState, LiveEvent, LiveHost, VisionSource } from "../host";
 import { actionLine, applyLiveEvent, cutText, endLiveTurns, liveInfo, liveThinking, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
 import { greetedBefore, markGreeted } from "../lib/place";
+import { menuBarGlyph } from "../lib/menuBarFace";
 
 export interface Toast { id: string; text: string; ttl: number }
 
@@ -67,11 +68,14 @@ export interface State {
   link: LinkState;
   vision: VisionState;
   greet: boolean;
+  /** GNSIS is tucked into its menu bar icon; `tuckAt` is where that icon is, so it shrinks toward it. */
+  tucked: boolean;
+  tuckAt: { x: number; y: number } | null;
   /** show the sample agents so every state can be reviewed */
   demo: boolean;
 }
 
-const NO_CAPS: HostCapabilities = { voice: false, text: false, screen: false, camera: false, transcript: false, overlay: false };
+const NO_CAPS: HostCapabilities = { voice: false, text: false, screen: false, camera: false, transcript: false, overlay: false, menuBar: false, quit: false };
 
 /** How long the visual sense may sit on "starting" before that is reported as a problem. */
 const VISION_START_TIMEOUT_MS = 20_000;
@@ -95,7 +99,7 @@ const initial: State = {
   panelHidden: true, menuOpen: false, dockMenu: false, visionMenu: false, settingsOpen: false,
   toast: null, apPick: null, apCustom: "", live: null, awaiting: null, reply: null, working: null, asking: null,
   dropTail: false, typingOffered: false, link: "connecting",
-  vision: { source: null, state: "off" }, greet: false, demo: false,
+  vision: { source: null, state: "off" }, greet: false, tucked: false, tuckAt: null, demo: false,
 };
 
 // ---- tiny store -------------------------------------------------------------
@@ -141,10 +145,19 @@ export const getHost = () => host;
 export const getIdentityStore = () => identityStore;
 
 let visionTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long GNSIS takes to shrink into the menu bar icon (styles.css, `.desktop.is-tucked`). */
+export const TUCK_MS = 300;
+/** Bumped by every tuck and return, so a late hide never hides GNSIS after it came back. */
+let tuckTurn = 0;
 /** Bumped by every choice of what GNSIS sees, so a late answer to an older choice changes nothing. */
 let visionAttempt = 0;
 
 function onLiveEvent(ev: LiveEvent) {
+  if (ev.type === "menubar") {
+    if (ev.want === "hide") actions.tuckAway();
+    else actions.comeBack();
+    return;
+  }
   if (ev.type === "vision") {
     if (ev.state !== "starting" && visionTimer) {
       clearTimeout(visionTimer);
@@ -413,8 +426,10 @@ export function enterDesktop(identity: Identity, demo: boolean) {
     agentIds = ["roof", "recipe", "watch", "triage", "gift"];
     tabs = ["gnsis", "roof", "recipe"];
   }
+  // The menu bar icon is this GNSIS's own face.
+  if (getState().caps.menuBar) host?.menuBarFace?.(menuBarGlyph(identity.publicId));
   setState({
-    phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet, t: 0,
+    phase: "desktop", identity, demo, convs, agentIds, tabs, active: "gnsis", mode: "dock", winOpen: false, greet, t: 0, tucked: false,
     live: null, toast: null, awaiting: null, reply: null, working: null, asking: null, dropTail: false,
   });
 }
@@ -501,6 +516,35 @@ export const actions = {
   /** The person closed the first-launch greeting. */
   closeGreeting() {
     setState({ greet: false });
+  },
+  /**
+   * Tuck GNSIS into its menu bar icon (the owner's choices, 30 September):
+   * a call in progress ends, and once GNSIS has shrunk into the icon the host
+   * hides it until the icon is clicked again.
+   */
+  tuckAway() {
+    const s = getState();
+    if (s.phase !== "desktop" || s.tucked) return;
+    if (s.live) actions.endLive();
+    const turn = ++tuckTurn;
+    setState({ tucked: true, tuckAt: host?.menuBarIcon?.() ?? null, dockMenu: false, visionMenu: false });
+    setTimeout(() => {
+      if (turn === tuckTurn && getState().tucked) host?.hideToMenuBar?.();
+    }, TUCK_MS);
+  },
+  /** "Quit GNSIS" (the owner's call, 30 September): a call in progress ends, then the host closes GNSIS. */
+  quit() {
+    const s = getState();
+    if (!s.caps.quit) return;
+    if (s.live) actions.endLive();
+    setState({ dockMenu: false });
+    host?.quit?.();
+  },
+  /** The menu bar icon was clicked again: GNSIS comes back where it was. */
+  comeBack() {
+    if (!getState().tucked) return;
+    tuckTurn++;
+    setState({ tucked: false, tuckAt: host?.menuBarIcon?.() ?? getState().tuckAt });
   },
   openAgent(id: string) {
     const h = host;
