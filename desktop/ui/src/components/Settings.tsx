@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Face } from "../lib/face";
 import { shareLink } from "../lib/identity";
 import { copyText } from "../lib/platform";
+import { loadMicrophone, loadSpeakReplies, saveMicrophone, saveSpeakReplies } from "../lib/audioPrefs";
 import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore } from "../store/store";
 import type { VoicePreferences } from "../../../src/renderer/bridge";
 import * as I from "./Icons";
@@ -28,7 +29,7 @@ export function Settings() {
   const notYet = inert ? NOT_YET : undefined;
   const [eraseNote, setEraseNote] = useState("");
   const [section, setSection] = useState<Section>("profile");
-  const [tg, setTg] = useState({ findable: true, autosend: true, speak: false, approve: true, browser: true, nFinish: true, nNeeds: true, nSound: false, motion: false });
+  const [tg, setTg] = useState({ findable: true, autosend: true, approve: true, browser: true, nFinish: true, nNeeds: true, nSound: false, motion: false });
   const [copied, setCopied] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [dock, setDock] = useState<"bottom" | "top">("bottom");
@@ -36,6 +37,10 @@ export function Settings() {
   const [voicePreferences, setVoicePreferences] =
     useState<VoicePreferences | null>(null);
   const [voiceNote, setVoiceNote] = useState("");
+  const [mics, setMics] = useState<Array<{ id: string; label: string }>>([]);
+  const [mic, setMic] = useState(loadMicrophone);
+  const [speak, setSpeak] = useState(loadSpeakReplies);
+  const host = getHost();
   // Esc closes Settings, as it would any panel: floating, it sits over other apps.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -51,6 +56,10 @@ export function Settings() {
       .then(setVoicePreferences)
       .catch(() => setVoiceNote("Voice settings are unavailable."));
   }, [identity]);
+  useEffect(() => {
+    if (section !== "voice" || !host?.microphones) return;
+    void host.microphones().then(setMics).catch(() => setMics([]));
+  }, [section, host]);
   if (!identity) return null;
   const link = shareLink(identity);
   const keyNote = getIdentityStore()?.storageNote ?? "";
@@ -145,9 +154,38 @@ export function Settings() {
             {section === "voice" && (
               <Group>
                 <Row title="Wake gesture" desc="Starts or ends live voice with whoever is in front, same as the voice button. There is no hardware gesture yet; ⌥Space stands in while GNSIS is focused."><span className="chip">⌥Space</span></Row>
-                <Row title="Microphone"><Select label="Microphone" options={["Built-in microphone", "External microphone"]} disabled={inert} /></Row>
+                <Row title="Microphone">
+                  <select
+                    aria-label="Microphone"
+                    className="select"
+                    value={mic}
+                    disabled={!host?.setMicrophone}
+                    onChange={(event) => {
+                      setMic(event.target.value);
+                      saveMicrophone(event.target.value);
+                      host?.setMicrophone?.(event.target.value);
+                    }}
+                  >
+                    <option value="">System default</option>
+                    {mics.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                  </select>
+                </Row>
                 {caps.transcript && <Row title="Send when I stop talking" desc="For dictation. Sends after a short pause.">{toggle("autosend", "Send when I stop talking")}</Row>}
-                <Row title="Read replies out loud">{toggle("speak", "Read replies out loud")}</Row>
+                <Row title="Read replies out loud">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Read replies out loud"
+                    aria-checked={speak}
+                    className={"switch" + (speak ? " on" : "")}
+                    disabled={!host?.setSpeakReplies}
+                    onClick={() => {
+                      setSpeak(!speak);
+                      saveSpeakReplies(!speak);
+                      host?.setSpeakReplies?.(!speak);
+                    }}
+                  ><span /></button>
+                </Row>
                 <Row title="Voice">
                   <select
                     aria-label="Voice"
@@ -194,10 +232,12 @@ export function Settings() {
                     </div>
                   </div>
                 </Row>
-                <Row title="Persona">
-                  <input
+                <div className="field-block">
+                  <Label title="Persona" />
+                  <textarea
                     className="persona-field"
                     aria-label="Persona"
+                    rows={3}
                     maxLength={800}
                     value={voicePreferences?.persona_description ?? ""}
                     disabled={!voicePreferences}
@@ -217,7 +257,7 @@ export function Settings() {
                       })
                     }
                   />
-                </Row>
+                </div>
                 {voicePreferences?.can_upload_voice && (
                   <Row title="Private voice">
                     <button

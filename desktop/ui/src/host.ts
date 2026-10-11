@@ -111,6 +111,12 @@ export interface LiveHost {
    * whose capabilities say `text: false` need not implement it.
    */
   sendText?(text: string): Promise<void>;
+  /** Audio inputs the person can choose from; empty labels until mic access is granted. */
+  microphones?(): Promise<Array<{ id: string; label: string }>>;
+  /** Use this input next time the microphone opens; "" is the system default. */
+  setMicrophone?(deviceId: string): void;
+  /** Off: replies still play through (and are acknowledged) but silently. */
+  setSpeakReplies?(on: boolean): void;
   startVision(source: VisionSource): Promise<void>;
   stopVision(): Promise<void>;
   /** Remove this computer's OS-protected identity and authenticated sockets. */
