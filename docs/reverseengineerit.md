@@ -43,10 +43,9 @@ Manual MCP registration from its docs:
 - Runs in the cloud, not on the person's Mac.
 - Paid feature.
 - "Deploy their own" = the person's own version, hosted by GNSIS.
-- Consumer-facing vs developer-focused: undecided. Recommendation:
-  developer-focused first (output is code + evidence a developer can
-  judge; fits the existing GitHub developer access), consumer later on the
-  same engine.
+- Developer-focused first (output is code + evidence a developer can
+  judge; fits the existing GitHub developer access). A consumer version may
+  come later on the same engine.
 
 ## What the cloud decision changes
 
@@ -79,5 +78,4 @@ Manual MCP registration from its docs:
    target's code or assets.
 5. Decided: hosted by GNSIS. Still open: hosting target (Coolify, which
    already hosts the control plane, vs another platform), pricing/metering
-   (reuse the existing usage ledger + spending limits), and consumer vs
-   developer audience.
+   (reuse the existing usage ledger + spending limits).
