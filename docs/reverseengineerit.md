@@ -38,14 +38,38 @@ Manual MCP registration from its docs:
   ActionBroker (`desktop/src/tools/registry.ts`, `desktop/src/host/actionBroker.ts`),
   never a second execution stack (`desktop/AGENTS.md`).
 
+## Owner decisions (2026-10-11)
+
+- Runs in the cloud, not on the person's Mac.
+- Paid feature.
+- "Deploy their own" = the person's own version, hosted by GNSIS.
+- Consumer-facing vs developer-focused: undecided. Recommendation:
+  developer-focused first (output is code + evidence a developer can
+  judge; fits the existing GitHub developer access), consumer later on the
+  same engine.
+
+## What the cloud decision changes
+
+- REA is designed as local-only, so the target must come to us: an
+  uploaded artifact, a download URL, or a website URL, analysed inside an
+  isolated per-run cloud sandbox with REA + the worker agent.
+- Cloud-friendly targets: websites, Electron/JS, Android APKs, .NET,
+  Linux/ELF (Ghidra headless). Native macOS apps: Hopper is macOS-first;
+  Ghidra on Linux works with less depth.
+- The desktop is no longer the execution place; the "Desktop side" note
+  above only applies if a local mode is added later.
+- Hosting by GNSIS puts the legal exposure on us: build an original
+  implementation of the feature under the person's own branding, never
+  host copied code, assets or trademarks of the target; record the
+  person's confirmation that they may analyse the target for each run.
+
 ## Open questions before building
 
 1. Production has no task layer yet: `runtime/configs/gnsis-voice.yaml` has
    `worker.provider: none`. REVERSEENGINEERIT needs delegation turned on
    first (Codex worker, or the Qwen Live Harness ACP path from `AGENTS.md`).
-2. Where the worker agent runs: on the Mac next to REA (simplest, matches
-   REA's local-only design) or in the cloud with REA on the Mac reachable
-   through the desktop's tool routing.
+2. Decided: cloud. Still open: which sandbox (e.g. Modal sandbox per run)
+   and how the target artifact is supplied.
 3. Native targets need Hopper, Ghidra or IDA installed by the person; REA
    setup can offer Hopper with approval. Electron/JS, .NET and website
    analysis need only Node.js 22.19+.
@@ -53,5 +77,7 @@ Manual MCP registration from its docs:
    should name the target app and be approved by the person (ActionBroker
    policy), and output should be "build a similar feature", not copying the
    target's code or assets.
-5. "Deploy their own": what the end of the flow is — a project on the Mac,
-   a repo, or a hosted deploy.
+5. Decided: hosted by GNSIS. Still open: hosting target (Coolify, which
+   already hosts the control plane, vs another platform), pricing/metering
+   (reuse the existing usage ledger + spending limits), and consumer vs
+   developer audience.
