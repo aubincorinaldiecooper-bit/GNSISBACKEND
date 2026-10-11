@@ -47,7 +47,7 @@ jobs:
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi
-          if git grep -nIiE "g[a]nder" -- . ':!docs/' ':!AGENTS.md' ':!modal/gnsis_voice.py' ':!runtime/configs/gnsis-voice.yaml' ':!runtime/gnsis_runtime/tests/test_live_surface.py'; then
+          if git grep -nIiE "g[a]nder" -- . ':!docs/' ':!AGENTS.md' ':!modal/gnsis_voice.py' ':!modal/gnsis_dots_voice.py' ':!runtime/configs/gnsis-voice.yaml' ':!runtime/configs/gnsis-dots-voice.yaml' ':!runtime/gnsis_runtime/gnsis_runtime/cli.py' ':!runtime/gnsis_runtime/tests/test_dots_renderer.py' ':!runtime/gnsis_runtime/tests/test_live_surface.py' ':!runtime/minicpm_ft/mcpmft/infer/detached_talker.py'; then
             echo "Retired product naming found in tracked source content." >&2
             exit 1
           fi

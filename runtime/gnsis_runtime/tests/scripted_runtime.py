@@ -100,6 +100,13 @@ class EchoingModel:
             self.responses.append(response)
             self.awaiting_response = False
 
+    def feed_text_turn(self, text: str) -> None:
+        # The scripted model already decided its one action; a typed or
+        # transcribed turn only needs to reach it, like the real model.
+        with self._lock:
+            self.typed = [*getattr(self, "typed", ()), text]
+        return None
+
     def feed_runtime_event(self, _event: Any, **_kwargs: Any) -> None:
         raise RuntimeError("no worker deliveries in this run")
 

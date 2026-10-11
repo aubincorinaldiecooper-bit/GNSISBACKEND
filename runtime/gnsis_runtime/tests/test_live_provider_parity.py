@@ -71,6 +71,7 @@ def test_ready_says_which_model_and_nothing_else_differs(harness, foreground):
     assert health["foreground_provider"] == foreground
     assert ready["tool_call_protocol"] == "call_id_v1"
     assert ready["task_protocol"] == "task_tools_v1"
+    assert ready["typed_turns"] is True
     assert ready["context_events"] == ["turn.final", "task_status", "screen"]
     assert ready["resume_token"]
     # Both builds hand the session to the same coordinator.
@@ -83,6 +84,36 @@ def test_ready_says_which_model_and_nothing_else_differs(harness, foreground):
         assert h.native.sessions[0].config.system_prompt == "native prompt"
     else:
         assert len(h.thinkers) == 1 and h.thinkers[0].closed
+
+
+@pytest.mark.parametrize("foreground", PROVIDERS)
+def test_typed_turn_reaches_the_active_foreground_model(harness, foreground):
+    h = harness(foreground=foreground)
+    with TestClient(h.app) as client:
+        with connect(client, "/ws/duplex?session_id=s1") as ws:
+            _settle(ws)
+            ws.send_json(
+                {
+                    "type": "turn.final",
+                    "turn_id": "typed-1",
+                    "text": "Move the report into Projects.",
+                    "timestamp_ms": 1,
+                    "timezone": "UTC",
+                }
+            )
+            accepted = _expect(ws, "turn.final.accepted")
+            _stop(ws)
+    assert accepted["turn_id"] == "typed-1"
+    if foreground == "venus":
+        assert (
+            "control",
+            {
+                "kind": "text_input",
+                "text": "Move the report into Projects.",
+            },
+        ) in h.native.sessions[0].calls
+    else:
+        assert h.thinkers[0].typed == ["Move the report into Projects."]
 
 
 @pytest.mark.parametrize("foreground", PROVIDERS)

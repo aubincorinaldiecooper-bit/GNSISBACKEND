@@ -107,6 +107,10 @@ class GNSISDuplexSession:
         with self._model_lock:
             return self._annotate([self.live.step_silence()])[0]
 
+    def feed_text_turn(self, text: str) -> Any:
+        with self._model_lock:
+            return self._annotate([self.live.feed_text_turn(text)])[0]
+
     def feed_tool_response(self, response: Any) -> Any | None:
         with self._model_lock:
             event = self.live.feed_tool_response(response)

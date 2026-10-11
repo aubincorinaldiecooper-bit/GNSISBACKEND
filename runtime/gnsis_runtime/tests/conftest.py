@@ -10,6 +10,7 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -27,6 +28,7 @@ class StubThinker:
         # test that needs the session's deadline to fall *during* a frame sets
         # feed_delay, since a stub otherwise consumes any frame instantly.
         self.fed: list[bytes] = []
+        self.typed: list[str] = []
         self.feed_delay = 0.0
 
     def feed_pcm16(self, data: bytes, *, unit_capture_start_ms=None) -> tuple:
@@ -51,6 +53,10 @@ class StubThinker:
 
     def step_silence(self):
         raise AssertionError("stub thinker never steps silence")
+
+    def feed_text_turn(self, text: str):
+        self.typed.append(text)
+        return None
 
     def should_stop_after(self, _event) -> bool:
         return True
@@ -202,6 +208,13 @@ class StubCoordinator:
 
     def remember_media(self, _media: Any) -> None:
         return None
+
+    def bind_final_turn(self, payload: dict[str, Any]) -> Any:
+        return SimpleNamespace(
+            turn_id=payload["turn_id"],
+            text=payload["text"],
+            context_revision=1,
+        )
 
     def model_output(self, _event: Any) -> Any:
         raise AssertionError("stub coordinator emits no model output")

@@ -547,11 +547,46 @@ class OnlineRunner:
                 f"duplex rejected tool response: {result.get('reason') or 'unknown reason'}"
             )
 
+        self._feed_text_tokens(text_token_ids)
+        return result
+
+    def prefill_text_input(
+        self,
+        text: str,
+        *,
+        audio_waveform: Any,
+        **prefill_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Inject one trusted typed user turn into the live duplex context."""
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("typed user input must be a non-empty string")
+        content = f"User typed this request directly: {text.strip()}"
+        text_token_ids = self.bundle.tokenizer.encode(
+            content,
+            add_special_tokens=False,
+        )
+        limit = int(self.params.max_tool_response_tokens)
+        if len(text_token_ids) > limit:
+            raise ValueError(
+                f"typed user input has {len(text_token_ids)} tokens; maximum is {limit}"
+            )
+        result = self.duplex.streaming_prefill(
+            audio_waveform=audio_waveform,
+            **prefill_kwargs,
+        )
+        if isinstance(result, dict) and not result.get("success", True):
+            raise RuntimeError(
+                f"duplex rejected typed input: {result.get('reason') or 'unknown reason'}"
+            )
+        self._feed_text_tokens(text_token_ids)
+        return result
+
+    def _feed_text_tokens(self, text_token_ids: Sequence[int]) -> None:
         # Feed mixed-mode text explicitly so pending logits follow the final text
-        # position and preserve audio -> tool response -> action order.
+        # position and preserve media -> text -> action order.
         decoder = getattr(self.duplex, "decoder", None)
         if decoder is None:
-            raise RuntimeError("duplex tool response prefill requires decoder access")
+            raise RuntimeError("duplex text prefill requires decoder access")
         if hasattr(decoder, "embed_tokens"):
             text_embeds = decoder.embed_tokens(text_token_ids)
         else:
@@ -568,7 +603,6 @@ class OnlineRunner:
         schema = getattr(self.duplex, "prefill_schema_tokens", None)
         if isinstance(schema, list) and schema and isinstance(schema[-1], list):
             schema[-1].extend(text_token_ids)
-        return result
 
     def _streaming_generate_with_tools(self, **kwargs):
         duplex = self.duplex

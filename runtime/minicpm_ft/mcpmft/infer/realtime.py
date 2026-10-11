@@ -286,6 +286,12 @@ class DuplexLiveSession:
         silence = np.zeros(self.chunker.chunk_samples, dtype=np.float32)
         return self._step(silence)
 
+    def feed_text_turn(self, text: str) -> DuplexStepEvent:
+        """Run one trusted keyboard turn through the same live Thinker session."""
+        self._ensure_open()
+        silence = np.zeros(self.chunker.chunk_samples, dtype=np.float32)
+        return self._step(silence, text_input=text)
+
     def should_stop_after(self, event: DuplexStepEvent) -> bool:
         if self.speech_worker is not None:
             return bool(self.config.stop_on_turn_end and self.spoke_any and event.end_of_turn)
@@ -470,6 +476,7 @@ class DuplexLiveSession:
         waveform: np.ndarray,
         *,
         input_capture_start_ms: float | None = None,
+        text_input: str | None = None,
     ) -> DuplexStepEvent:
         waveform = np.asarray(waveform, dtype=np.float32).reshape(-1)
         input_rms = float(np.sqrt(np.mean(np.square(waveform), dtype=np.float64)))
@@ -488,7 +495,16 @@ class DuplexLiveSession:
         queued_tool_response = (
             self._queued_tool_responses[0] if self._queued_tool_responses else None
         )
-        if queued_tool_response is None:
+        if text_input is not None and queued_tool_response is not None:
+            raise RuntimeError(
+                "cannot inject typed input while a tool response is pending"
+            )
+        if text_input is not None:
+            self.runner.prefill_text_input(
+                text_input,
+                **prefill_kwargs,
+            )
+        elif queued_tool_response is None:
             self.runner.duplex.streaming_prefill(**prefill_kwargs)
         else:
             self.runner.prefill_tool_response(
@@ -499,6 +515,8 @@ class DuplexLiveSession:
         prefill_mode = "OMNI" if frame_list else "AUDIO"
         if queued_tool_response is not None:
             prefill_mode += "+TOOL"
+        elif text_input is not None:
+            prefill_mode += "+TEXT"
         unit_start_sec = self.timeline_sec
         unit_end_sec = unit_start_sec + self.runner.params.chunk_ms / 1000.0
         event = self._generate_event(
