@@ -69,6 +69,13 @@ export type ClientControl =
   | { type: "reset" }
   | { type: "break"; reason?: string }
   | {
+      type: "voice.preferences";
+      voice_profile_id: string;
+      voice_pace: "relaxed" | "normal" | "quick";
+      prompt_audio_wav_b64?: string | null;
+      prompt_text?: string | null;
+    }
+  | {
       type: "playback.ack";
       playback_id: string;
       phase: "started" | "finished";

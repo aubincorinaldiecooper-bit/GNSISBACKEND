@@ -2974,6 +2974,61 @@ def create_online_duplex_app(
                         pending_audio_header = AudioFrameHeader.from_payload(control)
                     except ValueError as exc:
                         await send_text({"type": "error", "message": str(exc)})
+                elif event_type == "voice.preferences":
+                    voice_profile_id = control.get("voice_profile_id")
+                    voice_pace = control.get("voice_pace")
+                    prompt_audio = control.get("prompt_audio_wav_b64")
+                    prompt_text = control.get("prompt_text")
+                    if (
+                        not isinstance(voice_profile_id, str)
+                        or not voice_profile_id
+                        or len(voice_profile_id) > 64
+                        or voice_pace not in {"relaxed", "normal", "quick"}
+                        or (
+                            prompt_audio is not None
+                            and (
+                                not isinstance(prompt_audio, str)
+                                or len(prompt_audio) > 7_000_000
+                            )
+                        )
+                        or (
+                            prompt_text is not None
+                            and (
+                                not isinstance(prompt_text, str)
+                                or len(prompt_text) > 1000
+                            )
+                        )
+                    ):
+                        await send_text(
+                            {
+                                "type": "error",
+                                "message": "invalid voice preferences",
+                            }
+                        )
+                        continue
+                    try:
+                        await asyncio.to_thread(
+                            session.set_voice_preferences,
+                            voice_profile_id=voice_profile_id,
+                            voice_pace=voice_pace,
+                            prompt_audio_wav_b64=prompt_audio,
+                            prompt_text=prompt_text,
+                        )
+                    except (RuntimeError, ValueError) as exc:
+                        await send_text(
+                            {
+                                "type": "error",
+                                "message": str(exc),
+                            }
+                        )
+                    else:
+                        await send_text(
+                            {
+                                "type": "voice.preferences.applied",
+                                "voice_profile_id": voice_profile_id,
+                                "voice_pace": voice_pace,
+                            }
+                        )
                 elif event_type == "ping":
                     await send_text({"type": "pong", "id": control.get("id")})
                 elif event_type == "stop":

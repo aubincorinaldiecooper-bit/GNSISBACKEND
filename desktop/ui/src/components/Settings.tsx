@@ -3,6 +3,7 @@ import { Face } from "../lib/face";
 import { shareLink } from "../lib/identity";
 import { copyText } from "../lib/platform";
 import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore } from "../store/store";
+import type { VoicePreferences } from "../../../src/renderer/bridge";
 import * as I from "./Icons";
 
 type Section = "profile" | "voice" | "agents" | "notif" | "appear" | "privacy";
@@ -32,6 +33,9 @@ export function Settings() {
   const [note, setNote] = useState("");
   const [dock, setDock] = useState<"bottom" | "top">("bottom");
   const [glass, setGlass] = useState(55);
+  const [voicePreferences, setVoicePreferences] =
+    useState<VoicePreferences | null>(null);
+  const [voiceNote, setVoiceNote] = useState("");
   // Esc closes Settings, as it would any panel: floating, it sits over other apps.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -40,6 +44,13 @@ export function Settings() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  useEffect(() => {
+    if (!identity || !window.gnsis.voicePreferences) return;
+    void window.gnsis
+      .voicePreferences()
+      .then(setVoicePreferences)
+      .catch(() => setVoiceNote("Voice settings are unavailable."));
+  }, [identity]);
   if (!identity) return null;
   const link = shareLink(identity);
   const keyNote = getIdentityStore()?.storageNote ?? "";
@@ -60,6 +71,37 @@ export function Settings() {
   const toggle = (k: keyof typeof tg, label: string) => (
     <button type="button" role="switch" aria-label={label} aria-checked={tg[k]} className={"switch" + (tg[k] ? " on" : "")} disabled={inert} title={notYet} onClick={() => flip(k)}><span /></button>
   );
+  const updateVoice = async (
+    values: Partial<
+      Pick<
+        VoicePreferences,
+        "persona_description" | "voice_profile_id" | "voice_pace"
+      >
+    >,
+  ) => {
+    if (!window.gnsis.updateVoicePreferences) return;
+    setVoiceNote("");
+    try {
+      setVoicePreferences(await window.gnsis.updateVoicePreferences(values));
+    } catch {
+      setVoiceNote("Voice settings could not be saved.");
+    }
+  };
+  const uploadVoice = async () => {
+    if (!window.gnsis.uploadVoiceProfile) return;
+    const name = window.prompt("Name this voice");
+    if (!name?.trim()) return;
+    const transcript = window.prompt(
+      "Enter the exact words spoken in the WAV file",
+    );
+    if (!transcript?.trim()) return;
+    try {
+      const result = await window.gnsis.uploadVoiceProfile(name, transcript);
+      if (result) setVoicePreferences(result);
+    } catch {
+      setVoiceNote("The voice could not be uploaded.");
+    }
+  };
 
   return (
     <div className="settings-scrim">
@@ -101,12 +143,93 @@ export function Settings() {
               </>
             )}
             {section === "voice" && (
-              <Group note={inert ? NOT_YET_NOTE : undefined}>
+              <Group>
                 <Row title="Wake gesture" desc="Starts or ends live voice with whoever is in front, same as the voice button. There is no hardware gesture yet; ⌥Space stands in while GNSIS is focused."><span className="chip">⌥Space</span></Row>
                 <Row title="Microphone"><Select label="Microphone" options={["Built-in microphone", "External microphone"]} disabled={inert} /></Row>
                 {caps.transcript && <Row title="Send when I stop talking" desc="For dictation. Sends after a short pause.">{toggle("autosend", "Send when I stop talking")}</Row>}
                 <Row title="Read replies out loud">{toggle("speak", "Read replies out loud")}</Row>
-                <Row title="Voice"><Select label="Voice" options={["Calm", "Bright", "Deep"]} disabled={inert} /></Row>
+                <Row title="Voice">
+                  <select
+                    aria-label="Voice"
+                    className="select"
+                    value={voicePreferences?.voice_profile_id ?? ""}
+                    disabled={!voicePreferences}
+                    onChange={(event) =>
+                      void updateVoice({ voice_profile_id: event.target.value })
+                    }
+                  >
+                    {(voicePreferences?.available_voice_profiles ?? []).map(
+                      (profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </Row>
+                <Row title="Speaking pace">
+                  <div className="pace-control">
+                    <input
+                      type="range"
+                      aria-label="Speaking pace"
+                      min={0}
+                      max={2}
+                      step={1}
+                      value={
+                        ["relaxed", "normal", "quick"].indexOf(
+                          voicePreferences?.voice_pace ?? "relaxed",
+                        )
+                      }
+                      disabled={!voicePreferences}
+                      onChange={(event) =>
+                        void updateVoice({
+                          voice_pace: (
+                            ["relaxed", "normal", "quick"] as const
+                          )[Number(event.target.value)],
+                        })
+                      }
+                    />
+                    <div className="pace-labels">
+                      <span>Relaxed</span><span>Normal</span><span>Quick</span>
+                    </div>
+                  </div>
+                </Row>
+                <Row title="Persona">
+                  <input
+                    className="persona-field"
+                    aria-label="Persona"
+                    maxLength={800}
+                    value={voicePreferences?.persona_description ?? ""}
+                    disabled={!voicePreferences}
+                    onChange={(event) =>
+                      setVoicePreferences((current) =>
+                        current
+                          ? {
+                              ...current,
+                              persona_description: event.target.value,
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={(event) =>
+                      void updateVoice({
+                        persona_description: event.target.value,
+                      })
+                    }
+                  />
+                </Row>
+                {voicePreferences?.can_upload_voice && (
+                  <Row title="Private voice">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => void uploadVoice()}
+                    >
+                      Upload WAV…
+                    </button>
+                  </Row>
+                )}
+                {voiceNote && <div className="muted small voice-note">{voiceNote}</div>}
               </Group>
             )}
             {section === "agents" && (

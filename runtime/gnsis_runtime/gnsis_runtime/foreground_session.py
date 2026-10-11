@@ -202,6 +202,14 @@ class ForegroundSession(Protocol):
     def wait_for_speech(self, timeout: float | None = None) -> bool: ...
     def talker_state(self) -> dict[str, Any]: ...
     def context_window_snapshot(self) -> dict[str, Any] | None: ...
+    def set_voice_preferences(
+        self,
+        *,
+        voice_profile_id: str,
+        voice_pace: str,
+        prompt_audio_wav_b64: str | None = None,
+        prompt_text: str | None = None,
+    ) -> None: ...
 
     # --- interruption and lifecycle --------------------------------------------
     def acknowledge_playback(
@@ -733,6 +741,16 @@ class NativeForegroundSession:
             }
 
     def context_window_snapshot(self) -> dict[str, Any] | None:
+        return None
+
+    def set_voice_preferences(
+        self,
+        *,
+        voice_profile_id: str,
+        voice_pace: str,
+        prompt_audio_wav_b64: str | None = None,
+        prompt_text: str | None = None,
+    ) -> None:
         return None
 
     # ------------------------------------------------- interruption, lifecycle

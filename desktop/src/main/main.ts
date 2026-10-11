@@ -96,6 +96,7 @@ let win: BrowserWindow | null = null;
 // waiting for a control that already went by.
 let lastReady: unknown = null;
 let duplexClosed = false;
+let currentDesktopGrant: string | null = null;
 const permissions = new ElectronPermissions();
 const shortcuts = new ElectronShortcuts();
 const notifications = new ElectronNotifications();
@@ -186,7 +187,17 @@ const host = new HostSession({
     }
     sendToRenderer("duplex:control", c);
   },
-  onOpen: () => hostLog("transport", "runtime connected (duplex open)"),
+  onOpen: () => {
+    hostLog("transport", "runtime connected (duplex open)");
+    void applyVoicePreferencesToRuntime().catch((error) =>
+      hostLog(
+        "voice",
+        `preferences unavailable: ${
+          error instanceof Error ? error.name : "unknown error"
+        }`,
+      ),
+    );
+  },
   onAudio: (pcm) => sendToRenderer("duplex:audio", pcm),
   onClosed: (code) => {
     duplexClosed = true;
@@ -215,10 +226,72 @@ const protectedIdentity = new ProtectedDesktopIdentity(
   API_URL,
 );
 
+type VoicePreferences = {
+  voice_profile_id: string;
+  voice_pace: "relaxed" | "normal" | "quick";
+  can_upload_voice: boolean;
+  available_voice_profiles: Array<{
+    id: string;
+    name: string;
+    description: string;
+    kind: "preset" | "custom";
+  }>;
+  [key: string]: unknown;
+};
+
+async function voiceApi<T>(
+  endpoint: string,
+  init: RequestInit = {},
+): Promise<T> {
+  if (!currentDesktopGrant) throw new Error("Desktop identity is not available.");
+  const request = (grant: string) =>
+    fetch(`${API_URL}${endpoint}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${grant}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(init.headers ?? {}),
+      },
+    });
+  let response = await request(currentDesktopGrant);
+  if (response.status === 401 || response.status === 403) {
+    const refreshed = await protectedIdentity.authenticate();
+    if (refreshed) {
+      currentDesktopGrant = refreshed;
+      host.setDesktopGrant(refreshed);
+      response = await request(refreshed);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`Voice settings endpoint returned ${response.status}.`);
+  }
+  return (await response.json()) as T;
+}
+
+async function applyVoicePreferencesToRuntime(): Promise<VoicePreferences | null> {
+  if (!currentDesktopGrant || !host.connected) return null;
+  const preferences = await voiceApi<VoicePreferences>("/v1/desktop/preferences");
+  const reference = await voiceApi<{
+    audio_wav_b64: string | null;
+    transcript: string | null;
+  }>("/v1/desktop/voice-reference");
+  host.sendControl({
+    type: "voice.preferences",
+    voice_profile_id: preferences.voice_profile_id,
+    voice_pace: preferences.voice_pace,
+    prompt_audio_wav_b64: reference.audio_wav_b64,
+    prompt_text: reference.transcript,
+  });
+  return preferences;
+}
+
 async function connectRuntime(): Promise<void> {
   try {
     const grant = await protectedIdentity.authenticate();
-    if (grant) host.setDesktopGrant(grant);
+    if (grant) {
+      currentDesktopGrant = grant;
+      host.setDesktopGrant(grant);
+    }
   } catch (error) {
     hostLog(
       "identity",
@@ -243,6 +316,7 @@ function registerIdentityHandlers(): void {
     ) {
       throw new Error("The desktop grant is invalid.");
     }
+    currentDesktopGrant = grant;
     host.setDesktopGrant(grant);
     lastReady = null;
     duplexClosed = false;
@@ -287,7 +361,81 @@ function registerIdentityHandlers(): void {
   ipcMain.handle("identity:erase", () => {
     host.disconnect("identity_erased");
     host.clearDesktopGrant();
+    currentDesktopGrant = null;
     protectedIdentity.erase();
+  });
+  ipcMain.handle("voice:preferences", () =>
+    voiceApi<VoicePreferences>("/v1/desktop/preferences"),
+  );
+  ipcMain.handle("voice:preferences:update", async (_e, values: unknown) => {
+    if (!values || typeof values !== "object") {
+      throw new Error("Voice preferences are invalid.");
+    }
+    const input = values as Record<string, unknown>;
+    const body: Record<string, string> = {};
+    if (typeof input.voice_profile_id === "string") {
+      body.voice_profile_id = input.voice_profile_id;
+    }
+    if (
+      input.voice_pace === "relaxed" ||
+      input.voice_pace === "normal" ||
+      input.voice_pace === "quick"
+    ) {
+      body.voice_pace = input.voice_pace;
+    }
+    if (typeof input.persona_description === "string") {
+      body.persona_description = input.persona_description;
+    }
+    const result = await voiceApi<VoicePreferences>("/v1/desktop/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    await applyVoicePreferencesToRuntime().catch(() => null);
+    return result;
+  });
+  ipcMain.handle(
+    "voice:profile:upload",
+    async (_e, name: unknown, transcript: unknown) => {
+      if (
+        typeof name !== "string" ||
+        !name.trim() ||
+        typeof transcript !== "string" ||
+        !transcript.trim()
+      ) {
+        throw new Error("Voice name and transcript are required.");
+      }
+      const selected = await dialog.showOpenDialog({
+        title: "Choose a reference voice",
+        properties: ["openFile"],
+        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      });
+      if (selected.canceled || !selected.filePaths[0]) return null;
+      const audio = readFileSync(selected.filePaths[0]).toString("base64");
+      const result = await voiceApi<VoicePreferences>(
+        "/v1/desktop/voice-profiles",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: name.trim(),
+            transcript: transcript.trim(),
+            audio_wav_b64: audio,
+          }),
+        },
+      );
+      await applyVoicePreferencesToRuntime().catch(() => null);
+      return result;
+    },
+  );
+  ipcMain.handle("voice:profile:delete", async (_e, profileId: unknown) => {
+    if (typeof profileId !== "string" || !profileId.startsWith("voice_")) {
+      throw new Error("Voice profile is invalid.");
+    }
+    const result = await voiceApi<VoicePreferences>(
+      `/v1/desktop/voice-profiles/${encodeURIComponent(profileId)}`,
+      { method: "DELETE" },
+    );
+    await applyVoicePreferencesToRuntime().catch(() => null);
+    return result;
   });
 }
 

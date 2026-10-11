@@ -380,6 +380,23 @@ class DuplexLiveSession:
         self.runner.reset_streaming_text()
         self.runner.duplex.set_break_event()
 
+    def set_voice_preferences(
+        self,
+        *,
+        voice_profile_id: str,
+        voice_pace: str,
+        prompt_audio_wav_b64: str | None = None,
+        prompt_text: str | None = None,
+    ) -> None:
+        if self.speech_worker is None:
+            return
+        self.speech_worker.configure(
+            voice_profile_id=voice_profile_id,
+            voice_pace=voice_pace,
+            prompt_audio_wav_b64=prompt_audio_wav_b64,
+            prompt_text=prompt_text,
+        )
+
     def interrupt_output(self) -> None:
         """End the current assistant output without pausing future model units."""
 

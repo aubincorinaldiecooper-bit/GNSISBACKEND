@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld("gnsis", {
       recoveryKey,
     ),
   eraseDesktopIdentity: () => ipcRenderer.invoke("identity:erase"),
+  voicePreferences: () => ipcRenderer.invoke("voice:preferences"),
+  updateVoicePreferences: (values: unknown) =>
+    ipcRenderer.invoke("voice:preferences:update", values),
+  uploadVoiceProfile: (name: string, transcript: string) =>
+    ipcRenderer.invoke("voice:profile:upload", name, transcript),
+  deleteVoiceProfile: (profileId: string) =>
+    ipcRenderer.invoke("voice:profile:delete", profileId),
   startCall: () => ipcRenderer.send("call:start"),
   endCall: (reason: string) => ipcRenderer.send("call:end", reason),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>
