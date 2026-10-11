@@ -207,6 +207,7 @@ class Settings:
     visual_daily_decision_quota: Optional[int] = None
     visual_usage_secret: Optional[str] = field(default=None, repr=False)
     desktop_grant_private_key: Optional[str] = field(default=None, repr=False)
+    desktop_grant_public_key: Optional[str] = None
     desktop_grant_issuer: str = "gnsis-control-plane"
     desktop_grant_ttl_s: int = 900
 
@@ -567,6 +568,9 @@ class Settings:
             visual_usage_secret=os.environ.get("GNSIS_VISUAL_USAGE_SECRET"),
             desktop_grant_private_key=os.environ.get(
                 "GNSIS_DESKTOP_GRANT_PRIVATE_KEY"
+            ),
+            desktop_grant_public_key=os.environ.get(
+                "GNSIS_DESKTOP_GRANT_PUBLIC_KEY"
             ),
             desktop_grant_issuer=os.environ.get(
                 "GNSIS_DESKTOP_GRANT_ISSUER", "gnsis-control-plane"

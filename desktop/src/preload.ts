@@ -6,6 +6,10 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { ScreenFrameMetadata } from "./shared/protocol.js";
 
 contextBridge.exposeInMainWorld("gnsis", {
+  apiUrl:
+    process.argv
+      .find((arg) => arg.startsWith("--gnsis-api-url="))
+      ?.slice("--gnsis-api-url=".length) || "https://api.gnsis.studio",
   /** GNSIS floats over the desktop in a see-through window (set by main at launch). */
   overlay: process.argv.includes("--gnsis-overlay=1"),
   /** GNSIS has an icon in the Mac menu bar to tuck into (set by main at launch). */
@@ -35,6 +39,7 @@ contextBridge.exposeInMainWorld("gnsis", {
       approvalGrant,
       recoveryKey,
     ),
+  eraseDesktopIdentity: () => ipcRenderer.invoke("identity:erase"),
   startCall: () => ipcRenderer.send("call:start"),
   endCall: (reason: string) => ipcRenderer.send("call:end", reason),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>

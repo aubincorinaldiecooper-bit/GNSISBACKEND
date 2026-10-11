@@ -434,6 +434,10 @@ export class ElectronLiveHost implements LiveHost {
     this.emit({ type: "vision", source: null, state: "off" });
   }
 
+  async eraseIdentity(): Promise<void> {
+    await this.bridge.eraseDesktopIdentity?.();
+  }
+
   // ---- daemon -> UI ------------------------------------------------------------
 
   private onControl(control: unknown): void {

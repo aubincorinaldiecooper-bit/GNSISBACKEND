@@ -84,6 +84,8 @@ function resolveRuntimeUrl(): string {
 }
 
 const RUNTIME_URL = resolveRuntimeUrl();
+const API_URL =
+  process.env.GNSIS_API_URL?.trim() || "https://api.gnsis.studio";
 const HOST_ID = process.env.GNSIS_HOST_ID ?? `host-${process.pid}`;
 const SESSION_ID = process.env.GNSIS_SESSION_ID ?? HOST_ID;
 
@@ -210,8 +212,84 @@ const host = new HostSession({
 });
 const protectedIdentity = new ProtectedDesktopIdentity(
   app.getPath("userData"),
-  process.env.GNSIS_API_URL?.trim() || "https://api.gnsis.studio",
+  API_URL,
 );
+
+async function connectRuntime(): Promise<void> {
+  try {
+    const grant = await protectedIdentity.authenticate();
+    if (grant) host.setDesktopGrant(grant);
+  } catch (error) {
+    hostLog(
+      "identity",
+      `protected desktop authentication unavailable: ${
+        error instanceof Error ? error.name : "unknown error"
+      }`,
+    );
+  }
+  lastReady = null;
+  duplexClosed = false;
+  host.connect(SESSION_ID);
+  host.ready();
+}
+
+function registerIdentityHandlers(): void {
+  ipcMain.handle("identity:grant", (_e, grant: unknown) => {
+    if (
+      typeof grant !== "string" ||
+      grant.length < 40 ||
+      grant.length > 8192 ||
+      grant.split(".").length !== 3
+    ) {
+      throw new Error("The desktop grant is invalid.");
+    }
+    host.setDesktopGrant(grant);
+    lastReady = null;
+    duplexClosed = false;
+    host.connect(SESSION_ID);
+    host.ready();
+  });
+  ipcMain.handle(
+    "identity:protect",
+    async (
+      _e,
+      approvalGrant: unknown,
+      recoveryKey: unknown,
+    ) => {
+      if (
+        typeof approvalGrant !== "string" ||
+        approvalGrant.length < 40 ||
+        approvalGrant.length > 8192
+      ) {
+        throw new Error("The device approval is invalid.");
+      }
+      if (
+        recoveryKey !== undefined &&
+        (typeof recoveryKey !== "string" ||
+          recoveryKey.length < 20 ||
+          recoveryKey.length > 256)
+      ) {
+        throw new Error("The recovery key is invalid.");
+      }
+      const grant = await protectedIdentity.authenticate(
+        typeof recoveryKey === "string" ? recoveryKey : undefined,
+        approvalGrant,
+      );
+      if (!grant) {
+        throw new Error("The protected desktop credential was not created.");
+      }
+      if (typeof recoveryKey === "string") {
+        protectedIdentity.storeRecoveryKey(recoveryKey);
+      }
+      return grant;
+    },
+  );
+  ipcMain.handle("identity:erase", () => {
+    host.disconnect("identity_erased");
+    host.clearDesktopGrant();
+    protectedIdentity.erase();
+  });
+}
 
 const broker = new ActionBroker({
   registry: tools,
@@ -381,7 +459,11 @@ function createWindow(): void {
     nodeIntegration: false,
     zoomFactor: UI_SCALE,
     // The page learns from its preload whether it floats, before it first draws.
-    additionalArguments: [`--gnsis-overlay=${OVERLAY ? "1" : "0"}`, `--gnsis-menubar=${menuBar ? "1" : "0"}`],
+    additionalArguments: [
+      `--gnsis-overlay=${OVERLAY ? "1" : "0"}`,
+      `--gnsis-menubar=${menuBar ? "1" : "0"}`,
+      `--gnsis-api-url=${API_URL}`,
+    ],
   };
   if (OVERLAY) {
     win = new BrowserWindow({
@@ -486,20 +568,9 @@ app.whenReady().then(async () => {
     },
     { useSystemPicker: true },
   );
+  registerIdentityHandlers();
   createWindow();
-  try {
-    const grant = await protectedIdentity.authenticate();
-    if (grant) host.setDesktopGrant(grant);
-  } catch (error) {
-    hostLog(
-      "identity",
-      `protected desktop authentication unavailable: ${
-        error instanceof Error ? error.name : "unknown error"
-      }`,
-    );
-  }
-  host.connect(SESSION_ID);
-  host.ready();
+  await connectRuntime();
   const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
   const visualHostToken = process.env.GNSIS_VISUAL_HOST_TOKEN?.trim();
   const visualTask = process.env.GNSIS_VISUAL_TASK?.trim();
@@ -571,61 +642,8 @@ app.whenReady().then(async () => {
     // daemon session ended or the connection dropped. Same session id: the
     // daemon rebinds within its grace window, otherwise starts a fresh one.
     hostLog("transport", "reconnect requested by renderer");
-    lastReady = null;
-    duplexClosed = false;
-    host.connect(SESSION_ID);
-    host.ready();
+    void connectRuntime();
   });
-  ipcMain.handle("identity:grant", (_e, grant: unknown) => {
-    if (
-      typeof grant !== "string" ||
-      grant.length < 40 ||
-      grant.length > 8192 ||
-      grant.split(".").length !== 3
-    ) {
-      throw new Error("The desktop grant is invalid.");
-    }
-    host.setDesktopGrant(grant);
-    lastReady = null;
-    duplexClosed = false;
-    host.connect(SESSION_ID);
-    host.ready();
-  });
-  ipcMain.handle(
-    "identity:protect",
-    async (
-      _e,
-      approvalGrant: unknown,
-      recoveryKey: unknown,
-    ) => {
-      if (
-        typeof approvalGrant !== "string" ||
-        approvalGrant.length < 40 ||
-        approvalGrant.length > 8192
-      ) {
-        throw new Error("The device approval is invalid.");
-      }
-      if (
-        recoveryKey !== undefined &&
-        (typeof recoveryKey !== "string" ||
-          recoveryKey.length < 20 ||
-          recoveryKey.length > 256)
-      ) {
-        throw new Error("The recovery key is invalid.");
-      }
-      if (typeof recoveryKey === "string") {
-        protectedIdentity.storeRecoveryKey(recoveryKey);
-      }
-      const grant = await protectedIdentity.authenticate(
-        typeof recoveryKey === "string" ? recoveryKey : undefined,
-        approvalGrant,
-      );
-      if (!grant) {
-        throw new Error("The protected desktop credential was not created.");
-      }
-      return grant;
-    },
-  );
   // How much microphone audio a call really sent: the first frame, and the
   // total when it ends, so "the mic was on but nothing arrived" shows in the log.
   let callFrames = 0;

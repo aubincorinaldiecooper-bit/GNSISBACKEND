@@ -90,6 +90,16 @@ simplemem_secret = modal.Secret.from_dict(
         "GNSIS_SIMPLEMEM_TOKEN": simplemem_token,
         "GNSIS_SIMPLEMEM_INTERNAL_TOKEN": simplemem_token,
         "GNSIS_SIMPLEMEM_REQUIRED": "true",
+        # Verifies the desktop grants the control plane signs. Durable memory
+        # is refused at startup without it, so it is deployed alongside the
+        # SimpleMem credentials rather than as an afterthought.
+        "GNSIS_DESKTOP_GRANT_PUBLIC_KEY": os.environ.get(
+            "GNSIS_DESKTOP_GRANT_PUBLIC_KEY", ""
+        ).strip(),
+        "GNSIS_DESKTOP_GRANT_ISSUER": os.environ.get(
+            "GNSIS_DESKTOP_GRANT_ISSUER", ""
+        ).strip()
+        or "gnsis-control-plane",
     }
 )
 

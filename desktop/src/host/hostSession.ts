@@ -60,6 +60,11 @@ export class HostSession {
     this.desktopGrant = grant;
   }
 
+  clearDesktopGrant(): void {
+    this.desktopGrant = null;
+    this.resumeToken = null;
+  }
+
   connect(sessionId: string): void {
     if (sessionId !== this.sessionId) this.resumeToken = null;
     this.sessionId = sessionId;

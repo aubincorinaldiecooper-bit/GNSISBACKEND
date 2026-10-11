@@ -2,8 +2,6 @@ import type { Identity } from "@gnsis/ui";
 import type { LocalIdentityStore } from "@gnsis/ui";
 import type { GnsisBridge } from "./bridge.js";
 
-const API_URL = "https://api.gnsis.studio";
-
 interface ChallengeReply {
   challenge_id: string;
   challenge: string;
@@ -24,12 +22,13 @@ export async function migrateDesktopIdentity(
   if (!identity) return;
   if (!bridge.setDesktopGrant || !bridge.protectDesktopIdentity) return;
   try {
-    const challenge = await post<ChallengeReply>("/v1/desktop/identity/challenge", {
+    const apiUrl = bridge.apiUrl || "https://api.gnsis.studio";
+    const challenge = await post<ChallengeReply>(apiUrl, "/v1/desktop/identity/challenge", {
       public_id: identity.publicId,
       public_key: identity.publicKey,
     });
     const signature = await store.signChallenge(challenge.challenge);
-    const completed = await post<CompleteReply>("/v1/desktop/identity/complete", {
+    const completed = await post<CompleteReply>(apiUrl, "/v1/desktop/identity/complete", {
       challenge_id: challenge.challenge_id,
       signature,
     });
@@ -44,8 +43,8 @@ export async function migrateDesktopIdentity(
   }
 }
 
-async function post<T>(path: string, body: object): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+async function post<T>(apiUrl: string, path: string, body: object): Promise<T> {
+  const response = await fetch(`${apiUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

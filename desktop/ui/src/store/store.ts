@@ -473,6 +473,7 @@ export async function eraseIdentity(): Promise<string | null> {
   }
   if (getState().vision.state !== "off") await host?.stopVision().catch(() => {});
   try {
+    await host?.eraseIdentity?.();
     await identityStore?.erase();
   } catch (e) {
     return "Couldn’t erase your key from this computer. " + (plain(e) || "Try again.");
