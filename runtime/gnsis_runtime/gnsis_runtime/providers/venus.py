@@ -19,17 +19,40 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from ..realtime_provider import (
-    ProviderEvent,
-    ProviderSessionConfig,
-    RealtimeSession,
-)
+from ..realtime_provider import ProviderEvent, ProviderSessionConfig
 
 LOGGER = logging.getLogger("gnsis_runtime.providers.venus")
 
 
 class VenusUnavailable(RuntimeError):
     """The Venus model server is unreachable or not ready."""
+
+
+RUNTIME_INPUT_KINDS = ("tool_response", "runtime_event", "memory_episode", "task_slate")
+
+
+def runtime_input_text(kind: str, control: dict[str, Any]) -> str:
+    """Render one live-runtime input the way a native model should read it."""
+
+    if kind == "tool_response":
+        return "[tool result]\n" + _compact(control.get("response"))
+    if kind == "runtime_event":
+        event = control.get("event") or {}
+        title = str(event.get("title") or event.get("task_id") or "background task")
+        return f"[background result: {title}]\n" + _compact(
+            event.get("content", event)
+        )
+    if kind == "memory_episode":
+        return "[remembered]\n" + _compact(control.get("episode"))
+    if kind == "task_slate":
+        return "[tasks]\n" + str(control.get("slate") or "")
+    raise ValueError(f"unsupported venus runtime input kind: {kind!r}")
+
+
+def _compact(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 class VenusRealtimeProvider:
@@ -138,6 +161,7 @@ class VenusRealtimeSession:
         self._session_id = session_id
         self._incarnation = incarnation
         self._closed = False
+        self._runtime_inputs = 0
 
     @property
     def session_id(self) -> str:
@@ -183,6 +207,16 @@ class VenusRealtimeSession:
         )
 
     async def push_control(self, control: dict[str, Any]) -> None:
+        """Make the model read text it did not hear.
+
+        Venus takes injected context through ``/prefill`` (a work id, an
+        attempt id and a list of text segments). A raw ``prefill`` control
+        passes those straight through; the live runtime's own inputs — a
+        tool's answer, a background worker's delivery, a recalled memory
+        episode, the task slate — are rendered to text and ride the same
+        channel, so the model reads them in order with the conversation.
+        """
+
         import asyncio
 
         kind = control.get("kind", "prefill")
@@ -194,11 +228,20 @@ class VenusRealtimeSession:
                     "text_list": control["text_list"],
                 }
             )
-            await asyncio.to_thread(
-                self._provider._request, "POST", self._path("/prefill"), body
+        elif kind in RUNTIME_INPUT_KINDS:
+            self._runtime_inputs += 1
+            body = self._incarnate(
+                {
+                    "work_id": f"{kind}:{self._runtime_inputs}",
+                    "attempt_id": 1,
+                    "text_list": [runtime_input_text(kind, control)],
+                }
             )
-            return
-        raise ValueError(f"unsupported venus control kind: {kind!r}")
+        else:
+            raise ValueError(f"unsupported venus control kind: {kind!r}")
+        await asyncio.to_thread(
+            self._provider._request, "POST", self._path("/prefill"), body
+        )
 
     async def next_event(self, timeout_s: float | None = None) -> ProviderEvent:
         import asyncio

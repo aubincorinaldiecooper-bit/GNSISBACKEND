@@ -6,15 +6,19 @@
  * chain through PlaybackScheduler and report real start/finish/cancel as
  * HostEvents; the microphone resamples to 16 kHz PCM16 in an AudioWorklet
  * and mute releases capture only; screen and camera share one persistent
- * capture lifecycle paced by the daemon's recommended frame rate. What is
- * new is measurement for the UI (levels, speaking state, first accepted
- * frame) — the daemon sees exactly what it saw before.
+ * capture lifecycle paced by the rolling visual frame rate. UI measurement
+ * tracks levels, speaking state, and the first accepted frame.
  */
 
 import type { ScreenChannelConfig, ScreenFrameMetadata } from "../shared/protocol.js";
 import { MicSession } from "../shared/micSession.js";
 import { PlaybackScheduler } from "../shared/playbackScheduler.js";
-import { FRAME_FIT_PX, FRAME_JPEG_QUALITY, fitWithin, resolveFrameRate } from "../shared/frames.js";
+import {
+  FRAME_FIT_PX,
+  FRAME_JPEG_QUALITY,
+  fitWithin,
+  resolvePanopticFrameRate,
+} from "../shared/frames.js";
 import { CaptureManager } from "../shared/captureLifecycle.js";
 import type { GnsisBridge } from "./bridge.js";
 
@@ -181,10 +185,8 @@ export function pcmLevel(pcm: Uint8Array): number {
 // ---- screen / camera ---------------------------------------------------------
 // Persistent-stream sampling, mirroring production video.js: the MediaStream is
 // acquired once per source activation, a hidden <video>+drawImage produces
-// frames (no per-tick ImageCapture), the daemon's recommended_frame_rate sets
-// the pace, and frames are fitted to the model's contract — never full-res.
-
-const FRAME_FALLBACK_HZ = 1;
+// frames (no per-tick ImageCapture), the rolling visual rate sets the pace,
+// and frames are fitted to the model's contract — never full-res.
 
 /** A running capture and the picture it shares. */
 interface SharedCapture {
@@ -292,7 +294,9 @@ export class Vision {
 
       const canvas = document.createElement("canvas");
       const c2d = canvas.getContext("2d")!;
-      const rateHz = resolveFrameRate(this.channel?.recommended_frame_rate, FRAME_FALLBACK_HZ);
+      const rateHz = resolvePanopticFrameRate(
+        this.channel?.recommended_frame_rate,
+      );
       let framesSent = 0;
       let sending = false;
       let lastBytes = 0;

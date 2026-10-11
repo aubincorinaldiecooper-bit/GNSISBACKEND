@@ -170,10 +170,17 @@ class VirtualKeyStore:
         api_scopes=None,
     ) -> tuple[VirtualKeyView, str]:
         """Mint a key. Returns ``(view, secret)`` — the secret is shown ONCE."""
+        from .public_api import ISSUABLE_SCOPES
+
         if mode not in _MODES:
             raise VirtualKeyError("mode must be 'live' or 'test'")
         if not workspace_id:
             raise VirtualKeyError("workspace is required")
+        normalized_scopes = _norm_csv(api_scopes)
+        if normalized_scopes:
+            for scope in normalized_scopes.split(","):
+                if scope not in ISSUABLE_SCOPES:
+                    raise VirtualKeyError(f"unknown scope: {scope}", status=400)
         limits = {
             f: _norm_limit(v, f) for f, v in (
                 ("soft_limit", soft_limit), ("hard_limit", hard_limit),
@@ -198,7 +205,7 @@ class VirtualKeyStore:
                 workspace_id=workspace_id,
                 project_id=project_id, environment_id=environment_id,
                 user_id=user_id, team_id=team_id,
-                api_scopes=_norm_csv(api_scopes),
+                api_scopes=normalized_scopes,
                 allowed_providers=_norm_csv(allowed_providers),
                 allowed_models=_norm_csv(allowed_models),
                 expires_at=expiry,
@@ -289,7 +296,7 @@ class VirtualKeyStore:
             soft_limit=old.soft_limit, hard_limit=old.hard_limit,
             per_run_limit=old.per_run_limit, daily_limit=old.daily_limit,
             monthly_limit=old.monthly_limit, expires_at=old.expires_at,
-            metadata=old.metadata,
+            metadata=old.metadata, api_scopes=old.api_scopes,
         )
         with session_scope() as s:
             row = s.get(orm.VirtualKey, key_id)

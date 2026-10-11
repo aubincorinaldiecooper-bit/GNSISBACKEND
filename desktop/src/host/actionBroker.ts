@@ -88,6 +88,11 @@ interface CallRecord {
 export class ActionBroker {
   private accepted = new Set<string>();
   private readonly calls = new Map<string, CallRecord>();
+  /**
+   * One foreground mutation owns the desktop at a time. Reads may proceed
+   * concurrently; filesystem changes do not need the foreground lease.
+   */
+  private desktopTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: ActionBrokerDeps) {}
 
@@ -222,8 +227,14 @@ export class ActionBroker {
     const started = this.now();
     this.deps.event({ type: "action.started", ...base, ts_ms: started, action: prepared.action, effect: prepared.effect });
     this.deps.notify?.({ callId, state: "working", text: prepared.summary });
-    const done =
-      prepared.effect === "input" && this.deps.aroundInput ? await this.deps.aroundInput(() => prepared.run()) : await prepared.run();
+    const execute = () =>
+      prepared.effect === "input" && this.deps.aroundInput
+        ? this.deps.aroundInput(() => prepared.run())
+        : prepared.run();
+    const usesForegroundDesktop = prepared.tool !== "files" && prepared.effect !== "read";
+    const done = usesForegroundDesktop
+      ? await this.withDesktopLease(callId, signal, execute)
+      : await execute();
     // Anything that may have changed what is on screen is checked by looking:
     // hold the answer until a frame taken after the action has gone out.
     const look = prepared.effect === "read" ? undefined : await this.deps.lookAfter?.(this.now());
@@ -246,6 +257,52 @@ export class ActionBroker {
       ...(look ? { screen: LOOK_NOTE[look] } : {}),
       ...(done.detail ?? {}),
     };
+  }
+
+  private async withDesktopLease<T>(
+    callId: string,
+    signal: AbortSignal,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.desktopTail;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Keep the queue alive even if a future implementation makes one slot fail.
+    this.desktopTail = previous.then(() => gate, () => gate);
+
+    let abortListener: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      abortListener = () =>
+        reject(
+          new ActionProblem(
+            "failed",
+            "The action expired while waiting for another desktop action to finish, so it was not run.",
+            { stage: "desktop_lease" },
+          ),
+        );
+      if (signal.aborted) abortListener();
+      else signal.addEventListener("abort", abortListener, { once: true });
+    });
+
+    try {
+      await Promise.race([previous, aborted]);
+    } catch (error) {
+      // Preserve queue order without ever running this cancelled slot.
+      void previous.finally(release);
+      throw error;
+    } finally {
+      if (abortListener) signal.removeEventListener("abort", abortListener);
+    }
+
+    this.deps.log("execution", `call ${callId} acquired desktop execution lease`);
+    try {
+      return await run();
+    } finally {
+      release();
+      this.deps.log("execution", `call ${callId} released desktop execution lease`);
+    }
   }
 
   private checkPermissions(prepared: PreparedAction): void {

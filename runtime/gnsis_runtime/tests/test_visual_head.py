@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pytest
-
-torch = pytest.importorskip("torch")
+import torch
 
 from gnsis_runtime.visual.batching import HEAD_INPUTS, collate
 from gnsis_runtime.visual.decode import decode
@@ -61,6 +60,19 @@ def test_decoder_masks_actions_without_required_argument():
     out = _logits_for("type", 0, torch.zeros(GRID[0] * GRID[1], 2), 1)
     out["action"][0, action_label("wait")] = 5.0
     decision = decode(out, [ValueCandidate("none", "")], GRID, VIEWPORT)
+    assert decision.action == "wait"
+
+
+def test_decoder_keeps_wait_available_under_restricted_actions():
+    out = _logits_for("click", 0, torch.zeros(GRID[0] * GRID[1], 2), 1)
+    out["action"][0, action_label("wait")] = 10.5
+    decision = decode(
+        out,
+        [ValueCandidate("none", "")],
+        GRID,
+        VIEWPORT,
+        allowed_actions=("click",),
+    )
     assert decision.action == "wait"
 
 

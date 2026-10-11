@@ -72,3 +72,17 @@ test("the model is offered no screenshot action", () => {
   const names = [...catalog.matchAll(/"(?:name|enum)"\s*:\s*("[^"]*"|\[[^\]]*\])/g)].map((m) => m[1]).join(" ");
   assert.ok(!/screen\s*shot|screenshot|capture_screen|screen_capture/i.test(names), "a screenshot action is offered");
 });
+
+
+test("Cua is never used as a screenshot polling loop", () => {
+  for (const { file, text } of code) {
+    assert.ok(
+      !/\.call\(\s*["']get_desktop_state["']/.test(text),
+      `${file} asks Cua for a desktop screenshot instead of using the persistent Panoptic stream`,
+    );
+    assert.ok(
+      !/include_screenshot\s*:\s*true/.test(text),
+      `${file} asks Cua for a window screenshot; use Panoptic for pixels`,
+    );
+  }
+});

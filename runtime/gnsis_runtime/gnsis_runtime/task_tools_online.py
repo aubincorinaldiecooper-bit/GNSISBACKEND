@@ -22,6 +22,7 @@ from .contracts import (
 )
 from .coordination import TurnEnvelope
 from .delivery_gate import DeliveryGate
+from .foreground_session import ForegroundSession
 from .lean_realtime import TaskToolHandler, worker_delivery_response
 from .timeline import SessionTimeline
 
@@ -104,7 +105,7 @@ class TaskToolsRealtimeCoordinator:
         gateway: Any,
         owner_id: str,
         session_id: str,
-        session: Any,
+        session: ForegroundSession | None,
         *,
         provider_name: str | None = None,
         media_dir: str | Path | None = None,
@@ -174,6 +175,11 @@ class TaskToolsRealtimeCoordinator:
         self._delivery_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._latest_turn: TurnEnvelope | None = None
+        # Aggregate output only for turns with consumed live frame IDs.
+        self._perception_turn_id: str | None = None
+        self._perception_output_chunks: list[str] = []
+        self._perception_frame_ids: set[str] = set()
+        self._perception_source_times_ms: list[int] = []
         self._turns: dict[str, TurnEnvelope] = {}
         self._turn_identities: dict[str, tuple[Any, ...]] = {}
         self._next_context_revision = 0
@@ -405,6 +411,11 @@ class TaskToolsRealtimeCoordinator:
                 end_ms,
                 timestamp_ms,
             )
+            previous_turn = self._latest_turn
+            if previous_turn is not None and previous_turn.turn_id != turn.turn_id:
+                episode = self._take_perception_episode(previous_turn)
+                if episode is not None:
+                    self._spawn(self._persist_perception_episode(episode), "memory-write")
             self._latest_turn = turn
             self._next_context_revision = revision
             self._recent_media.clear()
@@ -432,6 +443,101 @@ class TaskToolsRealtimeCoordinator:
                 self._spawn(self._recall_durable(turn), "memory-recall")
             return turn
 
+    def observe_perception_output(self, event: Any) -> None:
+        """Collect model output and evidence that live frames were consumed."""
+        turn = self._latest_turn
+        if turn is None or self._perception_turn_id not in {None, turn.turn_id}:
+            return
+        if self._perception_turn_id is None:
+            self._perception_turn_id = turn.turn_id
+        text = getattr(event, "text", "")
+        if isinstance(text, str) and text.strip():
+            self._perception_output_chunks.append(text.strip())
+        metrics = getattr(event, "metrics", None)
+        if isinstance(metrics, Mapping):
+            consumed = metrics.get("consumed_frame_ids")
+        else:
+            consumed = getattr(metrics, "consumed_frame_ids", None)
+        if consumed:
+            self._perception_frame_ids.update(
+                str(value).strip() for value in consumed if str(value).strip()
+            )
+            current_time = getattr(event, "current_time", None)
+            if isinstance(current_time, (int, float)) and current_time >= 0:
+                self._perception_source_times_ms.append(int(current_time))
+
+    def _take_perception_episode(self, turn: TurnEnvelope) -> dict[str, Any] | None:
+        if self._perception_turn_id != turn.turn_id:
+            return None
+        chunks = self._perception_output_chunks
+        frame_ids = sorted(self._perception_frame_ids)
+        self._perception_turn_id = None
+        source_times_ms = self._perception_source_times_ms
+        self._perception_output_chunks = []
+        self._perception_frame_ids = set()
+        self._perception_source_times_ms = []
+        if not frame_ids or not chunks or self.session_memory is None:
+            return None
+        source_start_sec = min(source_times_ms) / 1000.0 if source_times_ms else None
+        source_end_sec = max(source_times_ms) / 1000.0 if source_times_ms else None
+        return {
+            "session_id": self.session_id,
+            "turn_id": turn.turn_id,
+            "user_text": turn.final_asr,
+            "model_text": " ".join(chunks),
+            "frame_ids": frame_ids,
+            "source_start_sec": source_start_sec,
+            "source_end_sec": source_end_sec,
+            "namespace": (
+                f"{self.session_memory.namespace}:session:{self.session_id}"
+            ),
+        }
+
+    async def _persist_perception_episode(self, episode: dict[str, Any]) -> None:
+        writer = getattr(self.session_memory, "write_perception_episode", None)
+        if not callable(writer):
+            return
+        try:
+            written = await asyncio.to_thread(writer, **episode)
+            self.timeline.emit(
+                "memory.episode_created" if written else "memory.episode_write_failed",
+                component="memory",
+                correlation_id=str(episode["turn_id"]),
+                source_ts_ms=(
+                    int(float(episode["source_end_sec"]) * 1000)
+                    if episode.get("source_end_sec") is not None
+                    else None
+                ),
+                fields={
+                    "turn_id": episode["turn_id"],
+                    "frame_ids": episode["frame_ids"],
+                    "frame_count": len(episode["frame_ids"]),
+                    "source_start_sec": episode.get("source_start_sec"),
+                    "source_end_sec": episode.get("source_end_sec"),
+                    "namespace": episode["namespace"],
+                },
+            )
+        except Exception as exc:
+            self.timeline.emit(
+                "memory.episode_write_failed",
+                component="memory",
+                correlation_id=str(episode["turn_id"]),
+                source_ts_ms=(
+                    int(float(episode["source_end_sec"]) * 1000)
+                    if episode.get("source_end_sec") is not None
+                    else None
+                ),
+                fields={
+                    "turn_id": episode["turn_id"],
+                    "frame_ids": episode["frame_ids"],
+                    "frame_count": len(episode["frame_ids"]),
+                    "source_start_sec": episode.get("source_start_sec"),
+                    "source_end_sec": episode.get("source_end_sec"),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            LOGGER.warning("session perception memory write failed", exc_info=True)
+
     async def _recall_durable(self, turn: TurnEnvelope) -> None:
         """Feed durable Omni-SimpleMem memories into pinned context.
 
@@ -442,7 +548,9 @@ class TaskToolsRealtimeCoordinator:
         """
         try:
             episodes = await asyncio.to_thread(
-                self.session_memory.episodes_for_turn, turn.final_asr
+                self.session_memory.episodes_for_turn,
+                turn.final_asr,
+                namespace=f"{self.session_memory.namespace}:session:{self.session_id}",
             )
         except Exception:
             LOGGER.warning(
@@ -753,7 +861,7 @@ class TaskToolsRealtimeCoordinator:
             fields={"tool": name, "correlated": call_id is not None},
         )
         try:
-            event = await self._call_session("feed_tool_response", response)
+            event = await asyncio.to_thread(self.session.feed_tool_response, response)
         except BaseException:
             # The model did not take it (too long, malformed): the call is
             # still waiting, and the client may answer it again.
@@ -838,8 +946,8 @@ class TaskToolsRealtimeCoordinator:
         )
         event = None
         try:
-            event = await self._call_session(
-                "feed_tool_response",
+            event = await asyncio.to_thread(
+                self.session.feed_tool_response,
                 {
                     "status": "timeout",
                     "tool": record.name,
@@ -864,7 +972,7 @@ class TaskToolsRealtimeCoordinator:
 
     async def inject_memory_episode(self, episode: Any) -> bool:
         self._ensure_open()
-        return bool(await self._call_session("feed_memory_episode", episode))
+        return bool(await asyncio.to_thread(self.session.feed_memory_episode, episode))
 
     def task_status(self) -> dict[str, Any]:
         entries = self.gateway.task_slate(self.owner_id)
@@ -1072,6 +1180,10 @@ class TaskToolsRealtimeCoordinator:
             if self._closed:
                 return
             self._closed = True
+        if self._latest_turn is not None:
+            episode = self._take_perception_episode(self._latest_turn)
+            if episode is not None:
+                await self._persist_perception_episode(episode)
         await self.stop_model_jobs()
         with self._state_lock:
             pending_outputs = tuple(self._delivery_outputs_pending)
@@ -1131,7 +1243,7 @@ class TaskToolsRealtimeCoordinator:
                 "status": "batch",
                 "results": responses,
             }
-            event = await self._call_session("feed_tool_response", response)
+            event = await asyncio.to_thread(self.session.feed_tool_response, response)
             if event is not None:
                 # Observed once, when the output loop emits it.
                 await self._outputs.put(TaskToolsOnlineOutput("model", event))
@@ -1171,8 +1283,8 @@ class TaskToolsRealtimeCoordinator:
                 return
             self._recovering_tool_error = True
         try:
-            event = await self._call_session(
-                "feed_tool_response",
+            event = await asyncio.to_thread(
+                self.session.feed_tool_response,
                 {
                     "status": "invalid_action",
                     "task_ids": [],
@@ -1226,7 +1338,7 @@ class TaskToolsRealtimeCoordinator:
                         # Worker interrupts stop current output without setting the
                         # persistent client break flag.
                         self.gate.interrupt(reason="delivery_interrupt")
-                        await self._call_session("interrupt_output")
+                        await asyncio.to_thread(self.session.interrupt_output)
                     self.gate.note_delivering(delivery.delivery_id)
                     response = worker_delivery_response(self.gateway, delivery)
                     key = (
@@ -1236,8 +1348,8 @@ class TaskToolsRealtimeCoordinator:
                     )
                     with self._state_lock:
                         self._delivery_outputs_pending.add(key)
-                    event = await self._call_session(
-                        "feed_runtime_event",
+                    event = await asyncio.to_thread(
+                        self.session.feed_runtime_event,
                         response,
                         delivery_id=delivery.delivery_id,
                         claim_token=delivery.claim_token,
@@ -1330,13 +1442,13 @@ class TaskToolsRealtimeCoordinator:
         with self._state_lock:
             if not force and slate == self._last_slate:
                 return False
-        changed = bool(await self._call_session("set_task_slate", slate))
+        changed = bool(await asyncio.to_thread(self.session.set_task_slate, slate))
         with self._state_lock:
             self._last_slate = slate
         return changed
 
     async def _safe_pause(self) -> bool:
-        state = await self._call_session("talker_state")
+        state = await asyncio.to_thread(self.session.talker_state)
         return not isinstance(state, Mapping) or (
             bool(state.get("drained", True))
             and bool(state.get("turn_ended", True))
@@ -1389,10 +1501,6 @@ class TaskToolsRealtimeCoordinator:
         error = task.exception()
         if error is not None:
             LOGGER.error("task-tools realtime job failed: %s", error)
-
-    async def _call_session(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        function = getattr(self.session, method)
-        return await asyncio.to_thread(function, *args, **kwargs)
 
     def _ensure_open(self) -> None:
         if self._closed:

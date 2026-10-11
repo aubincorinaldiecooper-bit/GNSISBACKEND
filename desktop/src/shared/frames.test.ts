@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   FRAME_FIT_PX,
+  PANOPTIC_FRAME_RATE_HZ,
   RECONNECT_BUDGET_MS,
   RECONNECT_DELAYS_MS,
   fitWithin,
   reconnectDelayMs,
   resolveFrameRate,
+  resolvePanopticFrameRate,
 } from "./frames.js";
 
 test("fitWithin scales the largest side to the model's fit, never upscales", () => {
@@ -28,6 +30,12 @@ test("resolveFrameRate honors the daemon recommendation with guardrails", () => 
   assert.equal(resolveFrameRate(undefined), 1);
   assert.equal(resolveFrameRate("bogus"), 1);
   assert.equal(resolveFrameRate(0, 2.5), 2.5);
+});
+
+test("resolvePanopticFrameRate keeps rolling vision at four frames per second", () => {
+  assert.equal(resolvePanopticFrameRate(undefined), PANOPTIC_FRAME_RATE_HZ);
+  assert.equal(resolvePanopticFrameRate(1), PANOPTIC_FRAME_RATE_HZ);
+  assert.equal(resolvePanopticFrameRate(8), 8);
 });
 
 test("reconnectDelayMs mirrors video.js backoff and budget", () => {

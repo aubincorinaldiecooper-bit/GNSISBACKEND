@@ -31,13 +31,21 @@ from typing import Any, Callable, Literal, Mapping, Protocol
 
 from ..screen import LatestScreenFrameBuffer
 from .real_runs import Box, Candidate, Execution, Point, RealRunCoordinator, RealRunRecord
-from .verification import ExpectedState, VerificationResult, actuator_reported_failure, ambiguous
+from .runtime import GatedDecision
+from .verification import (
+    ExpectedState,
+    VerificationResult,
+    actuator_reported_failure,
+    ambiguous,
+    derive_expected_state,
+)
 
 StepStatus = Literal["succeeded", "unverified", "escalated"]
 ActionProvenance = Literal["direct_user", "mixed", "observed_untrusted", "delegated_result", "unknown"]
 PolicyDecision = Literal["allow", "confirm", "deny"]
 ConfirmationState = Literal["not_required", "approved", "denied", "missing"]
 DEFAULT_MAX_REVERIFY = 2
+ABSTAIN_WAIT_MS = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +146,56 @@ class VisualStep:
             if value is not None:
                 out[name] = value
         return out
+
+
+def step_from_decision(
+    gated: GatedDecision,
+    *,
+    run_id: str,
+    case_id: str,
+    goal: str,
+    authority: ActionAuthority | None = None,
+    expected_state: ExpectedState | None = None,
+    planner: str = "system1",
+) -> VisualStep:
+    """The one deterministic mapping from a gated System-1 decision to a step.
+
+    Only ``gated.decision`` is read, so an abstained or rejected proposal can
+    only ever reach the actuator as a bounded WAIT on the observed frame.
+    """
+
+    decision = gated.decision
+    if gated.status != "act" or decision.action == "wait":
+        return VisualStep(
+            run_id=run_id,
+            case_id=case_id,
+            goal=goal,
+            action="wait",
+            frame_id=gated.frame_id,
+            wait_ms=ABSTAIN_WAIT_MS,
+            planner=planner,
+            confidence=decision.confidence,
+            authority=authority,
+        )
+    return VisualStep(
+        run_id=run_id,
+        case_id=case_id,
+        goal=goal,
+        action=decision.action,
+        frame_id=gated.frame_id,
+        expected_state=(
+            expected_state
+            if expected_state is not None
+            else derive_expected_state(goal, decision.action, text=decision.text)
+        ),
+        target=Point(decision.target.x, decision.target.y) if decision.target is not None else None,
+        text=decision.text,
+        url=decision.url,
+        direction=decision.direction,
+        planner=planner,
+        confidence=decision.confidence,
+        authority=authority,
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -96,6 +96,17 @@ GNSIS_MODELS_VOLUME=<the existing volume> \
 modal run modal/gnsis_voice.py::cache_gnsis_models
 ```
 
+## Foreground provider selection
+
+`realtime.provider` chooses the model behind the realtime provider seam:
+`thinker` (default, the deployed Thinker/Talker pair) or `venus` (a remote
+Realtime-Venus model server reached at `realtime.venus_url`). Today the
+selection drives `gnsis-realtime-bench`, which runs the same recorded input
+through either provider and writes comparable reports; `gnsis-serve` still
+drives the Thinker directly and refuses any other provider until the live
+sockets move onto the seam. The matched test plan and decision rule are in
+`docs/realtime-provider-evaluation.md`.
+
 ## Validation
 
 ```bash

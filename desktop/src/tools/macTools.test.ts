@@ -10,8 +10,11 @@ import { test } from "node:test";
 import { ActionProblem } from "./actions.js";
 import { FilesTool } from "./files.js";
 import { BrowserTool } from "./mac/browser.js";
+import { WindowTool } from "./mac/window.js";
+import { ClipboardTool } from "./mac/clipboard.js";
 import { scriptProblem } from "./mac/finder.js";
 import { InputTool, normalizeCombo } from "./mac/input.js";
+import type { CuaControl, CuaResponse } from "./cua/driver.js";
 import { OpenTool, asWebAddress } from "./mac/open.js";
 import { classifyScriptError, type Shell, type ShellResult } from "./mac/shell.js";
 
@@ -95,189 +98,235 @@ test("macOS refusals are named for what the person has to switch on", () => {
   assert.equal(automation.detail.app, "Google Chrome");
 });
 
-test("keys: combinations are normalized, and quitting is always asked about", async () => {
+function fakeCua(handler: (tool: string, args: Record<string, unknown>) => CuaResponse | Promise<CuaResponse>): CuaControl & { calls: Array<{ tool: string; args: Record<string, unknown> }> } {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  return {
+    calls,
+    async call(tool, args) {
+      calls.push({ tool, args });
+      return await handler(tool, args);
+    },
+  };
+}
+
+const oneWindow = {
+  windows: [{
+    pid: 42,
+    window_id: 7,
+    app_name: "TextEdit",
+    title: "Notes",
+    bounds: { x: 0, y: 25, width: 1000, height: 700 },
+    z_index: 10,
+    is_on_screen: true,
+  }],
+};
+
+test("keys: combinations are normalized and dispatched through Cua", async () => {
   assert.equal(normalizeCombo("Command+Shift+T"), "cmd+shift+t");
   assert.equal(normalizeCombo("⌘F"), "cmd+f");
   assert.equal(normalizeCombo("return"), "enter");
   assert.throws(() => normalizeCombo("hyper+x"));
-  const shell = fakeShell(() => undefined);
-  const input = new InputTool(shell, { bounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) });
+
+  const cua = fakeCua((tool) => tool === "list_windows" ? { text: "", structured: oneWindow } : { text: "ok" });
+  const input = new InputTool(cua, { bounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) });
+
   const find = await input.prepare({ action: "keys", keys: "cmd+f" });
   assert.equal(find.consequential, undefined);
   await find.run();
-  assert.deepEqual(shell.calls[0], ["/usr/bin/osascript", ["-e", 'tell application "System Events" to keystroke "f" using {command down}']]);
+  assert.deepEqual(cua.calls.at(-1), {
+    tool: "hotkey",
+    args: { pid: 42, window_id: 7, keys: ["cmd", "f"], delivery_mode: "foreground" },
+  });
+
   const quit = await input.prepare({ action: "keys", keys: "cmd+q" });
   assert.match(quit.consequential ?? "", /quits/);
+
   const enter = await input.prepare({ action: "keys", keys: "enter" });
   await enter.run();
-  assert.deepEqual(shell.calls[1], ["/usr/bin/osascript", ["-e", 'tell application "System Events" to key code 36']]);
+  assert.deepEqual(cua.calls.at(-1), {
+    tool: "press_key",
+    args: { pid: 42, window_id: 7, key: "enter", delivery_mode: "foreground" },
+  });
 });
 
-test("type: the text is passed as one quoted string, never spliced into a script", async () => {
-  const shell = fakeShell(() => undefined);
-  const input = new InputTool(shell, { bounds: () => ({ x: 0, y: 0, width: 100, height: 100 }) });
+test("type: text is handed to Cua as data, not a generated script", async () => {
+  const cua = fakeCua((tool) => tool === "list_windows" ? { text: "", structured: oneWindow } : { text: "ok" });
+  const input = new InputTool(cua, { bounds: () => ({ x: 0, y: 0, width: 100, height: 100 }) });
   const typed = await input.prepare({ action: "type", text: 'say "hi" \\ end' });
   await typed.run();
-  assert.equal(shell.calls[0][1][1], 'tell application "System Events" to keystroke "say \\"hi\\" \\\\ end"');
+  assert.equal(cua.calls.at(-1)?.tool, "type_text");
+  assert.equal(cua.calls.at(-1)?.args.text, 'say "hi" \\ end');
 });
 
-test("click: by position maps onto the shared display; by name a send button is always asked about", async () => {
-  const input = new InputTool(fakeShell(() => undefined), { bounds: () => ({ x: 0, y: 25, width: 1440, height: 900 }) });
-  const at = await input.prepare({ action: "click", x: 0.5, y: 0.5 });
-  assert.equal(at.summary, "Click at 50% across, 50% down the screen");
+test("click: label uses a fresh no-screenshot AX snapshot; coordinates use desktop Cua input", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return { text: "", structured: oneWindow };
+    if (tool === "get_window_state") {
+      return { text: "", structured: { elements: [{ role: "button", label: "Send", element_token: "s00000001:4" }] } };
+    }
+    return { text: "ok" };
+  });
+  const input = new InputTool(cua, { bounds: () => ({ x: 0, y: 25, width: 1440, height: 900 }) });
+
   const send = await input.prepare({ action: "click", label: "Send" });
   assert.ok(send.consequential);
-  const play = await input.prepare({ action: "click", label: "Play" });
-  assert.equal(play.consequential, undefined);
+  await send.run();
+  const snapshot = cua.calls.find((c) => c.tool === "get_window_state")!;
+  assert.equal(snapshot.args.include_screenshot, false);
+  assert.deepEqual(cua.calls.at(-1), {
+    tool: "click",
+    args: { pid: 42, window_id: 7, element_token: "s00000001:4", button: "left", delivery_mode: "background" },
+  });
+
+  const at = await input.prepare({ action: "right_click", x: 0.5, y: 0.5 });
+  await at.run();
+  assert.equal(cua.calls.at(-1)?.tool, "click");
+  assert.equal(cua.calls.at(-1)?.args.scope, "desktop");
+  assert.equal(cua.calls.at(-1)?.args.button, "right");
 });
 
-test("browser: goes to an address in the browser in front and checks it arrived", async () => {
-  let url = "https://example.org/";
-  const shell = fakeShell((file, args) => {
-    if (file === "/usr/bin/lsappinfo" && args[0] === "front") return { stdout: "ASN:0x0-0x1234" };
-    if (file === "/usr/bin/lsappinfo") return { stdout: '"LSDisplayName"="Google Chrome"' };
-    const source = args[args.length - 1];
-    if (source.includes("activeTab.url =")) {
-      url = "https://github.com/";
-      return { stdout: "" };
-    }
-    if (source.includes("JSON.stringify(w.tabs()")) {
-      return { stdout: JSON.stringify([{ n: 1, title: "GitHub", url, active: true }]) };
-    }
-    return undefined;
+test("input: scroll and drag route through Cua without a screenshot request", async () => {
+  const cua = fakeCua((tool) => tool === "list_windows" ? { text: "", structured: oneWindow } : { text: "ok" });
+  const input = new InputTool(cua, { bounds: () => ({ x: 0, y: 0, width: 1000, height: 800 }) });
+
+  await (await input.prepare({ action: "scroll", direction: "down", amount: 4, app: "TextEdit" })).run();
+  assert.equal(cua.calls.at(-1)?.tool, "scroll");
+
+  await (await input.prepare({ action: "drag", from_x: 0.1, from_y: 0.2, to_x: 0.8, to_y: 0.7 })).run();
+  assert.deepEqual(cua.calls.at(-1), {
+    tool: "drag",
+    args: { scope: "desktop", from_x: 100, from_y: 160, to_x: 800, to_y: 560, duration_ms: 350 },
   });
-  const browser = new BrowserTool(shell, async () => {}, noWait);
+});
+
+test("browser: Chrome navigation prefers Cua's exact browser binding", async () => {
+  const cua = fakeCua((tool, args) => {
+    if (tool === "list_windows") return {
+      text: "",
+      structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "GitHub", z_index: 20, is_on_screen: true }] },
+    };
+    if (tool === "get_browser_state") return {
+      text: "",
+      structured: {
+        target_id: "bt-1",
+        tabs: [{ tab_id: "tab-1", title: "GitHub", url: "https://example.org/", selected: true }],
+      },
+    };
+    if (tool === "browser_navigate") {
+      assert.equal(args.target_id, "bt-1");
+      assert.equal(args.tab_id, "tab-1");
+      return { text: "navigated" };
+    }
+    return { text: "ok" };
+  });
+  const browser = new BrowserTool(cua, noWait);
   const go = await browser.prepare({ action: "go", url: "https://github.com" });
-  assert.equal(go.effect, "open_remote");
-  assert.equal(go.summary, "Go to github.com in Google Chrome");
   const done = await go.run();
   assert.equal(done.verified, "browser");
-  assert.match(done.message, /on github\.com/);
+  assert.ok(cua.calls.some((c) => c.tool === "browser_navigate"));
+  assert.ok(!cua.calls.some((c) => c.tool === "hotkey" && Array.isArray(c.args.keys) && c.args.keys[1] === "l"));
 });
 
-test("browser: with no browser open, it says so instead of launching one", async () => {
-  const shell = fakeShell((file, args) => {
-    if (file === "/usr/bin/lsappinfo") return { code: 1 };
-    if (args[args.length - 1].includes(".running()")) return { stdout: "false" };
-    return undefined;
+test("browser: Chrome falls back to native Cua when typed profile attachment is unavailable", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return {
+      text: "",
+      structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "GitHub", z_index: 20, is_on_screen: true }] },
+    };
+    if (tool === "get_browser_state") throw new Error("typed binding unavailable");
+    return { text: "ok" };
   });
-  await assert.rejects(
-    new BrowserTool(shell, async () => {}, noWait).prepare({ action: "tabs" }),
-    (err: unknown) => err instanceof ActionProblem && err.status === "not_found",
-  );
-});
-
-/** A browser with tabs, driven the way the tool drives it: by the scripts it sends. */
-function fakeBrowser(app: "Google Chrome" | "Safari", opts: { ignoreNewTab?: boolean; windows?: boolean; inFront?: boolean; unreadable?: boolean } = {}) {
-  let windows = opts.windows ?? true;
-  const tabs: Array<{ title: string; url: string }> = windows ? [{ title: "Mail", url: "https://mail.example/" }] : [];
-  let active = tabs.length;
-  const scripts: string[] = [];
-  const shell = fakeShell((file, args) => {
-    if (file === "/usr/bin/lsappinfo" && args[0] === "front") return { stdout: "ASN:0x0-0x1234" };
-    if (file === "/usr/bin/lsappinfo") return { stdout: `"LSDisplayName"="${opts.inFront === false ? "GNSIS" : app}"` };
-    const source = args[args.length - 1];
-    scripts.push(source);
-    if (source.includes(".running()")) return { stdout: source.includes(app) ? "true" : "false" };
-    if (source.includes("tabs.push") || source.includes("make()")) {
-      if (opts.ignoreNewTab) return { stdout: "" };
-      const url = /url: "([^"]+)"/.exec(source)?.[1] ?? (app === "Safari" ? "" : "chrome://newtab/");
-      if (!windows) windows = true;
-      tabs.push({ title: url ? "YouTube" : "New Tab", url });
-      active = tabs.length;
-      return { stdout: "" };
-    }
-    if (source.includes("JSON.stringify(w.tabs()")) {
-      if (!windows) return { code: 1, stderr: "execution error: Error: Invalid index. (-1719)" };
-      if (opts.unreadable && tabs.length > 1) return { code: 1, stderr: "Connection is invalid. (-609)" };
-      return { stdout: JSON.stringify(tabs.map((t, i) => ({ n: i + 1, title: t.title, url: t.url, active: i + 1 === active }))) };
-    }
-    return undefined;
-  });
-  return { shell, tabs, scripts, active: () => active };
-}
-
-test("browser: new_tab opens a blank tab at the end and brings it forward, and checks it did", async () => {
-  const b = fakeBrowser("Google Chrome");
-  const tool = new BrowserTool(b.shell, async () => {}, noWait);
-  const prepared = await tool.prepare({ action: "new_tab" });
-  assert.equal(prepared.effect, "open_local", "a blank tab changes nothing and sends nothing away");
-  assert.deepEqual(prepared.scope, []);
-  assert.equal(prepared.summary, "Open a new tab in Google Chrome");
-  const done = await prepared.run();
-  assert.equal(b.tabs.length, 2, "one more tab than before");
-  assert.equal(b.active(), 2, "and it is the one in front");
-  assert.equal(done.verified, "browser");
-  assert.equal(done.message, "Google Chrome opened a new tab; it now has 2 tabs.");
-  assert.ok(b.scripts.some((src) => src.includes("w.tabs.push(app.Tab({}))") && src.includes("w.activeTabIndex = w.tabs.length")));
-});
-
-test("browser: new_tab at an address is judged like going there, and waits for the page", async () => {
-  const b = fakeBrowser("Safari");
-  const tool = new BrowserTool(b.shell, async () => {}, noWait);
-  const prepared = await tool.prepare({ action: "new_tab", url: "youtube.com" });
-  assert.equal(prepared.effect, "open_remote");
-  assert.deepEqual(prepared.scope, [{ value: "youtube.com", source: "named", kind: "site" }]);
-  assert.equal(prepared.summary, "Open youtube.com in a new tab in Safari");
-  const done = await prepared.run();
-  assert.equal(done.verified, "browser");
-  assert.equal(done.message, "Safari opened a new tab at youtube.com; it now has 2 tabs.");
-  const script = b.scripts.find((src) => src.includes("tabs.push"))!;
-  assert.match(script, /app\.Tab\(\{ url: "https:\/\/youtube\.com\/" \}\)/, "the address is passed as one quoted string");
-  assert.match(script, /w\.currentTab = w\.tabs\[w\.tabs\.length - 1\]/);
-  await assert.rejects(tool.prepare({ action: "new_tab", url: "not a web address" }), /not a web address/);
-});
-
-test("browser: with no window open, new_tab makes one; a browser that opens nothing is reported, not assumed", async () => {
-  const empty = fakeBrowser("Google Chrome", { windows: false });
-  const done = await (await new BrowserTool(empty.shell, async () => {}, noWait).prepare({ action: "new_tab" })).run();
-  assert.equal(empty.tabs.length, 1);
-  assert.equal(done.verified, "browser");
-  assert.ok(empty.scripts.some((src) => src.includes("app.Window().make()")));
-
-  const stuck = fakeBrowser("Google Chrome", { ignoreNewTab: true });
-  const prepared = await new BrowserTool(stuck.shell, async () => {}, noWait).prepare({ action: "new_tab" });
-  await assert.rejects(prepared.run(), (err: unknown) => err instanceof ActionProblem && err.status === "failed" && /did not open a new tab/.test(err.message));
-});
-
-test("browser: a browser running in the background with no window is not woken up by new_tab", async () => {
-  const b = fakeBrowser("Google Chrome", { windows: false, inFront: false });
-  const prepared = await new BrowserTool(b.shell, async () => {}, noWait).prepare({ action: "new_tab", url: "youtube.com" });
-  await assert.rejects(prepared.run(), (err: unknown) => err instanceof ActionProblem && /no window open/.test(err.message));
-  assert.equal(b.tabs.length, 0, "no window was made");
-  assert.ok(!b.scripts.some((src) => src.includes("make()")), "the window-making script never ran");
-});
-
-test("browser: a new tab that could not be checked is said so, never reported as not done", async () => {
-  const b = fakeBrowser("Google Chrome", { unreadable: true });
-  const done = await (await new BrowserTool(b.shell, async () => {}, noWait).prepare({ action: "new_tab" })).run();
-  assert.equal(b.tabs.length, 2, "the tab was opened");
+  const browser = new BrowserTool(cua, noWait);
+  const done = await (await browser.prepare({ action: "go", url: "https://github.com" })).run();
   assert.equal(done.verified, "screen");
-  assert.match(done.message, /could not be checked/);
-  // A browser that stops answering cannot hold the action open: the check
-  // gives up after two failed reads, and each read is given 2 seconds.
-  const reads = b.shell.calls.map(([, args], i) => ({ src: args[args.length - 1] ?? "", t: b.shell.timeouts[i] })).filter((c) => c.src.includes("JSON.stringify(w.tabs()"));
-  assert.equal(reads.length, 3, "one read before, two failed reads after");
-  assert.deepEqual(reads.slice(1).map((r) => r.t), [2000, 2000]);
+  assert.deepEqual(cua.calls.slice(-3).map((c) => c.tool), ["hotkey", "type_text", "press_key"]);
 });
 
-test("browser: every action the shared catalog offers is one the tool can do", async () => {
-  const { hostToolSchema } = await import("./catalog.js");
-  const offered = hostToolSchema("browser")?.parameters.properties?.action.enum as string[];
-  assert.ok(offered.includes("new_tab"));
-  const b = fakeBrowser("Google Chrome");
-  const tool = new BrowserTool(b.shell, async () => {}, noWait);
-  for (const action of offered) {
-    const prepared = await tool.prepare({ action, tab: 1, url: "youtube.com" });
-    assert.equal(prepared.action, action, `${action} is handled`);
-  }
-  await assert.rejects(tool.prepare({ action: "teleport" }), (err: unknown) => err instanceof ActionProblem && err.status === "unsupported");
+test("browser: Safari remains extensionless by using Cua native keyboard/text control", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return {
+      text: "",
+      structured: { windows: [{ pid: 82, window_id: 10, app_name: "Safari", title: "Start Page", z_index: 20, is_on_screen: true }] },
+    };
+    return { text: "ok" };
+  });
+  const browser = new BrowserTool(cua, noWait);
+  const go = await browser.prepare({ action: "go", url: "https://github.com" });
+  const done = await go.run();
+  assert.equal(done.verified, "screen");
+  assert.deepEqual(cua.calls.slice(-3).map((c) => c.tool), ["hotkey", "type_text", "press_key"]);
 });
 
-test("a web address may carry a search, spaces and all", () => {
-  assert.equal(asWebAddress("youtube.com/results?search_query=Andrew Tate")?.toString(), "https://youtube.com/results?search_query=Andrew%20Tate");
-  assert.equal(asWebAddress("youtube.com?q=x")?.toString(), "https://youtube.com/?q=x");
-  assert.equal(asWebAddress("report.pdf?x=1"), null, "still a file, not a website");
-  assert.equal(asWebAddress("youtube.com now"), null);
-  assert.equal(asWebAddress("Andrew Tate"), null);
+test("browser: existing-profile typed binding requires the explicit GNSIS authorization lease", async () => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const grants: Array<[number, number]> = [];
+  const cua: CuaControl = {
+    async call(tool, args) {
+      calls.push({ tool, args });
+      if (tool === "list_windows") return {
+        text: "",
+        structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "Start", z_index: 20, is_on_screen: true }] },
+      };
+      if (tool === "get_browser_state") return {
+        text: "",
+        structured: { target_id: "bt-1", tabs: [{ tab_id: "tab-1", title: "Start", url: "https://example.org/", selected: true }] },
+      };
+      return { text: "ok" };
+    },
+    async withExistingProfileAuthorization(pid, windowId, run) {
+      grants.push([pid, windowId]);
+      return await run();
+    },
+  };
+  const browser = new BrowserTool(cua, noWait);
+  const prepare = await browser.prepare({ action: "prepare" });
+  assert.ok(prepare.consequential);
+  await prepare.run();
+  assert.deepEqual(grants, [[81, 9]]);
+  const attach = calls.find((entry) => entry.tool === "browser_prepare");
+  assert.deepEqual(attach?.args.strategy, { kind: "existing_profile" });
+});
+
+test("browser: upload and dialog capabilities are exposed through the typed binding", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return {
+      text: "",
+      structured: { windows: [{ pid: 81, window_id: 9, app_name: "Microsoft Edge", title: "Upload", z_index: 20, is_on_screen: true }] },
+    };
+    if (tool === "get_browser_state") return {
+      text: "",
+      structured: { target_id: "bt-2", tabs: [{ tab_id: "tab-2", title: "Upload", url: "https://example.org/", selected: true }] },
+    };
+    return { text: "ok", structured: { ok: true } };
+  });
+  const browser = new BrowserTool(cua, noWait);
+  const upload = await browser.prepare({ action: "upload", ref: "p1:3", files: ["/tmp/a.pdf"] });
+  assert.ok(upload.consequential);
+  await upload.run();
+  assert.equal(cua.calls.at(-1)?.tool, "browser_set_input_files");
+
+  const dialog = await browser.prepare({ action: "dialog", dialog_action: "inspect" });
+  await dialog.run();
+  assert.equal(cua.calls.at(-1)?.tool, "browser_dialog");
+});
+
+test("window and clipboard capabilities use Cua tools", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return { text: "", structured: oneWindow };
+    if (tool === "clipboard_read") return { text: "", structured: { types: ["public.utf8-plain-text"], text: "hello" } };
+    return { text: "ok" };
+  });
+
+  const windows = new WindowTool(cua);
+  await (await windows.prepare({ action: "focus", app: "TextEdit" })).run();
+  assert.equal(cua.calls.at(-1)?.tool, "bring_to_front");
+
+  await (await windows.prepare({ action: "move_resize", app: "TextEdit", x: 20, y: 30, width: 800, height: 600 })).run();
+  assert.equal(cua.calls.at(-1)?.tool, "set_window_frame");
+
+  const clipboard = new ClipboardTool(cua);
+  await (await clipboard.prepare({ action: "read", include_text: true })).run();
+  assert.equal(cua.calls.at(-1)?.tool, "clipboard_read");
+  await (await clipboard.prepare({ action: "write", text: "hello" })).run();
+  assert.equal(cua.calls.at(-1)?.tool, "clipboard_write");
 });

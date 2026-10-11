@@ -118,6 +118,9 @@ class EchoingModel:
     def interrupt_output(self) -> None:
         return None
 
+    def acknowledge_playback(self, output_id: str, *, phase: str, chunks_played: int) -> None:
+        return None
+
     def close(self, *, drain_speech: bool = False) -> None:
         self.closed = True
 

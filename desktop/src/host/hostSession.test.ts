@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type RawData } from "ws";
 import { HostSession } from "./hostSession.js";
 import type { ScreenChannelConfig } from "../shared/protocol.js";
 
@@ -75,6 +75,73 @@ test("screen socket errors surface via onScreen, not uncaught exceptions", async
   });
   assert.ok(err, "expected a screen transport.error update");
   session.disconnect("test_done");
+});
+
+test("daemon playback cancellation is telemetry-only while local interruption sends break", async (t) => {
+  const server = new WebSocketServer({ port: 0 });
+  await once(server, "listening");
+  const port = (server.address() as { port: number }).port;
+  const connection = once(server, "connection");
+  const session = new HostSession({
+    runtimeUrl: `http://127.0.0.1:${port}`,
+    hostId: "h1",
+    chassis: "test",
+    capabilities,
+  });
+  session.connect("s1");
+  const socketOpen = once(session["duplex"]!, "open");
+  const [socket, request] = await connection;
+  assert.equal(new URL(request.url, "http://127.0.0.1").pathname, "/ws/duplex");
+  await socketOpen;
+  t.after(() => {
+    session.disconnect("test_done");
+    return new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  const wireMessages: string[] = [];
+  socket.on("message", (data: RawData, isBinary: boolean) => {
+    if (!isBinary) wireMessages.push(data.toString());
+  });
+  const waitForMessageCount = async (count: number) => {
+    while (wireMessages.length < count) await once(socket, "message");
+  };
+  const daemonMessages = waitForMessageCount(1);
+  session.emit({
+    type: "playback.cancelled",
+    playback_id: "pb-daemon",
+    output_epoch: 1,
+    reason: "daemon_cancel",
+    ts_ms: Date.now(),
+  });
+  await daemonMessages;
+  const daemonControls = wireMessages.map((message) => JSON.parse(message) as {
+    type: string;
+    reason?: string;
+    event?: { type: string; reason?: string };
+  });
+  assert.deepEqual(daemonControls.map((control) => control.type), ["host.event"]);
+  assert.equal(daemonControls[0].event?.type, "playback.cancelled");
+  assert.equal(daemonControls[0].event?.reason, "daemon_cancel");
+
+  const localMessages = waitForMessageCount(3);
+  session.emit({
+    type: "playback.cancelled",
+    playback_id: "pb-local",
+    output_epoch: 2,
+    reason: "user_interrupt",
+    ts_ms: Date.now(),
+  });
+  await localMessages;
+  const controls = wireMessages.map((message) => JSON.parse(message) as {
+    type: string;
+    reason?: string;
+    event?: { type: string; reason?: string };
+  });
+  assert.deepEqual(
+    controls.filter((control) => control.type === "break"),
+    [{ type: "break", reason: "user_interrupt" }],
+  );
+
 });
 
 test("ending a call without stopping keeps the daemon session: call.ended goes out, stop does not", async () => {

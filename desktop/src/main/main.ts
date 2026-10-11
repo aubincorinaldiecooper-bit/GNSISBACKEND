@@ -29,6 +29,7 @@ import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
 import { ScreenWatch } from "../host/screenWatch.js";
+import { DesktopVisualConnector } from "../host/desktopVisualConnector.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
 import { hostLog } from "./hostLog.js";
 import {
@@ -45,6 +46,9 @@ import { MacFinder } from "../tools/mac/finder.js";
 import { OpenTool } from "../tools/mac/open.js";
 import { BrowserTool } from "../tools/mac/browser.js";
 import { InputTool } from "../tools/mac/input.js";
+import { WindowTool } from "../tools/mac/window.js";
+import { ClipboardTool } from "../tools/mac/clipboard.js";
+import { NativeCuaControl } from "../tools/cua/driver.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
 import { MenuBar } from "./menuBar.js";
@@ -100,13 +104,16 @@ const tools = new ToolRegistry({ runtimeUrl: RUNTIME_URL });
 // them (host/runtimeTrust.ts).
 const finder = process.platform === "darwin" ? new MacFinder(systemShell) : undefined;
 const filesTool = new FilesTool({ home: os.homedir(), finder });
-const inputTool = new InputTool(systemShell, {
+const cua = new NativeCuaControl();
+const inputTool = new InputTool(cua, {
   bounds: () => displays.getPrimaryDisplay().bounds,
 });
 tools.registerAction(new OpenTool(systemShell, filesTool));
 tools.registerAction(filesTool);
-tools.registerAction(new BrowserTool(systemShell, (combo) => inputTool.press(combo)));
+tools.registerAction(new BrowserTool(cua));
 tools.registerAction(inputTool);
+tools.registerAction(new WindowTool(cua));
+tools.registerAction(new ClipboardTool(cua));
 const ACTIONS_TRUST = actionsAllowed(
   RUNTIME_URL,
   process.env.GNSIS_ACTIONS === "on" || process.env.GNSIS_ACTIONS === "off"
@@ -122,6 +129,7 @@ const OFFERED_ACTIONS = ACTIONS_TRUST.allowed
   : [];
 const turns = new TurnLog();
 const screenWatch = new ScreenWatch();
+let desktopVisual: DesktopVisualConnector | null = null;
 // The person's own words, so an action they asked for by name runs without a
 // second ask. Only where actions are offered; see host/utterances.ts.
 const utterances =
@@ -202,7 +210,11 @@ const host = new HostSession({
 
 const broker = new ActionBroker({
   registry: tools,
-  send: (control) => host.sendControl(control as unknown as ClientControl),
+  send: (control) => {
+    if (!desktopVisual?.handleBrokerControl(control)) {
+      host.sendControl(control as unknown as ClientControl);
+    }
+  },
   event: (event) => host.emit(event),
   confirm: askPerson,
   accessibility: (prompt) =>
@@ -429,12 +441,15 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
+app.on("before-quit", () => {
+  void cua.close().catch((error) => hostLog("execution", `Cua shutdown failed: ${String(error)}`));
+});
+
 app.whenReady().then(async () => {
-  // Browser control is native on macOS: the existing browser tool owns tabs
-  // and navigation, while the input tool clicks/types into the front browser.
-  // Screen perception already streams through the canonical screen.frame path,
-  // so no Chrome extension or localhost browser hub is part of launch.
-  hostLog("browser", "native browser control enabled; no extension required");
+  // Cua Driver owns desktop/browser actuation. Chrome and Edge prefer its
+  // exact browser binding; other browsers stay on Cua native accessibility
+  // and keyboard control. Panoptic remains the only continuous visual path.
+  hostLog("browser", "Cua desktop/browser control enabled; no extension or JXA actuator required");
 
   hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
   hostLog(
@@ -469,6 +484,34 @@ app.whenReady().then(async () => {
   createWindow();
   host.connect(SESSION_ID);
   host.ready();
+  const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
+  const visualHostToken = process.env.GNSIS_VISUAL_HOST_TOKEN?.trim();
+  const visualTask = process.env.GNSIS_VISUAL_TASK?.trim();
+  if (visualBaseUrl && visualHostToken && visualTask) {
+    desktopVisual = new DesktopVisualConnector({
+      baseUrl: visualBaseUrl,
+      hostToken: visualHostToken,
+      task: visualTask,
+      capabilityManifestId: HOST_TOOLS_VERSION,
+      latestTurnId: () => turns.latest()?.turnId ?? null,
+      dispatch: (control) => broker.handleControl(control),
+      log: hostLog,
+    });
+    try {
+      await desktopVisual.start();
+    } catch (error) {
+      hostLog(
+        "visual",
+        `desktop visual session did not start: ${String((error as Error).message ?? error)}`,
+      );
+      desktopVisual = null;
+    }
+  } else if (visualBaseUrl || visualHostToken || visualTask) {
+    hostLog(
+      "visual",
+      "desktop visual connector requires base URL, host token, and task together",
+    );
+  }
 
   shortcuts.register("Control+Alt+Space", () => {
     host.interrupt("global_shortcut");
@@ -553,8 +596,10 @@ app.whenReady().then(async () => {
   });
   if (utterances) setInterval(() => utterances.idle(Date.now()), 1_000);
   ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) => {
-    if (host.sendScreenFrame(metadata, Buffer.from(payload))) {
+    const frame = Buffer.from(payload);
+    if (host.sendScreenFrame(metadata, frame)) {
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
+      desktopVisual?.observeFrame(metadata, frame);
     }
   });
   // A yes/no question from the page, such as "Erase your GNSIS?", asked the
@@ -609,6 +654,7 @@ app.on("will-quit", () => {
   hostLog("host", "will-quit");
   menuBar?.destroy();
   shortcuts.unregisterAll();
+  void desktopVisual?.close();
   host.disconnect("app_quit");
 });
 

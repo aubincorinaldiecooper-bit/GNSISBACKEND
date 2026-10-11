@@ -109,8 +109,8 @@ test("a reason goes into the log without the words it quotes", () => {
 
 test("everyday shortcuts are named by what they do, as well as by their key", async () => {
   const { InputTool } = await import("../tools/mac/input.js");
-  const shell = { run: async () => ({ code: 0, stdout: "", stderr: "" }) };
-  const input = new InputTool(shell, { bounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) });
+  const cua = { call: async () => ({ text: "ok" }) };
+  const input = new InputTool(cua, { bounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) });
   const verdict = async (keys: string, words: string) => judge(await input.prepare({ action: "keys", keys }), said(words), NOW);
   for (const [keys, words] of [
     ["cmd+c", "copy that"],

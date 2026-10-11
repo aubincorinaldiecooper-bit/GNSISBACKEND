@@ -1,14 +1,17 @@
-"""Visual decision engine: persistent GNSIS frame + goal -> structured decision.
+"""Panoptic perception and optional grounded visual decisions.
 
-DecisionPolicy is the model-independent seam used by the runtime.
-JEVEngine implements it with the frozen MiniCPM-V backbone and JEV head.
+PanopticPolicy is the model-independent perception seam used by the runtime.
+JEVEngine also implements the separate DecisionProvider interface.
 Environment-specific capture and execution are deliberately outside this module.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -19,11 +22,31 @@ from PIL import Image
 from .backbone import BackboneConfig, MiniCPMVBackbone, VisualTokens
 from .batching import HEAD_INPUTS, collate
 from .decode import decode
+from .grounding import (
+    CLOSEUP_SIZE,
+    TargetGrounder,
+    TextReader,
+    crop_around,
+    failed,
+    ground_from_elements,
+)
 from .head import HeadConfig, JEVDecisionHead
+from .perception import (
+    PerceivedElement,
+    TargetGrounding,
+    VisualPerception,
+    build_perception_prompt,
+    merge_text_regions,
+    parse_perception_or_grounding,
+    perception_schema,
+    validate_target_point,
+)
 from .prompt import build_layout
 from .schema import Decision, validate_decision
+from .verify_vlm import minicpmv_generator
 
 REUSE_DISTANCE = 0.002
+log = logging.getLogger(__name__)
 
 
 class VisualFrame(Protocol):
@@ -35,7 +58,7 @@ class VisualFrame(Protocol):
     def signature(self) -> np.ndarray: ...
 
 
-class DecisionPolicy(Protocol):
+class DecisionProvider(Protocol):
     name: str
 
     def decide(
@@ -46,9 +69,23 @@ class DecisionPolicy(Protocol):
         motion: float,
         viewport: tuple[int, int],
         cache: "VisualCache",
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision: ...
 
     def encode(self, frame: VisualFrame, cache: "VisualCache") -> None: ...
+
+
+class PanopticPolicy(Protocol):
+    name: str
+
+    def perceive(
+        self,
+        frames: Sequence[VisualFrame],
+        motion: float,
+        viewport: tuple[int, int],
+        focus: str | None = None,
+        target: tuple[int, int] | None = None,
+    ) -> VisualPerception: ...
 
 
 @dataclass
@@ -64,18 +101,28 @@ class VisualCache:
     def lookup(self, frame: VisualFrame) -> VisualTokens | None:
         if self.tokens is None or self.signature is None:
             return None
-        if frame.frame_id == self.frame_id or frame_distance(frame.signature, self.signature) < REUSE_DISTANCE:
+        if (
+            frame.frame_id == self.frame_id
+            or frame_distance(frame.signature, self.signature) < REUSE_DISTANCE
+        ):
             return self.tokens
         return None
 
     def store(self, frame: VisualFrame, tokens: VisualTokens) -> None:
-        self.signature, self.frame_id, self.tokens = frame.signature, frame.frame_id, tokens
+        self.signature, self.frame_id, self.tokens = (
+            frame.signature,
+            frame.frame_id,
+            tokens,
+        )
 
 
 def frame_signature(image: Image.Image, size: tuple[int, int] = (48, 30)) -> np.ndarray:
     """Small grayscale perceptual signature used only for cache reuse."""
 
-    return np.asarray(image.convert("L").resize(size, Image.BILINEAR), dtype=np.float32) / 255.0
+    return (
+        np.asarray(image.convert("L").resize(size, Image.BILINEAR), dtype=np.float32)
+        / 255.0
+    )
 
 
 def frame_distance(a: np.ndarray, b: np.ndarray) -> float:
@@ -95,7 +142,9 @@ class RuntimeVisualFrame:
     signature: np.ndarray
 
     @classmethod
-    def from_image(cls, frame_id: str | int, image: Image.Image) -> "RuntimeVisualFrame":
+    def from_image(
+        cls, frame_id: str | int, image: Image.Image
+    ) -> "RuntimeVisualFrame":
         rgb = image.convert("RGB")
         return cls(frame_id=frame_id, _image=rgb, signature=frame_signature(rgb))
 
@@ -106,12 +155,32 @@ class RuntimeVisualFrame:
 class JEVEngine:
     name = "minicpm-v-4.6+jev-head"
 
-    def __init__(self, backbone: BackboneConfig, head_path: str):
+    def __init__(
+        self,
+        backbone: BackboneConfig,
+        head_path: str,
+        grounder: TargetGrounder | None = None,
+        text_reader: TextReader | None = None,
+    ):
         self.backbone = MiniCPMVBackbone(backbone)
         ckpt = torch.load(head_path, map_location="cpu", weights_only=False)
         self.head = JEVDecisionHead(HeadConfig(**ckpt["config"])).eval()
         self.head.load_state_dict(ckpt["state_dict"])
         self._lock = threading.Lock()
+        self._generate_perception = minicpmv_generator(
+            self.backbone,
+            lock=self._lock,
+            max_new_tokens=640,
+            json_schema=perception_schema(),
+        )
+        self.grounder = grounder
+        self.text_reader = text_reader
+        self._grounding_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="panoptic-grounding"
+        )
+        self._text_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="panoptic-text"
+        )
 
     def encode(self, frame: VisualFrame, cache: VisualCache) -> None:
         with self._lock:
@@ -126,6 +195,7 @@ class JEVEngine:
         motion: float,
         viewport: tuple[int, int],
         cache: VisualCache,
+        allowed_actions: tuple[str, ...] | None = None,
     ) -> Decision:
         with self._lock:
             t0 = time.perf_counter()
@@ -153,7 +223,13 @@ class JEVEngine:
             batch = collate([record])
             with torch.inference_mode():
                 out = self.head(**{k: batch[k] for k in HEAD_INPUTS})
-            decision = decode(out, layout.values, feats.grid, viewport)
+            decision = decode(
+                out,
+                layout.values,
+                feats.grid,
+                viewport,
+                allowed_actions=allowed_actions,
+            )
             t2 = time.perf_counter()
         timing = {
             "vision": round(vision_ms, 1),
@@ -165,3 +241,79 @@ class JEVEngine:
             replace(decision, frame_id=frame.frame_id, timing_ms=timing),
             viewport,
         )
+
+    def perceive(
+        self,
+        frames: Sequence[VisualFrame],
+        motion: float,
+        viewport: tuple[int, int],
+        focus: str | None = None,
+        target: tuple[int, int] | None = None,
+    ) -> VisualPerception:
+        selected = tuple(frames[-4:])
+        if not selected:
+            raise ValueError("Panoptic perception requires a current frame")
+        point = None if target is None else validate_target_point(target, viewport)
+        current = selected[-1].image()
+        grounding: Future[TargetGrounding] | None = None
+        if point is not None and self.grounder is not None:
+            grounding = self._grounding_pool.submit(
+                self.grounder.ground, current, point, focus
+            )
+        text: Future[tuple[PerceivedElement, ...]] | None = None
+        if self.text_reader is not None:
+            text = self._text_pool.submit(self.text_reader.read_text, current)
+        images = [frame.image() for frame in selected]
+        closeup: tuple[int, int, int, int] | None = None
+        if point is not None:
+            crop = crop_around(current, point, CLOSEUP_SIZE)
+            images.append(crop.image)
+            closeup = (*crop.origin, *crop.image.size)
+        raw = self._generate_perception(
+            tuple(images),
+            build_perception_prompt(
+                viewport,
+                temporal=len(selected) > 1,
+                focus=focus,
+                target=point,
+                closeup=closeup,
+            ),
+        )
+        perception = parse_perception_or_grounding(
+            raw,
+            None if grounding is None else lambda: self._grounding_result(grounding, point),
+            frame_id=str(selected[-1].frame_id),
+            observed_frame_ids=tuple(str(frame.frame_id) for frame in selected),
+            motion=motion,
+            viewport=viewport,
+        )
+        if text is not None:
+            perception = merge_text_regions(perception, self._text_result(text))
+        if point is None:
+            return perception
+        if grounding is None:
+            return replace(
+                perception,
+                grounding=ground_from_elements(perception.elements, point, self.name),
+            )
+        if perception.grounding is not None:
+            return perception
+        return replace(perception, grounding=self._grounding_result(grounding, point))
+
+    def _text_result(
+        self, text: Future[tuple[PerceivedElement, ...]]
+    ) -> tuple[PerceivedElement, ...]:
+        try:
+            return text.result()
+        except Exception:
+            log.exception("text reading failed")
+            return ()
+
+    def _grounding_result(
+        self, grounding: Future[TargetGrounding], point: tuple[int, int]
+    ) -> TargetGrounding:
+        try:
+            return grounding.result()
+        except Exception:
+            log.exception("target grounding failed at %s", point)
+            return failed(point, self.grounder.name)

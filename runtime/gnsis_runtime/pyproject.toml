@@ -9,6 +9,8 @@ description = "Realtime GNSIS runtime with native task tools and pluggable worke
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.110",
+  "PyJWT[crypto]>=2.8",
+  "mcp==2.2.0",
   "mcpmft>=1.0.0",
   "pillow>=10",
   "pyyaml>=6",
@@ -40,11 +42,14 @@ visual = [
   "rapidocr==3.9.2",
   "onnxruntime==1.30.0",
   "opencv-python==5.0.0.93",
+  "xgrammar==0.2.8",
 ]
 
 [project.scripts]
 gnsis-serve = "gnsis_runtime.cli:main"
+gnsis-realtime-bench = "gnsis_runtime.realtime_bench:main"
 gnsis-live-qr = "gnsis_runtime.live_qr:main"
+smaller-gnsis-serve = "gnsis_runtime.visual.serve:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

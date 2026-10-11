@@ -10,7 +10,7 @@ import shutil
 import traceback
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 
@@ -22,6 +22,13 @@ from mcpmft.tool_protocol import ensure_lean_task_tools, normalize_tool_schema
 from .asr_process import AsrConfig, AsrService, asr_base_url, validate_asr_config
 from .host_tools import load_host_tool_catalog
 from .media_mode import VIDEO_SOURCES
+from .providers.foreground import RealtimeConfig, validate_realtime_config
+
+if TYPE_CHECKING:
+    from mcpmft.infer.online import DuplexParams
+
+    from .foreground_session import NativeForegroundParams
+    from .online_duplex import OnlineDuplexSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -163,6 +170,7 @@ class MemoryConfig:
     session_recall_token_env: str = "GNSIS_SIMPLEMEM_TOKEN"
     session_recall_top_k: int = 8
     session_recall_timeout_sec: float = 10.0
+    session_recall_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -187,6 +195,10 @@ class ReleaseConfig:
     coordinator: CoordinatorConfig
     memory: MemoryConfig
     harness: HarnessConfig
+    # Which model sits behind the realtime provider seam. The Thinker is the
+    # default and the rollback path; Venus is the challenger measured against
+    # it through the same provider calls (gnsis-realtime-bench).
+    realtime: RealtimeConfig = RealtimeConfig()
 
 
 def _section(cls: type[Any], document: dict[str, Any], name: str) -> Any:
@@ -208,6 +220,18 @@ def load_config(path: str | Path) -> ReleaseConfig:
         document = yaml.safe_load(handle) or {}
     if not isinstance(document, dict):
         raise ValueError("Top-level YAML must be a mapping")
+    # Deployment environment is authoritative for the self-hosted endpoint.
+    memory_document = document.setdefault("memory", {})
+    if not isinstance(memory_document, dict):
+        raise ValueError("memory must be a YAML mapping")
+    memory_document["session_recall_url"] = (
+        os.environ.get("GNSIS_SIMPLEMEM_URL", "").strip()
+        or memory_document.get("session_recall_url")
+    )
+    memory_document.setdefault("session_recall_token_env", "GNSIS_SIMPLEMEM_TOKEN")
+    required_override = os.environ.get("GNSIS_SIMPLEMEM_REQUIRED", "").strip().lower()
+    if required_override in {"1", "true", "yes"}:
+        memory_document["session_recall_required"] = True
     sections = {
         "model",
         "server",
@@ -217,6 +241,7 @@ def load_config(path: str | Path) -> ReleaseConfig:
         "coordinator",
         "memory",
         "harness",
+        "realtime",
     }
     unknown = sorted(set(document) - sections)
     if unknown:
@@ -230,6 +255,7 @@ def load_config(path: str | Path) -> ReleaseConfig:
         coordinator=_section(CoordinatorConfig, document, "coordinator"),
         memory=_section(MemoryConfig, document, "memory"),
         harness=_section(HarnessConfig, document, "harness"),
+        realtime=_section(RealtimeConfig, document, "realtime"),
     )
     validate_release_config(config)
     return config
@@ -255,9 +281,22 @@ def validate_release_config(config: ReleaseConfig) -> None:
     if not isinstance(config.worker.settings, dict):
         raise ValueError("worker.settings must be a YAML mapping")
     validate_asr_config(config.asr)
+    if config.memory.session_recall_required:
+        if not config.memory.session_recall_url:
+            raise ValueError(
+                "memory.session_recall_url is required when "
+                "memory.session_recall_required is true"
+            )
+        memory_token = os.environ.get(config.memory.session_recall_token_env, "")
+        if len(memory_token) < 32:
+            raise ValueError(
+                f"{config.memory.session_recall_token_env} must contain at least 32 characters"
+            )
     if config.asr.mode == "managed" and config.asr.port == server.port:
         raise ValueError("managed ASR and the GNSIS server must use different ports")
-    if not duplex.checkpoint:
+    # A remote foreground provider has no Thinker to load, so the bench config
+    # that selects one may leave the Thinker paths out.
+    if not duplex.checkpoint and config.realtime.provider == "thinker":
         raise ValueError("duplex.checkpoint is required")
     if (
         isinstance(duplex.input_speech_rms, bool)
@@ -353,6 +392,7 @@ def preflight_config(config: ReleaseConfig) -> None:
         if needs_worker
         else None
     )
+    validate_realtime_config(config.realtime)
     _require_directory("model.model_name_or_path", config.model.model_name_or_path)
     if config.model.processor_name_or_path:
         _require_directory(
@@ -528,7 +568,7 @@ def _duplex_params(config: DuplexConfig) -> DuplexParams:
     )
 
 
-def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
+def _duplex_settings(config: ReleaseConfig) -> OnlineDuplexSettings:
     """Map a loaded config onto the duplex runtime's settings.
 
     Split out of `build_app` so it can be tested without loading a model. A
@@ -582,42 +622,16 @@ def _duplex_settings(config: ReleaseConfig) -> "OnlineDuplexSettings":
     )
 
 
-def build_app(config: ReleaseConfig):
+def _load_thinker(config: ReleaseConfig) -> tuple[Any, Any | None]:
+    """Load the Thinker and, when configured, its detached Talker.
+
+    Shared by the live app and the provider bench so both drive exactly the
+    model the deployment serves. Returns ``(bundle, detached_talker)``.
+    """
+
     from mcpmft.infer.common import load_for_infer
 
-    from .codex_coordinator import CodexCoordinator, CodexCoordinatorConfig
-    from .contracts import storage_key
-    from .gateway import GNSISGateway, ProviderRegistry
-    from .memory_provider import HttpMemoryProvider
-    from .online_duplex import OnlineDuplexSettings, create_online_duplex_app
-    from .providers import ProviderBuildContext, builtin_provider_registry
-    from .supervision import TaskLedger
-
-    server = config.server
     duplex = config.duplex
-
-    runtime_dir = Path(server.runtime_dir).expanduser().resolve()
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    ledger_dir = (
-        Path(server.ledger_dir).expanduser().resolve()
-        if server.ledger_dir
-        else runtime_dir / "gateway"
-    )
-    worker_cwd = str(Path(config.worker.cwd).expanduser().resolve())
-    coordinator_cwd = str(
-        Path(config.coordinator.cwd or worker_cwd).expanduser().resolve()
-    )
-    # See preflight_config. `none` means no action layer; anything else builds
-    # its provider exactly as before.
-    needs_worker = config.worker.provider != "none"
-    provider_factory = (
-        builtin_provider_registry().configure(
-            config.worker.provider,
-            config.worker.settings,
-        )
-        if needs_worker
-        else None
-    )
     detached = duplex.detached_talker_device is not None
     thinker_model = replace(config.model, init_tts=False) if detached else config.model
     try:
@@ -680,7 +694,111 @@ def build_app(config: ReleaseConfig):
         startup_timing.mark("detached_talker_ready", "ready", gpu=talker_gpu_index)
         startup_timing.resource_snapshot("after_talker_load")
         startup_timing.resource_snapshot("after_token2wav")
-    params = _duplex_params(duplex)
+    return bundle, detached_talker
+
+
+def build_foreground_provider(config: ReleaseConfig):
+    """The configured foreground model behind the ``RealtimeProvider`` seam.
+
+    Venus is a remote model server, so selecting it loads nothing here. The
+    Thinker is loaded exactly as ``build_app`` loads it and its sessions come
+    from the live sockets' own builder.
+    """
+
+    from .online_duplex import thinker_session_factory
+    from .providers.foreground import build_realtime_provider
+
+    if config.realtime.provider != "thinker":
+        return build_realtime_provider(config.realtime)
+    bundle, detached_talker = _load_thinker(config)
+    runtime_dir = Path(config.server.runtime_dir).expanduser().resolve()
+    factory = thinker_session_factory(
+        bundle,
+        params=_duplex_params(config.duplex),
+        settings=_duplex_settings(config),
+        media_dir=runtime_dir / "media",
+        detached_talker=detached_talker,
+    )
+    return build_realtime_provider(
+        config.realtime, thinker_session_factory=factory
+    )
+
+
+def _native_foreground_params(config: DuplexConfig) -> NativeForegroundParams:
+    """The live runtime's model-clock knobs when no Thinker is in process."""
+
+    from .foreground_session import NativeForegroundParams
+
+    return NativeForegroundParams(
+        chunk_ms=1000,
+        generate_audio=config.generate_audio,
+        sliding_window_mode=config.sliding_window_mode,
+        context_max_units=config.context_max_units,
+        context_previous_max_tokens=config.context_previous_max_tokens,
+        speak_text_tokens_per_unit=config.speak_text_tokens_per_unit,
+        decode_mode=config.decode_mode,
+    )
+
+
+def build_app(config: ReleaseConfig):
+    """The live GNSIS runtime for whichever foreground provider is configured.
+
+    ``realtime.provider`` only decides who answers the model calls: the
+    Thinker loaded here, or a native provider's remote sessions. Sockets,
+    Gateway, coordinator, harness bridge, memory, timeline and delivery are
+    the same objects either way.
+    """
+
+    from .codex_coordinator import CodexCoordinator, CodexCoordinatorConfig
+    from .contracts import storage_key
+    from .gateway import GNSISGateway, ProviderRegistry
+    from .memory_provider import HttpMemoryProvider
+    from .online_duplex import create_online_duplex_app
+    from .providers import ProviderBuildContext, builtin_provider_registry
+    from .supervision import TaskLedger
+
+    server = config.server
+    duplex = config.duplex
+
+    runtime_dir = Path(server.runtime_dir).expanduser().resolve()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    ledger_dir = (
+        Path(server.ledger_dir).expanduser().resolve()
+        if server.ledger_dir
+        else runtime_dir / "gateway"
+    )
+    worker_cwd = str(Path(config.worker.cwd).expanduser().resolve())
+    coordinator_cwd = str(
+        Path(config.coordinator.cwd or worker_cwd).expanduser().resolve()
+    )
+    # See preflight_config. `none` means no action layer; anything else builds
+    # its provider exactly as before.
+    needs_worker = config.worker.provider != "none"
+    provider_factory = (
+        builtin_provider_registry().configure(
+            config.worker.provider,
+            config.worker.settings,
+        )
+        if needs_worker
+        else None
+    )
+    foreground_provider = None
+    foreground_prompt = None
+    if config.realtime.provider == "thinker":
+        bundle, detached_talker = _load_thinker(config)
+        params: Any = _duplex_params(duplex)
+    else:
+        from .providers.foreground import (
+            build_realtime_provider,
+            foreground_system_prompt,
+        )
+
+        bundle, detached_talker = None, None
+        params = _native_foreground_params(duplex)
+        foreground_provider = build_realtime_provider(config.realtime)
+        foreground_prompt = foreground_system_prompt(
+            config.realtime, thinker_prompt=duplex.system_prompt
+        )
     settings = _duplex_settings(config)
     memory_provider = (
         HttpMemoryProvider(
@@ -693,15 +811,24 @@ def build_app(config: ReleaseConfig):
     )
     from .session_memory import SessionMemoryRecall
 
+    session_recall_url = (
+        config.memory.session_recall_url
+        or os.environ.get("GNSIS_SIMPLEMEM_URL", "").strip()
+    )
+    if not session_recall_url:
+        LOGGER.warning(
+            "session memory disabled: set GNSIS_SIMPLEMEM_URL in the Modal "
+            "deployment environment to enable durable recall and perception writes"
+        )
     session_memory = (
         SessionMemoryRecall(
-            config.memory.session_recall_url,
+            session_recall_url,
             namespace=config.memory.session_recall_namespace,
             token=os.environ.get(config.memory.session_recall_token_env, ""),
             top_k=config.memory.session_recall_top_k,
             timeout_s=config.memory.session_recall_timeout_sec,
         )
-        if config.memory.session_recall_url
+        if session_recall_url
         else None
     )
 
@@ -777,6 +904,8 @@ def build_app(config: ReleaseConfig):
         session_memory=session_memory,
         harness_client=harness_client,
         harness_poll_sec=config.harness.poll_sec,
+        foreground_provider=foreground_provider,
+        foreground_system_prompt=foreground_prompt,
     )
 
 
@@ -813,6 +942,10 @@ def main(argv: list[str] | None = None) -> None:
                     "worker": {
                         "provider": config.worker.provider,
                         "profile": config.worker.profile,
+                    },
+                    "realtime": {
+                        "provider": config.realtime.provider,
+                        "venus_url": config.realtime.venus_url,
                     },
                     "sliding_window_mode": config.duplex.sliding_window_mode,
                 },
