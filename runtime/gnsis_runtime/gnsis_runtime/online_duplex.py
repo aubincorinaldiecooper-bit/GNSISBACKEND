@@ -3242,11 +3242,17 @@ def create_online_duplex_app(
                             "context_revision": turn.context_revision,
                         }
                     )
-                    try:
-                        event = await asyncio.to_thread(
-                            session.feed_text_turn,
-                            turn.text,
+                    feed_text_turn = getattr(session, "feed_text_turn", None)
+                    if not callable(feed_text_turn):
+                        await send_text(
+                            {
+                                "type": "error",
+                                "message": "the active model does not take typed turns",
+                            }
                         )
+                        continue
+                    try:
+                        event = await asyncio.to_thread(feed_text_turn, turn.text)
                     except (TypeError, ValueError, RuntimeError) as exc:
                         await send_text({"type": "error", "message": str(exc)})
                         continue
