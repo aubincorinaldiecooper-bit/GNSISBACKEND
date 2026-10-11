@@ -108,6 +108,8 @@ export class ElectronLiveHost implements LiveHost {
   private settling: Promise<void> = Promise.resolve();
   /** The runtime said, in its `ready`, that it answers typed turns. */
   private typedTurns = false;
+  /** The main process can answer deterministic local commands without a runtime. */
+  private localTurns = false;
   /** Where the menu bar icon is, as main last said, so GNSIS shrinks toward it. */
   private iconAt: { x: number; y: number } | null = null;
   private readonly threshold: number;
@@ -187,6 +189,14 @@ export class ElectronLiveHost implements LiveHost {
       .linkState()
       .then((s) => {
         if (!s || this.link !== "connecting") return;
+        this.localTurns = s.local_turns === true;
+        if (this.localTurns) {
+          this.emit({
+            type: "link",
+            state: this.link,
+            detail: this.linkDetail,
+          });
+        }
         if (s.ready && s.connected) {
           this.typedTurns = answersTypedTurns(s.ready);
           this.setLink("ready");
@@ -205,15 +215,16 @@ export class ElectronLiveHost implements LiveHost {
   }
 
   capabilities(): HostCapabilities {
-    // text: only when the connected runtime says it answers typed turns —
-    // a typed turn it merely records would look like Enter doing nothing.
+    // text: when either the local deterministic path or connected runtime can
+    // answer it. The main process falls back to the runtime for everything
+    // outside the local command grammar.
     // transcript: the runtime sends no speech-to-text of the person back.
     // overlay: whether main opened the see-through window over the desktop.
     // menuBar: whether main has an icon in the Mac menu bar to tuck into.
     // quit: whether main can close GNSIS ("Quit GNSIS" in the ≡ menu).
     return {
       voice: true,
-      text: this.typedTurns,
+      text: this.localTurns || this.typedTurns,
       screen: true,
       camera: true,
       transcript: false,
@@ -277,7 +288,9 @@ export class ElectronLiveHost implements LiveHost {
   async sendText(text: string): Promise<void> {
     const words = text.trim();
     if (!words) throw new Error("There is nothing to send.");
-    if (!this.typedTurns) throw new Error("Typing isn’t connected to GNSIS yet.");
+    if (!this.localTurns && !this.typedTurns) {
+      throw new Error("Typing isn’t connected to GNSIS yet.");
+    }
     this.log(`typed turn requested (${words.length} chars)`);
     const result: TurnResult = await this.bridge.sendTurn(words).catch((e: unknown) => ({
       ok: false as const,

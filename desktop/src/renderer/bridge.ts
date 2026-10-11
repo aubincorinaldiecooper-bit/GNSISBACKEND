@@ -16,6 +16,8 @@ export interface LinkState {
   connected: boolean;
   /** The duplex socket closed since it last opened. */
   closed: boolean;
+  /** This signed desktop can answer a narrow set of deterministic turns itself. */
+  local_turns?: boolean;
 }
 
 export interface VoiceProfile {

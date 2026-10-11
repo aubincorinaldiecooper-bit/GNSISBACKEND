@@ -54,6 +54,8 @@ export interface ConfirmRequest {
 
 export interface ActionBrokerDeps {
   registry: ToolRegistry;
+  /** Tools this signed desktop build may run directly from a trusted local turn. */
+  localTools?: readonly string[];
   /** Send a control on the session's duplex socket. */
   send(control: Record<string, unknown>): void;
   /** Record a lifecycle step on the session timeline (host.event). */
@@ -87,6 +89,7 @@ interface CallRecord {
 
 export class ActionBroker {
   private accepted = new Set<string>();
+  private readonly localTools: Set<string>;
   private readonly calls = new Map<string, CallRecord>();
   /**
    * One foreground mutation owns the desktop at a time. Reads may proceed
@@ -94,7 +97,9 @@ export class ActionBroker {
    */
   private desktopTail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly deps: ActionBrokerDeps) {}
+  constructor(private readonly deps: ActionBrokerDeps) {
+    this.localTools = new Set(deps.localTools ?? []);
+  }
 
   /** The runtime's `ready` says which of the offered tools it agreed to. */
   noteReady(control: Record<string, unknown>): void {
@@ -133,6 +138,83 @@ export class ActionBroker {
     }
   }
 
+  /**
+   * Run a deterministic command parsed from the person's typed words.
+   *
+   * This is the same ToolRegistry, policy, permission and execution path as a
+   * model-originated call. It only skips the remote capability negotiation
+   * because no remote runtime participates in this call.
+   */
+  async runLocal(
+    callId: string,
+    turnId: string,
+    tool: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const known = this.calls.get(callId);
+    if (known?.done && known.response) return known.response;
+    if (known) {
+      return { status: "failed", message: "That local action is already running." };
+    }
+    const record: CallRecord = { done: false, abort: new AbortController() };
+    this.remember(callId, record);
+    const started = this.now();
+    const base = { call_id: callId, tool };
+    this.deps.log("execution", `local call ${callId} ${tool || "?"} received`);
+    this.deps.event({
+      type: "action.requested",
+      ...base,
+      ts_ms: started,
+      redelivered: false,
+      turn_id: turnId,
+    });
+
+    let response: Record<string, unknown>;
+    let why = "";
+    try {
+      response = await this.carryOut(
+        callId,
+        tool,
+        args,
+        record.abort.signal,
+        base,
+        this.localTools.has(tool),
+        false,
+      );
+    } catch (err) {
+      const problem =
+        err instanceof ActionProblem
+          ? err
+          : new ActionProblem(
+              "failed",
+              `Something went wrong: ${String((err as Error)?.message ?? err)}`,
+            );
+      response = { status: problem.status, message: problem.message, ...problem.detail };
+      const category = categoryOf(problem);
+      why = ` [${problem.detail.stage === "arguments" ? "arguments_rejected" : category}]`;
+      this.deps.event({
+        type: "action.failed",
+        ...base,
+        ts_ms: this.now(),
+        status: problem.status,
+        category,
+        latency_ms: this.now() - started,
+      });
+      this.deps.notify?.({
+        callId,
+        state: problem.status === "needs_permission" ? "needs_permission" : "failed",
+        text: problem.message,
+      });
+    }
+    record.done = true;
+    record.response = fit(response);
+    this.deps.log(
+      "execution",
+      `local call ${callId} ${tool} → ${String(record.response.status)}${why} (${this.now() - started} ms)`,
+    );
+    return record.response;
+  }
+
   private async dispatch(control: Record<string, unknown>): Promise<void> {
     const callId = control.call_id as string;
     const known = this.calls.get(callId);
@@ -160,7 +242,15 @@ export class ActionBroker {
     // which can name the person's files or sites.
     let why = "";
     try {
-      response = await this.carryOut(callId, tool, args, record.abort.signal, base);
+      response = await this.carryOut(
+        callId,
+        tool,
+        args,
+        record.abort.signal,
+        base,
+        this.accepted.has(tool),
+        true,
+      );
     } catch (err) {
       const problem = err instanceof ActionProblem ? err : new ActionProblem("failed", `Something went wrong: ${String((err as Error)?.message ?? err)}`);
       response = { status: problem.status, message: problem.message, ...problem.detail };
@@ -181,8 +271,10 @@ export class ActionBroker {
     args: Record<string, unknown>,
     signal: AbortSignal,
     base: { call_id: string; tool: string },
+    agreed: boolean,
+    sendProgress: boolean,
   ): Promise<Record<string, unknown>> {
-    if (!this.accepted.has(tool)) {
+    if (!agreed) {
       throw new ActionProblem("unsupported", `${tool} was not agreed for this session, so this computer will not run it.`);
     }
     const argumentProblem = checkArguments(tool, args);
@@ -212,7 +304,14 @@ export class ActionBroker {
     this.checkPermissions(prepared);
 
     if (verdict.decision === "confirm") {
-      const allowed = await this.ask(callId, prepared, verdict, signal, base);
+      const allowed = await this.ask(
+        callId,
+        prepared,
+        verdict,
+        signal,
+        base,
+        sendProgress,
+      );
       if (!allowed) {
         this.deps.notify?.({ callId, state: "declined", text: `Not done: ${prepared.summary}` });
         return {
@@ -325,14 +424,22 @@ export class ActionBroker {
     verdict: PolicyVerdict,
     signal: AbortSignal,
     base: { call_id: string; tool: string },
+    sendProgress: boolean,
   ): Promise<boolean> {
     const reason = verdict.reason;
     this.deps.event({ type: "action.confirmation", ...base, ts_ms: this.now(), status: "asked", reason });
     this.deps.notify?.({ callId, state: "waiting", text: `Waiting for your OK: ${prepared.summary}` });
     // Keep the runtime from declaring the call lost while the person reads.
-    const progress = () => this.deps.send({ type: "tool.progress", call_id: callId, state: "awaiting_confirmation" });
-    progress();
-    const timer = setInterval(progress, PROGRESS_EVERY_MS);
+    const progress = () =>
+      this.deps.send({
+        type: "tool.progress",
+        call_id: callId,
+        state: "awaiting_confirmation",
+      });
+    if (sendProgress) progress();
+    const timer = sendProgress
+      ? setInterval(progress, PROGRESS_EVERY_MS)
+      : null;
     try {
       const allowed = await this.deps.confirm(
         {
@@ -347,7 +454,7 @@ export class ActionBroker {
       this.deps.event({ type: "action.confirmation", ...base, ts_ms: this.now(), status: allowed ? "allowed" : signal.aborted ? "withdrawn" : "declined" });
       return allowed && !signal.aborted;
     } finally {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     }
   }
 

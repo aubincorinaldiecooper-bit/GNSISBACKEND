@@ -28,6 +28,7 @@ import { reasonForLog } from "../host/actionPolicy.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
+import { localCommand } from "../host/localCommands.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { DesktopVisualConnector } from "../host/desktopVisualConnector.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
@@ -153,6 +154,7 @@ const typedTurns = new TypedTurns({
   ready: () => host.connected && lastReady !== null && !duplexClosed,
   log: hostLog,
 });
+let localTurnCounter = 0;
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
@@ -441,6 +443,7 @@ function registerIdentityHandlers(): void {
 
 const broker = new ActionBroker({
   registry: tools,
+  localTools: OFFERED_ACTIONS,
   send: (control) => {
     if (!desktopVisual?.handleBrokerControl(control)) {
       host.sendControl(control as unknown as ClientControl);
@@ -779,11 +782,35 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
-  ipcMain.handle("turn:text", (_e, text: unknown) => typedTurns.send(text));
+  ipcMain.handle("turn:text", async (_e, input: unknown) => {
+    const text = typeof input === "string" ? input.trim() : "";
+    const command = text ? localCommand(text) : null;
+    if (!command) return typedTurns.send(input);
+
+    const now = Date.now();
+    localTurnCounter += 1;
+    const turnId = `local-${now}-${localTurnCounter}`;
+    turns.record({ turnId, text, endedAtMs: now });
+    const response = await broker.runLocal(
+      `local-call-${now}-${localTurnCounter}`,
+      turnId,
+      command.tool,
+      command.args,
+    );
+    if (response.status === "done") return { ok: true, turnId };
+    return {
+      ok: false,
+      reason:
+        typeof response.message === "string"
+          ? response.message
+          : "The local command could not be completed.",
+    };
+  });
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
     closed: duplexClosed,
+    local_turns: OFFERED_ACTIONS.includes("open"),
   }));
   ipcMain.on("session:reconnect", () => {
     // The renderer asks for this when the person starts live voice after the
