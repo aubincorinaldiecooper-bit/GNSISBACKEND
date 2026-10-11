@@ -310,14 +310,114 @@ test("browser: upload and dialog capabilities are exposed through the typed bind
   assert.equal(cua.calls.at(-1)?.tool, "browser_dialog");
 });
 
+test("browser: exact inspected refs drive Cua click, type and pointer actions", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return {
+      text: "",
+      structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "Form", z_index: 20, is_on_screen: true }] },
+    };
+    if (tool === "get_browser_state") return {
+      text: "",
+      structured: { target_id: "bt-3", tabs: [{ tab_id: "tab-3", title: "Form", url: "https://example.org/", selected: true }] },
+    };
+    return { text: "ok" };
+  });
+  const browser = new BrowserTool(cua, noWait);
+  const exact = { session: "gnsis-browser", target_id: "bt-3", tab_id: "tab-3" };
+
+  const submit = await browser.prepare({ action: "click", ref: "p2:4", label: "Submit" });
+  assert.equal(submit.effect, "input");
+  assert.ok(submit.consequential);
+  await submit.run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "browser_click", args: { ...exact, ref: "p2:4" } });
+
+  await (await browser.prepare({ action: "type", ref: "p2:5", label: "Name", text: "Ada", replace: true })).run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "browser_type", args: { ...exact, ref: "p2:5", text: "Ada", replace: true, mode: "insert_text" } });
+
+  for (const action of ["hover", "right_click", "double_click"]) {
+    await (await browser.prepare({ action, ref: "p2:6" })).run();
+    assert.deepEqual(cua.calls.at(-1), { tool: "browser_pointer", args: { ...exact, action, ref: "p2:6" } });
+  }
+  await (await browser.prepare({ action: "scroll", ref: "p2:7", delta_y: 600 })).run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "browser_pointer", args: { ...exact, action: "scroll", ref: "p2:7", delta_y: 600 } });
+  await (await browser.prepare({ action: "drag", ref: "p2:8", destination_ref: "p2:9" })).run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "browser_pointer", args: { ...exact, action: "drag", ref: "p2:8", destination_ref: "p2:9" } });
+});
+
+test("browser: exact element actions need a ref and Chrome or Edge, never a guess", async () => {
+  const safari = fakeCua((tool) => tool === "list_windows"
+    ? { text: "", structured: { windows: [{ pid: 82, window_id: 10, app_name: "Safari", title: "Start", z_index: 20, is_on_screen: true }] } }
+    : { text: "ok" });
+  const browser = new BrowserTool(safari, noWait);
+  await assert.rejects(browser.prepare({ action: "click" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
+  await assert.rejects(browser.prepare({ action: "scroll", ref: "p1:1" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
+  await assert.rejects(browser.prepare({ action: "drag", ref: "p1:1" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
+  const click = await browser.prepare({ action: "click", ref: "p1:1" });
+  await assert.rejects(click.run(), (err: unknown) => err instanceof ActionProblem && err.status === "unsupported");
+  assert.ok(!safari.calls.some((c) => c.tool.startsWith("browser_")));
+});
+
+test("input: double-click and hover use Cua without screenshots", async () => {
+  const cua = fakeCua((tool) => {
+    if (tool === "list_windows") return { text: "", structured: oneWindow };
+    if (tool === "get_window_state") return { text: "", structured: { elements: [{ role: "row", label: "Report", element_token: "s00000001:7" }] } };
+    return { text: "ok" };
+  });
+  const input = new InputTool(cua, { bounds: () => ({ x: 0, y: 0, width: 1000, height: 800 }) });
+  await (await input.prepare({ action: "double_click", label: "Report" })).run();
+  assert.equal(cua.calls.find((c) => c.tool === "get_window_state")?.args.include_screenshot, false);
+  assert.deepEqual(cua.calls.at(-1), {
+    tool: "click",
+    args: { pid: 42, window_id: 7, element_token: "s00000001:7", button: "left", count: 2, delivery_mode: "background" },
+  });
+  await (await input.prepare({ action: "double_click", x: 0.5, y: 0.5 })).run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "click", args: { scope: "desktop", x: 500, y: 400, button: "left", count: 2, delivery_mode: "foreground" } });
+  const hover = await input.prepare({ action: "hover", x: 0.25, y: 0.5 });
+  assert.equal(hover.effect, "input");
+  await hover.run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "move_cursor", args: { scope: "desktop", x: 250, y: 400 } });
+});
+
+test("window: menu items are chosen by exact path, and risky ones always ask", async () => {
+  const cua = fakeCua((tool) => (tool === "list_windows" ? { text: "", structured: oneWindow } : { text: "ok" }));
+  const windows = new WindowTool(cua);
+  const saveAs = await windows.prepare({ action: "menu", app: "TextEdit", path: ["File", "Save As..."] });
+  assert.equal(saveAs.effect, "input");
+  assert.equal(saveAs.consequential, undefined);
+  await saveAs.run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "invoke_menu", args: { pid: 42, window_id: 7, path: ["File", "Save As..."] } });
+  const close = await windows.prepare({ action: "menu", app: "TextEdit", path: ["File", "Close"] });
+  assert.ok(close.consequential);
+  await assert.rejects(windows.prepare({ action: "menu", app: "TextEdit", path: [] }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
+});
+
 test("window and clipboard capabilities use Cua tools", async () => {
   const cua = fakeCua((tool) => {
     if (tool === "list_windows") return { text: "", structured: oneWindow };
+    if (tool === "get_window_state") return {
+      text: "",
+      structured: {
+        elements: [
+          { role: "button", label: "Save", element_token: "s1:4", enabled: true },
+          { role: "password field", label: "Password", value: "do-not-expose", element_token: "s1:5" },
+        ],
+        total_element_count: 2,
+        returned_element_count: 2,
+      },
+    };
     if (tool === "clipboard_read") return { text: "", structured: { types: ["public.utf8-plain-text"], text: "hello" } };
     return { text: "ok" };
   });
 
   const windows = new WindowTool(cua);
+  const inspected = await (await windows.prepare({ action: "inspect", app: "TextEdit", query: "Save" })).run();
+  assert.equal(cua.calls.at(-1)?.tool, "get_window_state");
+  assert.equal(cua.calls.at(-1)?.args.include_screenshot, false);
+  assert.deepEqual(inspected.detail?.elements, [
+    { ref: "s1:4", role: "button", label: "Save", enabled: true },
+    { ref: "s1:5", role: "password field", label: "Password", value: "[private]" },
+  ]);
+
   await (await windows.prepare({ action: "focus", app: "TextEdit" })).run();
   assert.equal(cua.calls.at(-1)?.tool, "bring_to_front");
 

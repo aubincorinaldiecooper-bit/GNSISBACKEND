@@ -89,15 +89,19 @@ export class InputTool implements ActionTool {
         };
       }
       case "click":
-      case "right_click": {
+      case "right_click":
+      case "double_click": {
         const label = str(args, "label");
         const button = action === "right_click" ? "right" : "left";
+        const count = action === "double_click" ? 2 : 1;
+        const verb = action === "double_click" ? "Double-click" : button === "right" ? "Right-click" : "Click";
+        const done = action === "double_click" ? "Double-clicked" : button === "right" ? "Right-clicked" : "Clicked";
         if (label) {
           return {
             tool: this.name,
             action,
             effect: "input",
-            summary: `${button === "right" ? "Right-click" : "Click"} “${label}”${target ? ` in ${target.appName}` : " in the app in front"}`,
+            summary: `${verb} “${label}”${target ? ` in ${target.appName}` : " in the app in front"}`,
             scope: [{ value: label, source: "named" }, ...(app ? [{ value: app, source: "named" as const }] : [])],
             consequential: CONSEQUENTIAL_LABEL.test(label) ? `clicking “${label}” may send, buy, delete or commit something` : undefined,
             needs,
@@ -116,9 +120,10 @@ export class InputTool implements ActionTool {
                 ...windowArgs(w),
                 element_token: token,
                 button,
+                ...(count > 1 ? { count } : {}),
                 delivery_mode: "background",
               });
-              return { verified: "screen", message: `${button === "right" ? "Right-clicked" : "Clicked"} “${label}”. Panoptic will verify what happened.` };
+              return { verified: "screen", message: `${done} “${label}”. Check a fresh screen view before saying what happened.` };
             },
           };
         }
@@ -127,7 +132,7 @@ export class InputTool implements ActionTool {
           tool: this.name,
           action,
           effect: "input",
-          summary: `${button === "right" ? "Right-click" : "Click"} at ${Math.round(point.nx * 100)}% across, ${Math.round(point.ny * 100)}% down the screen`,
+          summary: `${verb} at ${Math.round(point.nx * 100)}% across, ${Math.round(point.ny * 100)}% down the screen`,
           scope: [{ value: `${point.x},${point.y}`, source: "named" }],
           needs,
           run: async () => {
@@ -136,9 +141,25 @@ export class InputTool implements ActionTool {
               x: point.x,
               y: point.y,
               button,
+              ...(count > 1 ? { count } : {}),
               delivery_mode: "foreground",
             });
-            return { verified: "screen", message: `${button === "right" ? "Right-clicked" : "Clicked"}. Panoptic will verify what happened.`, detail: { x: point.x, y: point.y } };
+            return { verified: "screen", message: `${done}. Check a fresh screen view before saying what happened.`, detail: { x: point.x, y: point.y } };
+          },
+        };
+      }
+      case "hover": {
+        const point = this.point(args, "x", "y");
+        return {
+          tool: this.name,
+          action,
+          effect: "input",
+          summary: `Move the pointer to ${Math.round(point.nx * 100)}% across, ${Math.round(point.ny * 100)}% down the screen`,
+          scope: [{ value: `${point.x},${point.y}`, source: "named" }],
+          needs,
+          run: async () => {
+            await this.call("move_cursor", { scope: "desktop", x: point.x, y: point.y });
+            return { verified: "screen", message: "Moved the pointer there. Check a fresh screen view for any hover effect.", detail: { x: point.x, y: point.y } };
           },
         };
       }

@@ -21,6 +21,7 @@ type Browser = CuaWindow & { family: "typed" | "native" };
 const BROWSER_SESSION = "gnsis-browser";
 const TYPED_BROWSERS = new Set(["Google Chrome", "Microsoft Edge"]);
 const BROWSER_NAMES = ["Google Chrome", "Microsoft Edge", "Safari", "Arc", "Brave Browser", "Chromium", "Vivaldi", "Firefox"];
+const CONSEQUENTIAL_LABEL = /\b(send|buy|pay|purchase|order|delete|remove|erase|submit|confirm|publish|post|transfer|sign|accept|agree|install|trash)\b/i;
 
 export interface Tab {
   n: number;
@@ -176,6 +177,95 @@ export class BrowserTool implements ActionTool {
             return { verified: "browser", message: `Read the active ${browser.appName} page through Cua's exact browser binding.`, detail: { target_id: binding.targetId, tab_id: active.id, state: state.structured } };
           },
         };
+      case "click": {
+        const ref = required(args, "ref", "the inspected page element ref");
+        const label = str(args, "label");
+        return {
+          tool: this.name,
+          action,
+          effect: "input",
+          summary: `Click ${label ? `“${label}”` : "the inspected page element"} in ${browser.appName}`,
+          scope: browserScope(browser, label),
+          consequential: label && CONSEQUENTIAL_LABEL.test(label) ? `clicking “${label}” may send, buy, delete or commit something` : undefined,
+          run: async () => {
+            const { targetId, tab } = await this.activeTyped(browser);
+            await this.call("browser_click", {
+              session: BROWSER_SESSION,
+              target_id: targetId,
+              tab_id: tab.id,
+              ref,
+            });
+            return { verified: "screen", message: `Clicked ${label ? `“${label}”` : "the inspected page element"}. Check the fresh page state before claiming the outcome.` };
+          },
+        };
+      }
+      case "type": {
+        const ref = required(args, "ref", "the inspected page field ref");
+        const value = required(args, "text", "what to type");
+        const label = str(args, "label");
+        const mode = str(args, "mode") || "insert_text";
+        if (!["insert_text", "keystrokes"].includes(mode)) throw new ActionProblem("failed", "mode must be insert_text or keystrokes.");
+        return {
+          tool: this.name,
+          action,
+          effect: "input",
+          summary: `Type into ${label ? `“${label}”` : "the inspected page field"} in ${browser.appName}`,
+          scope: [{ value, source: "named" }, ...browserScope(browser, label)],
+          run: async () => {
+            const { targetId, tab } = await this.activeTyped(browser);
+            await this.call("browser_type", {
+              session: BROWSER_SESSION,
+              target_id: targetId,
+              tab_id: tab.id,
+              ref,
+              text: value,
+              replace: args.replace === true,
+              mode,
+            });
+            return { verified: "screen", message: `Typed into ${label ? `“${label}”` : "the inspected page field"}. Check the fresh page state before claiming the outcome.` };
+          },
+        };
+      }
+      case "hover":
+      case "right_click":
+      case "double_click":
+      case "scroll":
+      case "drag": {
+        const ref = required(args, "ref", "the inspected page element ref");
+        const label = str(args, "label");
+        const destinationRef = str(args, "destination_ref");
+        const deltaX = finiteOptional(args.delta_x);
+        const deltaY = finiteOptional(args.delta_y);
+        if (action === "scroll" && deltaX === undefined && deltaY === undefined) {
+          throw new ActionProblem("failed", "A precise browser scroll needs delta_x or delta_y.");
+        }
+        if (action === "drag" && !destinationRef) {
+          throw new ActionProblem("failed", "A precise browser drag needs destination_ref from the same inspection.");
+        }
+        return {
+          tool: this.name,
+          action,
+          effect: "input",
+          summary: `${pointerSummary(action)} ${label ? `“${label}”` : "the inspected page element"} in ${browser.appName}`,
+          scope: browserScope(browser, label),
+          consequential: action === "right_click" || action === "hover" || action === "scroll" ? undefined
+            : label && CONSEQUENTIAL_LABEL.test(label) ? `${action.replace("_", "-")} on “${label}” may send, buy, delete or commit something` : undefined,
+          run: async () => {
+            const { targetId, tab } = await this.activeTyped(browser);
+            await this.call("browser_pointer", {
+              session: BROWSER_SESSION,
+              target_id: targetId,
+              tab_id: tab.id,
+              action,
+              ref,
+              ...(destinationRef ? { destination_ref: destinationRef } : {}),
+              ...(deltaX !== undefined ? { delta_x: deltaX } : {}),
+              ...(deltaY !== undefined ? { delta_y: deltaY } : {}),
+            });
+            return { verified: "screen", message: `${pointerSummary(action, true)} ${label ? `“${label}”` : "the inspected page element"}. Check the fresh page state before claiming the outcome.` };
+          },
+        };
+      }
       case "upload": {
         const ref = required(args, "ref", "which page element should receive the files");
         const files = Array.isArray(args.files) ? args.files.filter((v): v is string => typeof v === "string" && v.length > 0) : [];
@@ -304,7 +394,7 @@ export class BrowserTool implements ActionTool {
   }
 
   private async activeTyped(browser: Browser): Promise<{ targetId: string; tab: Tab & { id: string } }> {
-    if (browser.family !== "typed") throw new ActionProblem("unsupported", "Uploads, downloads, dialogs and semantic inspection require Chrome or Edge right now.");
+    if (browser.family !== "typed") throw new ActionProblem("unsupported", "Exact page-element actions, uploads, downloads, dialogs and semantic inspection require Chrome or Edge right now.");
     const binding = await this.bind(browser, true);
     const tab = activeTab(binding.tabs);
     if (!tab?.id) throw new ActionProblem("failed", "Cua could not identify the active browser tab.");
@@ -357,6 +447,37 @@ function text(value: unknown): string {
 
 function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url.slice(0, 60); }
+}
+
+function browserScope(browser: Browser, label?: string): Array<{ value: string; source: "named" }> {
+  return [
+    ...(label ? [{ value: label, source: "named" as const }] : []),
+    { value: browser.appName, source: "named" },
+  ];
+}
+
+function finiteOptional(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function pointerSummary(action: "hover" | "right_click" | "double_click" | "scroll" | "drag", past = false): string {
+  if (past) {
+    return {
+      hover: "Hovered over",
+      right_click: "Right-clicked",
+      double_click: "Double-clicked",
+      scroll: "Scrolled at",
+      drag: "Dragged",
+    }[action];
+  }
+  return {
+    hover: "Hover over",
+    right_click: "Right-click",
+    double_click: "Double-click",
+    scroll: "Scroll at",
+    drag: "Drag",
+  }[action];
 }
 
 function problem(error: unknown): ActionProblem {
