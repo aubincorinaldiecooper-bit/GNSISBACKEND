@@ -97,7 +97,7 @@ export class WindowTool implements ActionTool {
         scope,
         run: async () => {
           await this.call("bring_to_front", windowArgs(target));
-          return { verified: "screen", message: `Brought ${target.appName} to the front. Panoptic will verify it is visible.` };
+          return { verified: "screen", message: `Brought ${target.appName} to the front. Check that it is visible from a fresh live screen view.` };
         },
       };
     }
@@ -115,7 +115,7 @@ export class WindowTool implements ActionTool {
         scope,
         run: async () => {
           await this.call("set_window_frame", { ...windowArgs(target), x, y, width, height });
-          return { verified: "screen", message: "Changed the window frame. Panoptic will verify the layout.", detail: { x, y, width, height } };
+          return { verified: "screen", message: "Changed the window frame. Check the layout from a fresh live screen view.", detail: { x, y, width, height } };
         },
       };
     }

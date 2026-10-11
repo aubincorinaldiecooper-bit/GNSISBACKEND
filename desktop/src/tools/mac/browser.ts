@@ -77,7 +77,7 @@ export class BrowserTool implements ActionTool {
           run: async () => {
             await this.hotkey(browser, ["cmd", String(Math.min(n, 9))]);
             await this.wait(150);
-            return { verified: "screen", message: `Asked ${browser.appName} to switch to tab ${n}. Panoptic will verify the visible tab.` };
+            return { verified: "screen", message: `Asked ${browser.appName} to switch to tab ${n}. Check the visible tab from a fresh live screen view.` };
           },
         };
       }
@@ -127,7 +127,7 @@ export class BrowserTool implements ActionTool {
           scope: [],
           run: async () => {
             await this.hotkey(browser, action === "reload" ? ["cmd", "r"] : action === "back" ? ["cmd", "["] : ["cmd", "]"]);
-            return { verified: "screen", message: `Done in ${browser.appName}. Panoptic will verify the visible page.` };
+            return { verified: "screen", message: `Done in ${browser.appName}. Check the visible page from a fresh live screen view.` };
           },
         };
       case "prepare":
@@ -169,7 +169,7 @@ export class BrowserTool implements ActionTool {
           summary: `Inspect the active page in ${browser.appName}`,
           scope: [],
           run: async () => {
-            if (browser.family !== "typed") throw new ActionProblem("unsupported", "Semantic browser inspection is currently available for Chrome and Edge; Panoptic still sees other browsers visually.");
+            if (browser.family !== "typed") throw new ActionProblem("unsupported", "Semantic browser inspection is currently available for Chrome and Edge; other browsers remain visible through the live screen stream.");
             const binding = await this.bind(browser, true);
             const active = activeTab(binding.tabs);
             if (!active?.id) throw new ActionProblem("failed", "Cua could not identify the active tab.");
@@ -280,7 +280,7 @@ export class BrowserTool implements ActionTool {
           run: async () => {
             const { targetId, tab } = await this.activeTyped(browser);
             await this.call("browser_set_input_files", { session: BROWSER_SESSION, target_id: targetId, tab_id: tab.id, ref, files });
-            return { verified: "screen", message: "Attached the requested file(s). Panoptic will verify the page state." };
+            return { verified: "screen", message: "Attached the requested file(s). Check the page state from a fresh live screen view." };
           },
         };
       }

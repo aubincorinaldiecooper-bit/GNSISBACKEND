@@ -78,11 +78,11 @@ test("Cua is never used as a screenshot polling loop", () => {
   for (const { file, text } of code) {
     assert.ok(
       !/\.call\(\s*["']get_desktop_state["']/.test(text),
-      `${file} asks Cua for a desktop screenshot instead of using the persistent Panoptic stream`,
+      `${file} asks Cua for a desktop screenshot instead of using the persistent live screen stream`,
     );
     assert.ok(
       !/include_screenshot\s*:\s*true/.test(text),
-      `${file} asks Cua for a window screenshot; use Panoptic for pixels`,
+      `${file} asks Cua for a window screenshot; use the live screen stream for pixels`,
     );
   }
 });

@@ -1,9 +1,9 @@
 /**
  * Thin, lazy wrapper around Cua Driver.
  *
- * GNSIS owns policy, approvals and visual verification. Cua owns low-level
+ * GNSIS owns policy, approvals and result checking. Cua owns low-level
  * desktop/browser actuation and accessibility state. We deliberately do not
- * call Cua's screenshot surfaces here: Panoptic's persistent screen stream is
+ * call Cua's screenshot surfaces here: the persistent live screen stream is
  * the visual source of truth.
  */
 export type CuaArgs = Record<string, unknown>;
