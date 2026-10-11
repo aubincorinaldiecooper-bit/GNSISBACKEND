@@ -254,6 +254,8 @@ class OnlineDuplexSettings:
     # the secret is set on both ends. `create_online_duplex_app` logs a warning
     # while it is unset, so "off" is never silent.
     edge_secret: str = ""
+    desktop_grant_public_key: str = ""
+    desktop_grant_issuer: str = "gnsis-control-plane"
     # RMS floor for the diagnostic `input_has_speech` flag — a value under
     # this reads as silence in `duplex chunk` logs. Speak decisions are the
     # model's own tokens, but the flag does drive `awaiting_reply`, i.e. how
@@ -1369,6 +1371,10 @@ def create_online_duplex_app(
             "sockets from anywhere, including callers who reach this runtime's "
             "public address without passing the site"
         )
+    if runtime.session_memory is not None and not runtime.settings.desktop_grant_public_key:
+        raise ValueError(
+            "desktop_grant_public_key is required when durable session memory is enabled"
+        )
     if runtime.settings.max_session_sec <= 0:
         LOGGER.warning(
             "max_session_sec is 0: a session may hold the model, and the GPU "
@@ -2022,6 +2028,28 @@ def create_online_duplex_app(
             # went around the site never gets to start one.
             await websocket.close(code=1008)
             return
+        session_memory = runtime.session_memory
+        if session_memory is not None:
+            from .live_grants import LiveGrantError, verify_live_grant
+
+            authorization = websocket.headers.get("authorization", "")
+            token = (
+                authorization[7:].strip()
+                if authorization.lower().startswith("bearer ")
+                else websocket.query_params.get("grant", "")
+            )
+            try:
+                owner = verify_live_grant(
+                    token,
+                    public_key=runtime.settings.desktop_grant_public_key,
+                    issuer=runtime.settings.desktop_grant_issuer,
+                )
+            except LiveGrantError:
+                await websocket.close(code=1008)
+                return
+            session_memory = runtime.session_memory.for_namespace(
+                owner.memory_namespace
+            )
         await websocket.accept()
         requested_id = websocket.query_params.get("session_id")
         session_id = requested_id or f"duplex_{secrets.token_hex(8)}"
@@ -2383,7 +2411,7 @@ def create_online_duplex_app(
                     runtime.settings.expose_task_slate_to_model
                 ),
                 close_ledger=True,
-                session_memory=runtime.session_memory,
+                session_memory=session_memory,
                 timeline=timeline,
                 playback_ack_required=runtime.settings.playback_ack_required,
                 playback_ack_timeout_sec=(

@@ -12,6 +12,7 @@ import { createRoot } from "react-dom/client";
 import { GnsisApp, LocalIdentityStore } from "@gnsis/ui";
 import { Mic, Playback, Vision } from "./devices.js";
 import { ElectronLiveHost } from "./electronHost.js";
+import { migrateDesktopIdentity } from "./identityMigration.js";
 
 const bridge = window.gnsis;
 const log = (line: string) => {
@@ -29,7 +30,11 @@ const host = new ElectronLiveHost(
 );
 host.attach();
 
-const identity = new LocalIdentityStore();
+let identity: LocalIdentityStore;
+identity = new LocalIdentityStore("gnsis-identity", (created) => {
+  void migrateDesktopIdentity(identity, bridge, log, created);
+});
+void migrateDesktopIdentity(identity, bridge, log);
 const demo = new URLSearchParams(location.search).has("demo");
 
 createRoot(document.getElementById("root")!).render(

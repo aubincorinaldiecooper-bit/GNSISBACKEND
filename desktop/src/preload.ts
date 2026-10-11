@@ -28,6 +28,13 @@ contextBridge.exposeInMainWorld("gnsis", {
   hostLog: (line: string) => ipcRenderer.send("host:log", line),
   linkState: () => ipcRenderer.invoke("link:state"),
   reconnect: () => ipcRenderer.send("session:reconnect"),
+  setDesktopGrant: (grant: string) => ipcRenderer.invoke("identity:grant", grant),
+  protectDesktopIdentity: (approvalGrant: string, recoveryKey?: string) =>
+    ipcRenderer.invoke(
+      "identity:protect",
+      approvalGrant,
+      recoveryKey,
+    ),
   startCall: () => ipcRenderer.send("call:start"),
   endCall: (reason: string) => ipcRenderer.send("call:end", reason),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>

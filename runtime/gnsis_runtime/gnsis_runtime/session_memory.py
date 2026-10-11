@@ -56,6 +56,16 @@ class SessionMemoryRecall:
         self.top_k = top_k
         self.timeout_s = timeout_s
 
+    def for_namespace(self, namespace: str) -> "SessionMemoryRecall":
+        """Return a session-local view without mutating the shared client."""
+        return SessionMemoryRecall(
+            self.base_url,
+            namespace=namespace,
+            token=self.token,
+            top_k=self.top_k,
+            timeout_s=self.timeout_s,
+        )
+
     def write_perception_episode(
         self,
         *,

@@ -58,6 +58,70 @@ class Workspace(Base):
     )
 
 
+class DesktopPerson(Base):
+    """Person-level owner for the standalone desktop identity system."""
+
+    __tablename__ = "desktop_people"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    legacy_public_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    recovery_key_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    devices: Mapped[list["DesktopDevice"]] = relationship(
+        back_populates="person", cascade="all, delete-orphan"
+    )
+
+
+class DesktopDevice(Base):
+    """One approved device credential belonging to a desktop person."""
+
+    __tablename__ = "desktop_devices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    person_id: Mapped[str] = mapped_column(
+        ForeignKey("desktop_people.id"), index=True
+    )
+    public_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    public_key_b64: Mapped[str] = mapped_column(Text)
+    credential_kind: Mapped[str] = mapped_column(
+        String(32), default="legacy_webcrypto"
+    )
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    last_authenticated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    person: Mapped[DesktopPerson] = relationship(back_populates="devices")
+
+
+class DesktopAuthChallenge(Base):
+    """Short-lived, one-time challenge for proving device-key possession."""
+
+    __tablename__ = "desktop_auth_challenges"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    public_id: Mapped[str] = mapped_column(String(64), index=True)
+    public_key_b64: Mapped[str] = mapped_column(Text)
+    challenge_b64: Mapped[str] = mapped_column(Text)
+    purpose: Mapped[str] = mapped_column(String(32), default="enroll")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
 class GitHubInstallation(Base):
     """A GitHub App installation claimed by (and scoped to) one workspace."""
 

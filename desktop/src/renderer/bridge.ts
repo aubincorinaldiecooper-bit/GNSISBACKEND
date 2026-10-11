@@ -50,6 +50,13 @@ export interface GnsisBridge {
   linkState(): Promise<LinkState>;
   /** Open the runtime sockets again after they closed. */
   reconnect(): void;
+  /** Install the short-lived backend-issued credential used by runtime sockets. */
+  setDesktopGrant?(grant: string): Promise<void>;
+  /** Store the one-time recovery key using the operating system's encryption. */
+  protectDesktopIdentity?(
+    approvalGrant: string,
+    recoveryKey?: string,
+  ): Promise<string>;
   startCall(): void;
   /** Close the call on the timeline; the daemon session stays alive. */
   endCall(reason: string): void;
