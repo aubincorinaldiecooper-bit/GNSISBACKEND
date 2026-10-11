@@ -89,7 +89,9 @@ simplemem_secret = modal.Secret.from_dict(
         "GNSIS_SIMPLEMEM_URL": simplemem_url,
         "GNSIS_SIMPLEMEM_TOKEN": simplemem_token,
         "GNSIS_SIMPLEMEM_INTERNAL_TOKEN": simplemem_token,
-        "GNSIS_SIMPLEMEM_REQUIRED": "true",
+        # Memory is a paid-plan feature: required only when a SimpleMem URL
+        # is configured, so a deploy without one still serves free sessions.
+        "GNSIS_SIMPLEMEM_REQUIRED": "true" if simplemem_url else "false",
         # Verifies the desktop grants the control plane signs. Durable memory
         # is refused at startup without it, so it is deployed alongside the
         # SimpleMem credentials rather than as an afterthought.
