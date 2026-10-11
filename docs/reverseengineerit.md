@@ -1,0 +1,57 @@
+# REVERSEENGINEERIT
+
+Parked feature branch. Not started; picked up after the current task queue.
+
+## Goal
+
+A GNSIS 1.0 desktop function, `REVERSEENGINEERIT`, that lets a person point
+GNSIS at an app ("how does search work in this app?"), have agents inspect
+the shipped app without its source, explain the feature with evidence, and
+build their own version of that feature in their own project.
+
+## Building block
+
+[REA — Reverse Engineer Anything](https://github.com/morluto/rea)
+(npm `rea-agents`, MIT, v6.4.0 when this branch was cut). One MCP server
+plus CLI that inspects native binaries (via Hopper/Ghidra/IDA), Electron /
+JavaScript apps, .NET assemblies, Android APKs, websites and HAR captures.
+It runs locally and returns findings with evidence and stated unknowns.
+
+Manual MCP registration from its docs:
+
+```json
+{ "command": "npx", "args": ["-y", "rea-agents@6.4.0", "mcp"] }
+```
+
+## Where it plugs in (no new subsystem)
+
+- **Agent side:** the Codex worker (`runtime/gnsis_runtime/gnsis_runtime/providers/codex.py`,
+  `_command`) already launches Codex with per-run MCP servers
+  (`gnsis_context`, `gnsis_share`). REVERSEENGINEERIT adds REA as one more
+  pinned `mcp_servers.rea` entry for runs of this kind only, plus REA's
+  `reverse-engineer-anything` skill as the worker instructions.
+- **Delivery:** results come back through the existing `share` tool and the
+  delivery gate, like any other background task.
+- **Desktop side:** the target app lives on the person's Mac and REA is
+  local-only, so the analysis must run on the Mac, not on Modal. The
+  desktop launches/owns the REA process through `ToolRegistry` /
+  ActionBroker (`desktop/src/tools/registry.ts`, `desktop/src/host/actionBroker.ts`),
+  never a second execution stack (`desktop/AGENTS.md`).
+
+## Open questions before building
+
+1. Production has no task layer yet: `runtime/configs/gnsis-voice.yaml` has
+   `worker.provider: none`. REVERSEENGINEERIT needs delegation turned on
+   first (Codex worker, or the Qwen Live Harness ACP path from `AGENTS.md`).
+2. Where the worker agent runs: on the Mac next to REA (simplest, matches
+   REA's local-only design) or in the cloud with REA on the Mac reachable
+   through the desktop's tool routing.
+3. Native targets need Hopper, Ghidra or IDA installed by the person; REA
+   setup can offer Hopper with approval. Electron/JS, .NET and website
+   analysis need only Node.js 22.19+.
+4. Consent and scope: REA runs with the person's user permissions. Each run
+   should name the target app and be approved by the person (ActionBroker
+   policy), and output should be "build a similar feature", not copying the
+   target's code or assets.
+5. "Deploy their own": what the end of the flow is — a project on the Mac,
+   a repo, or a hosted deploy.
