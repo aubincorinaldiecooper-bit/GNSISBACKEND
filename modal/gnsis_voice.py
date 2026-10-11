@@ -89,7 +89,9 @@ simplemem_secret = modal.Secret.from_dict(
         "GNSIS_SIMPLEMEM_URL": simplemem_url,
         "GNSIS_SIMPLEMEM_TOKEN": simplemem_token,
         "GNSIS_SIMPLEMEM_INTERNAL_TOKEN": simplemem_token,
-        "GNSIS_SIMPLEMEM_REQUIRED": "true",
+        # Memory is a paid-plan feature: required only when a SimpleMem URL
+        # is configured, so a deploy without one still serves free sessions.
+        "GNSIS_SIMPLEMEM_REQUIRED": "true" if simplemem_url else "false",
         # Verifies the desktop grants the control plane signs. Durable memory
         # is refused at startup without it, so it is deployed alongside the
         # SimpleMem credentials rather than as an afterthought.
@@ -222,3 +224,50 @@ def gnsis_server() -> None:
         cwd="/workspace",
         env=env,
     )
+
+
+# A CPU-only status endpoint, so checking on GNSIS never wakes the GPU. It
+# reads the GPU function's live stats instead of calling it; gnsis_server only
+# boots when a real session connects to it.
+def _deployed_commit() -> str:
+    if not modal.is_local():
+        return ""
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+status_image = modal.Image.debian_slim(python_version="3.11").uv_pip_install(
+    "fastapi[standard]>=0.110"
+)
+status_secret = modal.Secret.from_dict({"GNSIS_DEPLOYED_COMMIT": _deployed_commit()})
+
+
+@app.function(
+    image=status_image,
+    secrets=[status_secret],
+    cpu=0.25,
+    memory=256,
+    min_containers=0,
+    scaledown_window=60,
+)
+@modal.fastapi_endpoint(method="GET", requires_proxy_auth=True)
+def gnsis_status() -> dict:
+    """Report deployment and GPU state without starting the GPU runtime."""
+    stats = gnsis_server.get_current_stats()
+    return {
+        "status": "ok",
+        "app": APP_NAME,
+        "commit": os.environ.get("GNSIS_DEPLOYED_COMMIT", ""),
+        "gpu_awake": stats.num_total_runners > 0,
+        "gpu_containers": stats.num_total_runners,
+        "active_requests": stats.num_running_inputs,
+        "queued_requests": stats.backlog,
+    }
