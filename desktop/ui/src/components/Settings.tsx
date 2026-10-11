@@ -10,7 +10,7 @@ import * as I from "./Icons";
 type Section = "profile" | "voice" | "agents" | "notif" | "appear" | "privacy";
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "profile", label: "Profile & sharing" },
-  { id: "voice", label: "Voice" },
+  { id: "voice", label: "Settings" },
   { id: "agents", label: "Agents" },
   { id: "notif", label: "Notifications" },
   { id: "appear", label: "Appearance" },
