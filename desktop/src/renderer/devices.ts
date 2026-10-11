@@ -17,7 +17,7 @@ import {
   FRAME_FIT_PX,
   FRAME_JPEG_QUALITY,
   fitWithin,
-  resolvePanopticFrameRate,
+  resolveLiveScreenFrameRate,
 } from "../shared/frames.js";
 import { CaptureManager } from "../shared/captureLifecycle.js";
 import type { GnsisBridge } from "./bridge.js";
@@ -320,7 +320,7 @@ export class Vision {
 
       const canvas = document.createElement("canvas");
       const c2d = canvas.getContext("2d")!;
-      const rateHz = resolvePanopticFrameRate(
+      const rateHz = resolveLiveScreenFrameRate(
         this.channel?.recommended_frame_rate,
       );
       let framesSent = 0;

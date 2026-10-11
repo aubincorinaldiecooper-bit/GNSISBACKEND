@@ -683,7 +683,7 @@ app.on("before-quit", () => {
 app.whenReady().then(async () => {
   // Cua Driver owns desktop/browser actuation. Chrome and Edge prefer its
   // exact browser binding; other browsers stay on Cua native accessibility
-  // and keyboard control. Panoptic remains the only continuous visual path.
+  // and keyboard control. The live screen share is the only continuous visual path.
   hostLog("browser", "Cua desktop/browser control enabled; no extension or JXA actuator required");
 
   hostLog("host", `ready runtime=${RUNTIME_URL} session=${SESSION_ID} pid=${process.pid}`);
