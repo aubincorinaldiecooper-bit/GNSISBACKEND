@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import importlib
+import json
 import logging
 import queue
 import threading
 import time
+import urllib.error
+import urllib.request
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,7 +18,6 @@ import numpy as np
 
 from mcpmft.infer import startup_timing
 from mcpmft.modeling.load import load_prefixed_submodule_state_dict
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +30,7 @@ class SpeechSynthesisRequest:
     token_ids: tuple[int, ...]
     hidden_states: Any
     end_of_turn: bool
+    text: str = ""
 
 
 @dataclass
@@ -576,6 +580,166 @@ class DetachedTalkerRuntime:
 
 
 @dataclass(frozen=True)
+class DotsTalkerConfig:
+    endpoint: str = "http://127.0.0.1:7976"
+    request_timeout_sec: float = 10.0
+    sample_rate: int = 24000
+
+    def __post_init__(self) -> None:
+        if not self.endpoint.startswith(("http://", "https://")):
+            raise ValueError("Dots endpoint must be an HTTP(S) URL")
+        if self.request_timeout_sec <= 0:
+            raise ValueError("Dots request timeout must be positive")
+        if self.sample_rate <= 0:
+            raise ValueError("Dots output sample rate must be positive")
+
+
+class DotsTalkerRuntime:
+    """Dots double-streaming renderer behind the detached Talker contract.
+
+    Dots currently requires a newer Torch/Transformers stack than the Gander
+    Thinker. The renderer therefore runs in a local sidecar process on the
+    second GPU while this adapter preserves the existing worker, cancellation,
+    output epoch, and desktop playback protocol.
+    """
+
+    def __init__(self, *, device: str, config: DotsTalkerConfig | None = None) -> None:
+        self.device = str(device)
+        self.config = config or DotsTalkerConfig()
+
+    def reset(self) -> None:
+        self._post("/v1/session/reset", {})
+
+    def warm_token2wav(self) -> None:
+        self._post("/health", {})
+
+    def synthesize(
+        self,
+        request: SpeechSynthesisRequest,
+        cancel_event: threading.Event,
+        emit: Callable[[SpeechSynthesisChunk], None],
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        sequence = 0
+        emitted_audio_sec = 0.0
+        remote_cost = 0.0
+
+        if cancel_event.is_set():
+            raise SynthesisCancelled()
+
+        tokenize_started = time.monotonic()
+        tokenized = self._post(
+            "/v1/session/text",
+            {
+                "generation_id": request.generation_id,
+                "text": request.text,
+                "end_of_turn": request.end_of_turn,
+            },
+        )
+        remote_cost += time.monotonic() - tokenize_started
+        token_ids = [int(value) for value in tokenized.get("token_ids", ())]
+
+        def emit_payload(payload: dict[str, Any], *, final: bool) -> None:
+            nonlocal sequence, emitted_audio_sec
+            encoded = str(payload.get("audio_f32_b64") or "")
+            if not encoded:
+                return
+            waveform = np.frombuffer(base64.b64decode(encoded), dtype="<f4").copy()
+            if waveform.size == 0:
+                return
+            sequence += 1
+            duration = float(waveform.size / self.config.sample_rate)
+            emitted_audio_sec += duration
+            emit(
+                SpeechSynthesisChunk(
+                    generation_id=request.generation_id,
+                    unit_id=request.unit_id,
+                    sequence=sequence,
+                    waveform=waveform,
+                    current_time=request.current_time,
+                    end_of_turn=bool(request.end_of_turn and final),
+                    metrics={
+                        "renderer": "dots",
+                        "audio_duration_sec": duration,
+                        "dots_patch_index": payload.get("patch_index"),
+                    },
+                )
+            )
+
+        for token_id in token_ids:
+            if cancel_event.is_set():
+                raise SynthesisCancelled()
+            call_started = time.monotonic()
+            payload = self._post(
+                "/v1/session/push",
+                {
+                    "generation_id": request.generation_id,
+                    "token_id": token_id,
+                },
+            )
+            remote_cost += time.monotonic() - call_started
+            if cancel_event.is_set():
+                raise SynthesisCancelled()
+            emit_payload(payload, final=False)
+
+        if request.end_of_turn:
+            pending_payload: dict[str, Any] | None = None
+            while True:
+                if cancel_event.is_set():
+                    raise SynthesisCancelled()
+                call_started = time.monotonic()
+                payload = self._post(
+                    "/v1/session/finish",
+                    {"generation_id": request.generation_id},
+                )
+                remote_cost += time.monotonic() - call_started
+                if cancel_event.is_set():
+                    raise SynthesisCancelled()
+                done = bool(payload.get("done"))
+                if pending_payload is not None:
+                    emit_payload(pending_payload, final=done)
+                if done:
+                    break
+                pending_payload = payload
+
+        return {
+            "generation_id": request.generation_id,
+            "unit_id": request.unit_id,
+            "renderer": "dots",
+            "text_tokens": len(token_ids),
+            "audio_chunks": sequence,
+            "audio_duration_sec": emitted_audio_sec,
+            "cost_dots": remote_cost,
+            "cost_all": time.monotonic() - started,
+        }
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = urllib.request.Request(
+            f"{self.config.endpoint.rstrip('/')}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.config.request_timeout_sec,
+            ) as response:
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Dots renderer request failed status={exc.code} detail={detail}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Dots renderer unavailable: {exc.reason}") from exc
+        value = json.loads(body or b"{}")
+        if not isinstance(value, dict):
+            raise TypeError("Dots renderer returned a non-object response")
+        return value
+
+
+@dataclass(frozen=True)
 class _QueuedRequest:
     request: SpeechSynthesisRequest
     cancel_event: threading.Event
@@ -621,6 +785,7 @@ class AsyncTalkerWorker:
         token_ids: tuple[int, ...],
         hidden_states: Any,
         end_of_turn: bool,
+        text: str = "",
     ) -> SpeechSynthesisRequest:
         with self._lock:
             if self._closed:
@@ -632,6 +797,7 @@ class AsyncTalkerWorker:
                 token_ids=token_ids,
                 hidden_states=hidden_states,
                 end_of_turn=end_of_turn,
+                text=text,
             )
             queued = _QueuedRequest(request=request, cancel_event=self._cancel_event)
             self._pending += 1
