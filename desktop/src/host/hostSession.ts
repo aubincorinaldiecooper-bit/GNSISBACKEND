@@ -46,6 +46,7 @@ export class HostSession {
   // instead of being refused as busy until the old one expires.
   private resumeToken: string | null = null;
   private readonly opts: HostSessionOptions;
+  private desktopGrant: string | null = null;
 
   constructor(opts: HostSessionOptions) {
     this.opts = opts;
@@ -53,6 +54,10 @@ export class HostSession {
 
   get connected(): boolean {
     return this.duplex?.connected ?? false;
+  }
+
+  setDesktopGrant(grant: string): void {
+    this.desktopGrant = grant;
   }
 
   connect(sessionId: string): void {
@@ -64,6 +69,9 @@ export class HostSession {
     this.duplex = new DuplexClient({
       url: this.opts.runtimeUrl,
       sessionId,
+      headers: this.desktopGrant
+        ? { Authorization: `Bearer ${this.desktopGrant}` }
+        : undefined,
       query: () => ({
         host_tools: tools?.names.length ? tools.names.join(",") : undefined,
         host_tools_version: tools?.names.length ? tools.version : undefined,

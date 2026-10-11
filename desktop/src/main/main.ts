@@ -40,6 +40,7 @@ import {
 import type { HostEvent } from "../host/protocol.js";
 import { audioFrameHeader, type ClientControl, type ScreenFrameMetadata } from "../shared/protocol.js";
 import { ToolRegistry } from "../tools/registry.js";
+import { ProtectedDesktopIdentity } from "./protectedIdentity.js";
 import { HOST_TOOL_SCHEMAS, HOST_TOOLS_VERSION } from "../tools/catalog.js";
 import { FilesTool } from "../tools/files.js";
 import { MacFinder } from "../tools/mac/finder.js";
@@ -207,6 +208,10 @@ const host = new HostSession({
     sendToRenderer("screen:update", update);
   },
 });
+const protectedIdentity = new ProtectedDesktopIdentity(
+  app.getPath("userData"),
+  process.env.GNSIS_API_URL?.trim() || "https://api.gnsis.studio",
+);
 
 const broker = new ActionBroker({
   registry: tools,
@@ -482,6 +487,17 @@ app.whenReady().then(async () => {
     { useSystemPicker: true },
   );
   createWindow();
+  try {
+    const grant = await protectedIdentity.authenticate();
+    if (grant) host.setDesktopGrant(grant);
+  } catch (error) {
+    hostLog(
+      "identity",
+      `protected desktop authentication unavailable: ${
+        error instanceof Error ? error.name : "unknown error"
+      }`,
+    );
+  }
   host.connect(SESSION_ID);
   host.ready();
   const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
@@ -560,6 +576,56 @@ app.whenReady().then(async () => {
     host.connect(SESSION_ID);
     host.ready();
   });
+  ipcMain.handle("identity:grant", (_e, grant: unknown) => {
+    if (
+      typeof grant !== "string" ||
+      grant.length < 40 ||
+      grant.length > 8192 ||
+      grant.split(".").length !== 3
+    ) {
+      throw new Error("The desktop grant is invalid.");
+    }
+    host.setDesktopGrant(grant);
+    lastReady = null;
+    duplexClosed = false;
+    host.connect(SESSION_ID);
+    host.ready();
+  });
+  ipcMain.handle(
+    "identity:protect",
+    async (
+      _e,
+      approvalGrant: unknown,
+      recoveryKey: unknown,
+    ) => {
+      if (
+        typeof approvalGrant !== "string" ||
+        approvalGrant.length < 40 ||
+        approvalGrant.length > 8192
+      ) {
+        throw new Error("The device approval is invalid.");
+      }
+      if (
+        recoveryKey !== undefined &&
+        (typeof recoveryKey !== "string" ||
+          recoveryKey.length < 20 ||
+          recoveryKey.length > 256)
+      ) {
+        throw new Error("The recovery key is invalid.");
+      }
+      if (typeof recoveryKey === "string") {
+        protectedIdentity.storeRecoveryKey(recoveryKey);
+      }
+      const grant = await protectedIdentity.authenticate(
+        typeof recoveryKey === "string" ? recoveryKey : undefined,
+        approvalGrant,
+      );
+      if (!grant) {
+        throw new Error("The protected desktop credential was not created.");
+      }
+      return grant;
+    },
+  );
   // How much microphone audio a call really sent: the first frame, and the
   // total when it ends, so "the mic was on but nothing arrived" shows in the log.
   let callFrames = 0;

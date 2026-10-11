@@ -266,6 +266,20 @@ class CreateJobRequest(BaseModel):
     engine: Optional[str] = None
 
 
+class DesktopChallengeRequest(BaseModel):
+    public_id: str = Field(min_length=1, max_length=64)
+    public_key: str = Field(min_length=1, max_length=512)
+
+
+class DesktopChallengeCompleteRequest(BaseModel):
+    challenge_id: str = Field(min_length=1, max_length=64)
+    signature: str = Field(min_length=1, max_length=512)
+    recovery_key: Optional[str] = Field(default=None, min_length=20, max_length=256)
+    approved_by_grant: Optional[str] = Field(
+        default=None, min_length=40, max_length=8192
+    )
+
+
 class InternalCreateJobRequest(BaseModel):
     repo: str = Field(..., examples=["owner/name"])
     instruction: str
@@ -373,6 +387,49 @@ def health() -> dict:
     else:
         payload["memory"] = settings.memory_backend
     return payload
+
+
+@app.post("/v1/desktop/identity/challenge")
+def desktop_identity_challenge(req: DesktopChallengeRequest) -> dict:
+    from .desktop_identity import DesktopIdentityError, create_challenge
+
+    try:
+        return create_challenge(req.public_id, req.public_key)
+    except DesktopIdentityError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+
+
+@app.post("/v1/desktop/identity/complete")
+def desktop_identity_complete(req: DesktopChallengeCompleteRequest) -> dict:
+    from .desktop_identity import (
+        DesktopIdentityError,
+        complete_challenge,
+        issue_grant,
+        verify_approval_grant,
+    )
+
+    try:
+        approved_person_id = (
+            verify_approval_grant(get_settings(), req.approved_by_grant)
+            if req.approved_by_grant
+            else None
+        )
+        enrollment = complete_challenge(
+            req.challenge_id,
+            req.signature,
+            recovery_key=req.recovery_key,
+            approved_person_id=approved_person_id,
+        )
+        grant = issue_grant(get_settings(), enrollment)
+    except DesktopIdentityError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return {
+        "person_id": enrollment.person_id,
+        "device_id": enrollment.device_id,
+        "public_id": enrollment.public_id,
+        "recovery_key": enrollment.recovery_key,
+        **grant,
+    }
 
 
 AVAILABLE_ENGINES = [

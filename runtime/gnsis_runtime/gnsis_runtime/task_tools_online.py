@@ -488,9 +488,7 @@ class TaskToolsRealtimeCoordinator:
             "frame_ids": frame_ids,
             "source_start_sec": source_start_sec,
             "source_end_sec": source_end_sec,
-            "namespace": (
-                f"{self.session_memory.namespace}:session:{self.session_id}"
-            ),
+            "namespace": self.session_memory.namespace,
         }
 
     async def _persist_perception_episode(self, episode: dict[str, Any]) -> None:
@@ -550,7 +548,7 @@ class TaskToolsRealtimeCoordinator:
             episodes = await asyncio.to_thread(
                 self.session_memory.episodes_for_turn,
                 turn.final_asr,
-                namespace=f"{self.session_memory.namespace}:session:{self.session_id}",
+                namespace=self.session_memory.namespace,
             )
         except Exception:
             LOGGER.warning(

@@ -157,6 +157,8 @@ export interface IdentityStore {
   load(): Promise<Identity | null>;
   create(): Promise<Identity>;
   erase(): Promise<void>;
+  /** Prove possession of the existing device key during identity migration. */
+  signChallenge?(challenge: string): Promise<string>;
   /** One plain sentence about where the private key is kept, shown in Settings. */
   readonly storageNote: string;
 }

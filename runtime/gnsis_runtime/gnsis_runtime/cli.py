@@ -619,6 +619,12 @@ def _duplex_settings(config: ReleaseConfig) -> OnlineDuplexSettings:
         # The secret lives in the environment, never in the config file. Absent,
         # this is "" and the socket check stays off — see OnlineDuplexSettings.
         edge_secret=os.environ.get(duplex.edge_secret_env, ""),
+        desktop_grant_public_key=os.environ.get(
+            "GNSIS_DESKTOP_GRANT_PUBLIC_KEY", ""
+        ),
+        desktop_grant_issuer=os.environ.get(
+            "GNSIS_DESKTOP_GRANT_ISSUER", "gnsis-control-plane"
+        ),
     )
 
 

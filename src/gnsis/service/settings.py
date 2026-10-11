@@ -206,6 +206,9 @@ class Settings:
     visual_max_frames_per_session: int = 100_000
     visual_daily_decision_quota: Optional[int] = None
     visual_usage_secret: Optional[str] = field(default=None, repr=False)
+    desktop_grant_private_key: Optional[str] = field(default=None, repr=False)
+    desktop_grant_issuer: str = "gnsis-control-plane"
+    desktop_grant_ttl_s: int = 900
 
     @property
     def litellm_enabled(self) -> bool:
@@ -562,6 +565,15 @@ class Settings:
                 else None
             ),
             visual_usage_secret=os.environ.get("GNSIS_VISUAL_USAGE_SECRET"),
+            desktop_grant_private_key=os.environ.get(
+                "GNSIS_DESKTOP_GRANT_PRIVATE_KEY"
+            ),
+            desktop_grant_issuer=os.environ.get(
+                "GNSIS_DESKTOP_GRANT_ISSUER", "gnsis-control-plane"
+            ),
+            desktop_grant_ttl_s=max(
+                60, min(3600, _int("GNSIS_DESKTOP_GRANT_TTL_S", 900))
+            ),
             markup_rate=os.environ.get("GNSIS_MARKUP_RATE", "0.05"),
             rate_card_version=os.environ.get("GNSIS_RATE_CARD_VERSION", "beta-2026-07"),
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
