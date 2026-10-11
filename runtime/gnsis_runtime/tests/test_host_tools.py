@@ -211,7 +211,7 @@ def desktop_app(monkeypatch, tmp_path):
     return _build
 
 
-DESKTOP = "/ws/duplex?session_id=desk1&host_tools=files,open&host_tools_version=desktop-v4"
+DESKTOP = "/ws/duplex?session_id=desk1&host_tools=files,open&host_tools_version=desktop-v5"
 
 
 def _timeline(coordinator) -> list[tuple[str, str | None]]:
@@ -228,13 +228,13 @@ def _timeline(coordinator) -> list[tuple[str, str | None]]:
 def test_the_shipped_catalog_is_what_the_desktop_speaks():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
     assert catalog is not None
-    assert catalog.version == "desktop-v4"
+    assert catalog.version == "desktop-v5"
     assert catalog.names() == ("open", "files", "browser", "input", "window", "clipboard")
 
 
 def test_a_desktop_is_shown_only_the_tools_it_offered():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
-    agreed = host_tools_module.negotiate(catalog, "files,open,teleport", "desktop-v4")
+    agreed = host_tools_module.negotiate(catalog, "files,open,teleport", "desktop-v5")
     # Catalog order, not the order offered; an unknown name is refused.
     assert agreed.accepted == ("open", "files")
     assert agreed.rejected == ("teleport",)
@@ -253,7 +253,7 @@ def test_a_desktop_built_against_another_catalog_gets_no_tools():
 def test_a_web_page_that_offers_nothing_changes_nothing():
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
     assert host_tools_module.negotiate(catalog, None, None) is host_tools_module.NO_HOST_TOOLS
-    assert host_tools_module.negotiate(None, "files", "desktop-v4").reason == "no_catalog"
+    assert host_tools_module.negotiate(None, "files", "desktop-v5").reason == "no_catalog"
 
 
 def test_malformed_names_never_reach_the_prompt():
@@ -542,12 +542,30 @@ def test_a_catalog_over_the_tool_budget_turns_actions_off_not_the_runtime(monkey
 @pytest.mark.parametrize("config_name", ["gnsis-voice.yaml", "gnsis-dots-voice.yaml"])
 def test_the_shipped_catalog_fits_the_shipped_tool_allowance(config_name):
     """A desktop offering its whole catalog must not push the model over its
-    schema count, or the runtime switches every desktop action off at boot."""
+    schema count or measured token budget, or the runtime switches every
+    desktop action off at boot."""
 
+    import hashlib
     import yaml
-    from mcpmft.tool_protocol import LEAN_TASK_TOOL_SCHEMAS
+    from mcpmft.tool_protocol import LEAN_TASK_TOOL_SCHEMAS, compact_json
 
     config = yaml.safe_load((Path(CATALOG_PATH).parent / config_name).read_text(encoding="utf-8"))
     catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
     business = len(catalog.names()) + len(LEAN_TASK_TOOL_SCHEMAS)
     assert business <= config["duplex"]["max_tool_schemas"]
+
+    rendered = "\n".join(
+        compact_json(schema) for schema in [*catalog.schemas, *LEAN_TASK_TOOL_SCHEMAS]
+    )
+    # Measured with the production MiniCPM-o 4.5 tokenizer. The recorded
+    # upper bound conservatively includes the runtime's built-in haptic
+    # schema, even though that schema is reserved outside this configured
+    # business-tool budget. Pinning the rendered business-schema digest makes
+    # any schema edit re-run that measurement instead of silently trusting a
+    # stale token count.
+    measured = {
+        "7426697ba3362cb291b2e46f0346673373303aaabb25c201cfb1802c06f4c16a": 2192,
+    }
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    assert digest in measured, "host schemas changed; remeasure with MiniCPM-o 4.5"
+    assert measured[digest] <= config["duplex"]["max_tool_schema_tokens"]

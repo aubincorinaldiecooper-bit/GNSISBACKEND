@@ -311,28 +311,52 @@ test("browser: upload and dialog capabilities are exposed through the typed bind
 });
 
 test("browser: exact inspected refs drive Cua click, type and pointer actions", async () => {
-  const cua = fakeCua((tool) => {
+  const cua = fakeCua((tool, args) => {
     if (tool === "list_windows") return {
       text: "",
       structured: { windows: [{ pid: 81, window_id: 9, app_name: "Google Chrome", title: "Form", z_index: 20, is_on_screen: true }] },
     };
     if (tool === "get_browser_state") return {
       text: "",
-      structured: { target_id: "bt-3", tabs: [{ tab_id: "tab-3", title: "Form", url: "https://example.org/", selected: true }] },
+      structured: {
+        target_id: "bt-3",
+        tabs: [{ tab_id: "tab-3", title: "Form", url: "https://example.org/", selected: true }],
+        ...(args.format === "semantic_v2" ? {
+          elements: [
+            { ref: "p2:4", role: "button", label: "Submit" },
+            { ref: "p2:5", role: "textbox", label: "Name" },
+            { ref: "p2:6", role: "button", label: "More" },
+            { ref: "p2:7", role: "region", label: "Results" },
+            { ref: "p2:8", role: "item", label: "Report" },
+            { ref: "p2:9", role: "folder", label: "Archive" },
+            { ref: "p2:10", role: "button" },
+          ],
+        } : {}),
+      },
     };
     return { text: "ok" };
   });
   const browser = new BrowserTool(cua, noWait);
   const exact = { session: "gnsis-browser", target_id: "bt-3", tab_id: "tab-3" };
+  await (await browser.prepare({ action: "inspect" })).run();
 
   const submit = await browser.prepare({ action: "click", ref: "p2:4", label: "Submit" });
   assert.equal(submit.effect, "input");
   assert.ok(submit.consequential);
+  assert.deepEqual(submit.scope, [{ value: "Submit", source: "named" }]);
+  assert.ok((await browser.prepare({ action: "click", ref: "p2:10" })).consequential);
   await submit.run();
   assert.deepEqual(cua.calls.at(-1), { tool: "browser_click", args: { ...exact, ref: "p2:4" } });
 
   await (await browser.prepare({ action: "type", ref: "p2:5", label: "Name", text: "Ada", replace: true })).run();
   assert.deepEqual(cua.calls.at(-1), { tool: "browser_type", args: { ...exact, ref: "p2:5", text: "Ada", replace: true, mode: "insert_text" } });
+  await (await browser.prepare({ action: "type", ref: "p2:5", text: "", replace: true })).run();
+  assert.deepEqual(cua.calls.at(-1), { tool: "browser_type", args: { ...exact, ref: "p2:5", text: "", replace: true, mode: "insert_text" } });
+  assert.ok((await browser.prepare({ action: "type", ref: "p2:5", text: "Ada\n", mode: "keystrokes" })).consequential);
+  await assert.rejects(
+    browser.prepare({ action: "click", ref: "p2:4", label: "Continue" }),
+    (err: unknown) => err instanceof ActionProblem && err.status === "failed",
+  );
 
   for (const action of ["hover", "right_click", "double_click"]) {
     await (await browser.prepare({ action, ref: "p2:6" })).run();
@@ -352,8 +376,7 @@ test("browser: exact element actions need a ref and Chrome or Edge, never a gues
   await assert.rejects(browser.prepare({ action: "click" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
   await assert.rejects(browser.prepare({ action: "scroll", ref: "p1:1" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
   await assert.rejects(browser.prepare({ action: "drag", ref: "p1:1" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
-  const click = await browser.prepare({ action: "click", ref: "p1:1" });
-  await assert.rejects(click.run(), (err: unknown) => err instanceof ActionProblem && err.status === "unsupported");
+  await assert.rejects(browser.prepare({ action: "click", ref: "p1:1" }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
   assert.ok(!safari.calls.some((c) => c.tool.startsWith("browser_")));
 });
 
@@ -388,6 +411,8 @@ test("window: menu items are chosen by exact path, and risky ones always ask", a
   assert.deepEqual(cua.calls.at(-1), { tool: "invoke_menu", args: { pid: 42, window_id: 7, path: ["File", "Save As..."] } });
   const close = await windows.prepare({ action: "menu", app: "TextEdit", path: ["File", "Close"] });
   assert.ok(close.consequential);
+  const nestedDelete = await windows.prepare({ action: "menu", app: "TextEdit", path: ["Account", "Delete Account", "Apply"] });
+  assert.ok(nestedDelete.consequential);
   await assert.rejects(windows.prepare({ action: "menu", app: "TextEdit", path: [] }), (err: unknown) => err instanceof ActionProblem && err.status === "failed");
 });
 
@@ -400,9 +425,10 @@ test("window and clipboard capabilities use Cua tools", async () => {
         elements: [
           { role: "button", label: "Save", element_token: "s1:4", enabled: true },
           { role: "password field", label: "Password", value: "do-not-expose", element_token: "s1:5" },
+          { role: "text field", label: "", value: "unlabeled-secret", element_token: "s1:6" },
         ],
-        total_element_count: 2,
-        returned_element_count: 2,
+        total_element_count: 3,
+        returned_element_count: 3,
       },
     };
     if (tool === "clipboard_read") return { text: "", structured: { types: ["public.utf8-plain-text"], text: "hello" } };
@@ -416,6 +442,7 @@ test("window and clipboard capabilities use Cua tools", async () => {
   assert.deepEqual(inspected.detail?.elements, [
     { ref: "s1:4", role: "button", label: "Save", enabled: true },
     { ref: "s1:5", role: "password field", label: "Password", value: "[private]" },
+    { ref: "s1:6", role: "text field", value: "[private]" },
   ]);
 
   await (await windows.prepare({ action: "focus", app: "TextEdit" })).run();

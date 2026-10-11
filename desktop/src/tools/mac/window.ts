@@ -80,7 +80,7 @@ export class WindowTool implements ActionTool {
         effect: "input",
         summary: `Choose ${named} in ${target.appName}`,
         scope: [...scope, { value: path[path.length - 1], source: "named" }],
-        consequential: CONSEQUENTIAL_MENU.test(path[path.length - 1]) ? `choosing “${path[path.length - 1]}” may close, send, delete or commit something` : undefined,
+        consequential: CONSEQUENTIAL_MENU.test(named) ? `choosing “${named}” may close, send, delete or commit something` : undefined,
         needs: [{ kind: "accessibility" }],
         run: async () => {
           await this.call("invoke_menu", { ...windowArgs(target), path });
@@ -176,6 +176,7 @@ function safeValue(row: Record<string, unknown>, role: string, label: string): s
   if (
     row.secure === true ||
     row.is_secure === true ||
+    /\b(text ?field|search ?field|input|combo ?box|editable)\b/.test(role.toLocaleLowerCase()) ||
     /\b(password|passcode|pin|secret|token|api key|private key|credit card|card number|cvv|cvc)\b/.test(descriptor)
   ) {
     return "[private]";

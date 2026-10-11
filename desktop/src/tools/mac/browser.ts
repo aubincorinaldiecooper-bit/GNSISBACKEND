@@ -36,9 +36,17 @@ interface Binding {
   tabs: Tab[];
 }
 
+interface BrowserInspection {
+  appName: string;
+  targetId: string;
+  tabId: string;
+  elements: Map<string, string>;
+}
+
 export class BrowserTool implements ActionTool {
   readonly name = "browser";
   readonly platforms = ["darwin"] as const;
+  private inspection: BrowserInspection | null = null;
 
   constructor(
     private readonly cua: CuaControl,
@@ -174,21 +182,32 @@ export class BrowserTool implements ActionTool {
             const active = activeTab(binding.tabs);
             if (!active?.id) throw new ActionProblem("failed", "Cua could not identify the active tab.");
             const state = await this.call("get_browser_state", { session: BROWSER_SESSION, target_id: binding.targetId, tab_id: active.id, format: "semantic_v2" });
+            this.inspection = {
+              appName: browser.appName,
+              targetId: binding.targetId,
+              tabId: active.id,
+              elements: semanticElements(state.structured),
+            };
             return { verified: "browser", message: `Read the active ${browser.appName} page through Cua's exact browser binding.`, detail: { target_id: binding.targetId, tab_id: active.id, state: state.structured } };
           },
         };
       case "click": {
         const ref = required(args, "ref", "the inspected page element ref");
-        const label = str(args, "label");
+        const label = this.inspectedLabel(browser, ref, str(args, "label"));
         return {
           tool: this.name,
           action,
           effect: "input",
           summary: `Click ${label ? `“${label}”` : "the inspected page element"} in ${browser.appName}`,
           scope: browserScope(browser, label),
-          consequential: label && CONSEQUENTIAL_LABEL.test(label) ? `clicking “${label}” may send, buy, delete or commit something` : undefined,
+          consequential: !label
+            ? "the inspected browser control has no trustworthy label"
+            : CONSEQUENTIAL_LABEL.test(label)
+              ? `clicking “${label}” may send, buy, delete or commit something`
+              : undefined,
           run: async () => {
             const { targetId, tab } = await this.activeTyped(browser);
+            this.assertCurrentInspection(browser, targetId, tab.id);
             await this.call("browser_click", {
               session: BROWSER_SESSION,
               target_id: targetId,
@@ -201,8 +220,8 @@ export class BrowserTool implements ActionTool {
       }
       case "type": {
         const ref = required(args, "ref", "the inspected page field ref");
-        const value = required(args, "text", "what to type");
-        const label = str(args, "label");
+        const value = stringArg(args, "text", "what to type");
+        const label = this.inspectedLabel(browser, ref, str(args, "label"));
         const mode = str(args, "mode") || "insert_text";
         if (!["insert_text", "keystrokes"].includes(mode)) throw new ActionProblem("failed", "mode must be insert_text or keystrokes.");
         return {
@@ -211,8 +230,12 @@ export class BrowserTool implements ActionTool {
           effect: "input",
           summary: `Type into ${label ? `“${label}”` : "the inspected page field"} in ${browser.appName}`,
           scope: [{ value, source: "named" }, ...browserScope(browser, label)],
+          consequential: mode === "keystrokes" && /[\r\n]/.test(value)
+            ? "typing Enter may submit this browser form"
+            : undefined,
           run: async () => {
             const { targetId, tab } = await this.activeTyped(browser);
+            this.assertCurrentInspection(browser, targetId, tab.id);
             await this.call("browser_type", {
               session: BROWSER_SESSION,
               target_id: targetId,
@@ -232,8 +255,9 @@ export class BrowserTool implements ActionTool {
       case "scroll":
       case "drag": {
         const ref = required(args, "ref", "the inspected page element ref");
-        const label = str(args, "label");
+        const label = this.inspectedLabel(browser, ref, str(args, "label"));
         const destinationRef = str(args, "destination_ref");
+        if (destinationRef) this.inspectedLabel(browser, destinationRef, "");
         const deltaX = finiteOptional(args.delta_x);
         const deltaY = finiteOptional(args.delta_y);
         if (action === "scroll" && deltaX === undefined && deltaY === undefined) {
@@ -249,9 +273,11 @@ export class BrowserTool implements ActionTool {
           summary: `${pointerSummary(action)} ${label ? `“${label}”` : "the inspected page element"} in ${browser.appName}`,
           scope: browserScope(browser, label),
           consequential: action === "right_click" || action === "hover" || action === "scroll" ? undefined
-            : label && CONSEQUENTIAL_LABEL.test(label) ? `${action.replace("_", "-")} on “${label}” may send, buy, delete or commit something` : undefined,
+            : !label ? "the inspected browser control has no trustworthy label"
+              : CONSEQUENTIAL_LABEL.test(label) ? `${action.replace("_", "-")} on “${label}” may send, buy, delete or commit something` : undefined,
           run: async () => {
             const { targetId, tab } = await this.activeTyped(browser);
+            this.assertCurrentInspection(browser, targetId, tab.id);
             await this.call("browser_pointer", {
               session: BROWSER_SESSION,
               target_id: targetId,
@@ -401,6 +427,33 @@ export class BrowserTool implements ActionTool {
     return { targetId: binding.targetId, tab: tab as Tab & { id: string } };
   }
 
+  private inspectedLabel(browser: Browser, ref: string, supplied?: string): string {
+    const inspection = this.inspection;
+    if (!inspection || inspection.appName !== browser.appName) {
+      throw new ActionProblem("failed", "Inspect the active browser page first and use a current element ref.");
+    }
+    if (!inspection.elements.has(ref)) {
+      throw new ActionProblem("failed", "That browser element ref is not in the current inspection. Inspect the page again.");
+    }
+    const label = inspection.elements.get(ref) ?? "";
+    if (supplied && normalizeLabel(supplied) !== normalizeLabel(label)) {
+      throw new ActionProblem("failed", "The supplied browser label does not match the inspected element.");
+    }
+    return label;
+  }
+
+  private assertCurrentInspection(browser: Browser, targetId: string, tabId: string): void {
+    const inspection = this.inspection;
+    if (
+      !inspection ||
+      inspection.appName !== browser.appName ||
+      inspection.targetId !== targetId ||
+      inspection.tabId !== tabId
+    ) {
+      throw new ActionProblem("failed", "The browser changed after inspection. Inspect the active page again.");
+    }
+  }
+
   private async go(browser: Browser, url: string): Promise<"typed" | "native"> {
     if (browser.family === "typed") {
       try {
@@ -449,11 +502,48 @@ function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url.slice(0, 60); }
 }
 
-function browserScope(browser: Browser, label?: string): Array<{ value: string; source: "named" }> {
-  return [
-    ...(label ? [{ value: label, source: "named" as const }] : []),
-    { value: browser.appName, source: "named" },
-  ];
+function browserScope(_browser: Browser, label?: string): Array<{ value: string; source: "named" }> {
+  return label ? [{ value: label, source: "named" }] : [];
+}
+
+function stringArg(args: Record<string, unknown>, key: string, label: string): string {
+  const value = args[key];
+  if (typeof value !== "string") throw new ActionProblem("failed", `Say ${label}.`);
+  return value.slice(0, 8_000);
+}
+
+function semanticElements(value: unknown): Map<string, string> {
+  const elements = new Map<string, string>();
+  const visit = (item: unknown): void => {
+    if (Array.isArray(item)) {
+      for (const child of item) visit(child);
+      return;
+    }
+    const row = asRecord(item);
+    if (!row) return;
+    const ref = text(row.ref ?? row.element_ref ?? row.elementRef ?? row.element_token ?? row.elementToken);
+    if (ref) {
+      const label = text(
+        row.label ??
+        row.name ??
+        row.aria_label ??
+        row.ariaLabel ??
+        row.title ??
+        row.placeholder ??
+        row.text,
+      );
+      elements.set(ref, label);
+    }
+    for (const child of Object.values(row)) {
+      if (child && typeof child === "object") visit(child);
+    }
+  };
+  visit(value);
+  return elements;
+}
+
+function normalizeLabel(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
 function finiteOptional(value: unknown): number | undefined {
