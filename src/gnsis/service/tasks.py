@@ -399,6 +399,7 @@ def deploy_live_runtime(smoke: bool = False) -> dict:
         models_volume=s.gnsis_models_volume,
         secret_name=s.gnsis_secret_name,
         edge_secret=s.gnsis_edge_secret,
+        desktop_grant_public_key=s.desktop_grant_public_key,
     )
     url = compute.gnsis_web_url()
     result = {"url": url, "app": compute.ref.app_name, "environment": compute.ref.environment}

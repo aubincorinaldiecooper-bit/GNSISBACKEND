@@ -6,7 +6,7 @@ import {
   sign,
   type KeyObject,
 } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 interface StoredCredential {
@@ -35,9 +35,11 @@ export class ProtectedDesktopIdentity {
     approvedByGrant?: string,
   ): Promise<string | null> {
     let credential = this.load();
+    let created = false;
     if (!credential) {
       if (!recoveryKey) return null;
       credential = this.create();
+      created = true;
     }
     const privateKey = this.privateKey(credential);
     const challenge = await this.post<ChallengeReply>(
@@ -63,16 +65,22 @@ export class ProtectedDesktopIdentity {
           : {}),
       },
     );
+    if (created) this.store(credential);
     return completed.grant;
   }
 
   storeRecoveryKey(recoveryKey: string): void {
     this.assertEncryption();
     writeFileSync(
-      path.join(this.userDataPath, "desktop-recovery-key"),
+      this.recoveryKeyPath(),
       safeStorage.encryptString(recoveryKey),
       { mode: 0o600 },
     );
+  }
+
+  erase(): void {
+    rmSync(this.credentialPath(), { force: true });
+    rmSync(this.recoveryKeyPath(), { force: true });
   }
 
   private create(): StoredCredential {
@@ -86,18 +94,20 @@ export class ProtectedDesktopIdentity {
       type: "pkcs8",
       format: "pem",
     }) as string;
-    const credential = {
+    return {
       publicId,
       publicKey: rawPublicKey.toString("base64"),
       encryptedPrivateKey: safeStorage
         .encryptString(privatePem)
         .toString("base64"),
     };
+  }
+
+  private store(credential: StoredCredential): void {
     writeFileSync(this.credentialPath(), JSON.stringify(credential), {
       encoding: "utf8",
       mode: 0o600,
     });
-    return credential;
   }
 
   private load(): StoredCredential | null {
@@ -131,6 +141,10 @@ export class ProtectedDesktopIdentity {
 
   private credentialPath(): string {
     return path.join(this.userDataPath, "desktop-device-credential.json");
+  }
+
+  private recoveryKeyPath(): string {
+    return path.join(this.userDataPath, "desktop-recovery-key");
   }
 
   private async post<T>(endpoint: string, body: object): Promise<T> {

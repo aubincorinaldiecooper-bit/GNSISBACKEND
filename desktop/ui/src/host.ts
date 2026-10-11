@@ -113,6 +113,8 @@ export interface LiveHost {
   sendText?(text: string): Promise<void>;
   startVision(source: VisionSource): Promise<void>;
   stopVision(): Promise<void>;
+  /** Remove this computer's OS-protected identity and authenticated sockets. */
+  eraseIdentity?(): Promise<void>;
   /**
    * The picture the host is sharing with GNSIS right now, so the person can
    * see it too; null when nothing is shared. Hosts that cannot show it leave
