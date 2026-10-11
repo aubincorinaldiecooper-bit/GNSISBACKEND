@@ -177,6 +177,13 @@ export class ScreenClient extends EventEmitter {
     });
     ws.on("close", (code, reason) => {
       this.emit("close", code, reason.toString());
+      // 1008: the runtime refused this session (ended, or screen not allowed).
+      // Retrying cannot help and keeps the GPU awake; the next `ready` reopens.
+      if (code === 1008) {
+        if (this.ws === ws) this.ws = null;
+        this.emit("rejected", reason.toString());
+        return;
+      }
       this._scheduleReconnect();
     });
     ws.on("error", (err) => this.emit("error", err));

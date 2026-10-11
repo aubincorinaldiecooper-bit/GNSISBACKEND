@@ -137,3 +137,24 @@ test("exhausted pre-auth reconnect state cannot strand the client", async () => 
   for (const ws of wss.clients) ws.terminate();
   wss.close();
 });
+
+test("a session the runtime refuses is not retried until the next ready", async () => {
+  await withServer(async (wss, port, seen) => {
+    wss.on("connection", (ws) => ws.close(1008, "duplex session is not active"));
+    const client = new ScreenClient({
+      url: `http://127.0.0.1:${port}`,
+      sessionId: "s1",
+      reconnectDelaysMs: [10],
+    });
+    client.on("error", () => {});
+    client.connect();
+    client.applyChannel({ token: "tok-1" });
+    await sleep(300);
+    assert.equal(seen.length, 1);
+
+    client.applyChannel({ token: "tok-1" });
+    await sleep(150);
+    assert.equal(seen.length, 2);
+    client.close();
+  });
+});

@@ -26,6 +26,8 @@ export interface MicLike {
   onLevel?: (level: number) => void;
   start(): Promise<void>;
   stop(): void;
+  /** The input to open next time; "" is the system default. */
+  setDevice?(deviceId: string): void;
 }
 
 export interface PlaybackLike {
@@ -34,6 +36,8 @@ export interface PlaybackLike {
   level(): number;
   play(pcm: Uint8Array): void;
   cancel(reason?: string): number;
+  /** Off keeps replies playing (and acknowledged) at zero volume. */
+  setAudible?(audible: boolean): void;
 }
 
 export interface VisionLike {
@@ -422,6 +426,21 @@ export class ElectronLiveHost implements LiveHost {
       this.emit({ type: "vision", source, state: denied ? "denied" : "error", detail });
       throw new Error(detail);
     }
+  }
+
+  async microphones(): Promise<Array<{ id: string; label: string }>> {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return all
+      .filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "default")
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+  }
+
+  setMicrophone(deviceId: string): void {
+    this.devices.mic.setDevice?.(deviceId);
+  }
+
+  setSpeakReplies(on: boolean): void {
+    this.devices.playback.setAudible?.(on);
   }
 
   visionStream(): MediaStream | null {

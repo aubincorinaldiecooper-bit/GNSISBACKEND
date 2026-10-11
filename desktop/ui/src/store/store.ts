@@ -1,3 +1,4 @@
+import { loadMicrophone, loadSpeakReplies } from "../lib/audioPrefs";
 import { useSyncExternalStore } from "react";
 import {
   AGENT_ANSWER, AGENT_TOTAL, APPROVAL, COMMANDS, FOLLOW_PHRASE, QUESTION, ROOF_DRAFT, TYPING_NOT_CONNECTED,
@@ -139,6 +140,8 @@ export function configure(h: LiveHost, ids: IdentityStore) {
   host = h;
   identityStore = ids;
   setState({ caps: h.capabilities() });
+  h.setMicrophone?.(loadMicrophone());
+  h.setSpeakReplies?.(loadSpeakReplies());
   unsubscribeHost = h.subscribe(onLiveEvent);
 }
 export const getHost = () => host;

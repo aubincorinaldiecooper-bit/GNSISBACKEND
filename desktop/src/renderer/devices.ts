@@ -29,6 +29,7 @@ export type Log = (line: string) => void;
 export class Playback {
   private readonly ctx: AudioContext;
   private readonly analyser: AnalyserNode;
+  private readonly output: GainNode;
   private readonly samples: Uint8Array<ArrayBuffer>;
   private readonly scheduler: PlaybackScheduler;
   private seq = 0;
@@ -42,7 +43,9 @@ export class Playback {
     // speaker, not off the chunks as they arrive.
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 256;
-    this.analyser.connect(this.ctx.destination);
+    this.output = this.ctx.createGain();
+    this.analyser.connect(this.output);
+    this.output.connect(this.ctx.destination);
     this.samples = new Uint8Array(this.analyser.fftSize);
     this.scheduler = new PlaybackScheduler(() => this.ctx.currentTime);
   }
@@ -86,6 +89,10 @@ export class Playback {
     });
   }
 
+  setAudible(audible: boolean): void {
+    this.output.gain.value = audible ? 1 : 0;
+  }
+
   /** Stop everything scheduled and tell the daemon it was cancelled. */
   cancel(reason = "user_interrupt"): number {
     const stopped = this.scheduler.cancelAll();
@@ -109,6 +116,7 @@ export class Mic {
   private readonly session = new MicSession();
   private stream: MediaStream | null = null;
   private device = "";
+  private deviceId = "";
   /** Microphone level 0–1, measured on the 16 kHz frames that go to the daemon. */
   onLevel?: (level: number) => void;
 
@@ -123,7 +131,7 @@ export class Mic {
 
   /** Open the microphone and start streaming frames. Does not start a call. */
   async start(): Promise<void> {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await this.open();
     this.stream = stream;
     const label = stream.getAudioTracks()[0]?.label ?? "default";
     if (this.device !== label) {
@@ -153,6 +161,24 @@ export class Mic {
     src.connect(node);
     node.connect(ctx.destination);
     this.log("mic on");
+  }
+
+  setDevice(deviceId: string): void {
+    this.deviceId = deviceId;
+  }
+
+  /** The chosen input, or the system default when it is gone. */
+  private async open(): Promise<MediaStream> {
+    if (this.deviceId) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: this.deviceId } } });
+      } catch (e) {
+        const name = (e as { name?: string }).name;
+        if (name !== "OverconstrainedError" && name !== "NotFoundError") throw e;
+        this.log("chosen microphone unavailable; using the system default");
+      }
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: true });
   }
 
   /**

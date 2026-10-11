@@ -134,6 +134,17 @@ export class SimulatedLiveHost implements LiveHost {
     return this.picture;
   }
 
+  async microphones(): Promise<Array<{ id: string; label: string }>> {
+    return [
+      { id: "built-in", label: "MacBook Pro Microphone" },
+      { id: "airpods", label: "AirPods Pro" },
+    ];
+  }
+
+  setMicrophone(_deviceId: string): void {}
+
+  setSpeakReplies(_on: boolean): void {}
+
   async stopVision(): Promise<void> {
     const was = this.picture !== null;
     this.stopPicture();
