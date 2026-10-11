@@ -13,6 +13,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..clock import utcnow
@@ -20,6 +21,7 @@ from . import orm
 from .db import session_scope
 
 _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+_MAX_OPEN_CHALLENGES = 10_000
 
 
 class DesktopIdentityError(Exception):
@@ -71,8 +73,31 @@ def create_challenge(public_id: str, public_key_b64: str) -> dict:
         raise DesktopIdentityError("public_id does not match public_key")
     challenge = secrets.token_bytes(32)
     challenge_id = f"dch_{secrets.token_hex(16)}"
-    expires_at = utcnow() + timedelta(minutes=5)
+    now = utcnow()
+    expires_at = now + timedelta(minutes=5)
     with session_scope() as session:
+        # Challenges are issued to anyone who asks, so the table is bounded
+        # here: expired rows go, and a key holds at most one open challenge.
+        session.execute(
+            delete(orm.DesktopAuthChallenge).where(
+                or_(
+                    orm.DesktopAuthChallenge.expires_at <= now,
+                    orm.DesktopAuthChallenge.consumed_at.is_not(None),
+                    (orm.DesktopAuthChallenge.public_id == public_id)
+                    & orm.DesktopAuthChallenge.consumed_at.is_(None),
+                )
+            )
+        )
+        open_challenges = session.execute(
+            select(func.count())
+            .select_from(orm.DesktopAuthChallenge)
+            .where(orm.DesktopAuthChallenge.consumed_at.is_(None))
+        ).scalar_one()
+        if open_challenges >= _MAX_OPEN_CHALLENGES:
+            raise DesktopIdentityError(
+                "too many authentication challenges; try again shortly",
+                status=429,
+            )
         session.add(
             orm.DesktopAuthChallenge(
                 id=challenge_id,

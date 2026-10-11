@@ -142,6 +142,7 @@ class ModalComputeTests(unittest.TestCase):
                 models_volume="weights",
                 secret_name="ornith",
                 edge_secret="edge-test",
+                desktop_grant_public_key="public-test",
             )
         args, kwargs = run.call_args
         self.assertEqual(args[0][-1], "modal/gnsis_voice.py")
@@ -152,6 +153,9 @@ class ModalComputeTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["GNSIS_MODELS_VOLUME"], "weights")
         self.assertEqual(kwargs["env"]["GNSIS_SECRET_NAME"], "ornith")
         self.assertEqual(kwargs["env"]["GNSIS_EDGE_SECRET"], "edge-test")
+        self.assertEqual(
+            kwargs["env"]["GNSIS_DESKTOP_GRANT_PUBLIC_KEY"], "public-test"
+        )
 
     def test_deploy_refuses_to_switch_the_front_door_off(self):
         """modal/gnsis_voice.py reads the edge secret from the deploying
@@ -163,6 +167,20 @@ class ModalComputeTests(unittest.TestCase):
             with patch("gnsis.service.modal_compute.subprocess.run") as run:
                 with self.assertRaisesRegex(RuntimeError, "GNSIS_EDGE_SECRET is not set"):
                     compute.deploy_gnsis(repo_root="/repo", edge_secret=missing)
+            run.assert_not_called()
+
+    def test_deploy_refuses_runtime_without_desktop_grant_verification_key(self):
+        compute = ModalCompute(token_id="id-test", token_secret="secret-test")
+        for missing in (None, "", "   "):
+            with patch("gnsis.service.modal_compute.subprocess.run") as run:
+                with self.assertRaisesRegex(
+                    RuntimeError, "GNSIS_DESKTOP_GRANT_PUBLIC_KEY is not set"
+                ):
+                    compute.deploy_gnsis(
+                        repo_root="/repo",
+                        edge_secret="edge-test",
+                        desktop_grant_public_key=missing,
+                    )
             run.assert_not_called()
 
     def test_settings_keep_security_secrets_out_of_repr(self):

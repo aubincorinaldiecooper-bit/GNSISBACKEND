@@ -224,6 +224,7 @@ class ModalCompute:
         models_volume: str = "gnsis-model-weights",
         secret_name: str = "gnsis-ornith-key",
         edge_secret: Optional[str] = None,
+        desktop_grant_public_key: Optional[str] = None,
     ) -> None:
         """Deploy the checked-in runtime (modal/gnsis_voice.py) from the worker image.
 
@@ -246,10 +247,17 @@ class ModalCompute:
                 "GNSIS_EDGE_SECRET on the worker to the same "
                 "value as the site's (set the site's first), then deploy."
             )
+        if not (desktop_grant_public_key or "").strip():
+            raise RuntimeError(
+                "GNSIS_DESKTOP_GRANT_PUBLIC_KEY is not set on the worker. "
+                "The memory-enabled runtime cannot verify desktop ownership "
+                "without the public half of the control-plane signing key."
+            )
         env = self._credential_env()
         env["GNSIS_MODELS_VOLUME"] = models_volume
         env["GNSIS_SECRET_NAME"] = secret_name
         env["GNSIS_EDGE_SECRET"] = edge_secret
+        env["GNSIS_DESKTOP_GRANT_PUBLIC_KEY"] = desktop_grant_public_key
         subprocess.run(
             [
                 "modal",

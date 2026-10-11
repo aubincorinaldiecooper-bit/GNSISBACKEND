@@ -19,6 +19,8 @@ export interface LinkState {
 }
 
 export interface GnsisBridge {
+  /** Backend used for desktop identity enrollment and grant renewal. */
+  readonly apiUrl?: string;
   /** GNSIS floats over the desktop in a see-through window. Missing means an ordinary window. */
   readonly overlay?: boolean;
   /** Where the page's cards are, in page pixels, so clicks elsewhere fall through. */
@@ -57,6 +59,8 @@ export interface GnsisBridge {
     approvalGrant: string,
     recoveryKey?: string,
   ): Promise<string>;
+  /** Remove the OS-protected identity and stop authenticated sockets. */
+  eraseDesktopIdentity?(): Promise<void>;
   startCall(): void;
   /** Close the call on the timeline; the daemon session stays alive. */
   endCall(reason: string): void;

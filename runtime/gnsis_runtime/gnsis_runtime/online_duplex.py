@@ -281,6 +281,10 @@ class _ActiveSession:
     # socket; `resumed` fires when a client re-binds; `slot_released` makes the
     # model slot's release idempotent across the handler and the grace timer.
     resume_token: str = ""
+    # The verified memory owner this session was opened for. A resume must
+    # present a grant for the same owner; the token alone does not carry the
+    # conversation across people.
+    owner_namespace: str = ""
     attached: bool = True
     stopped: bool = False
     slot_released: bool = False
@@ -301,6 +305,23 @@ class _ActiveSession:
     # What this session agreed with its Host when the socket opened. A resume
     # keeps it: the model's prompt was built from it and cannot change.
     host_tools: HostToolNegotiation = NO_HOST_TOOLS
+
+
+def _can_resume(
+    parked: _ActiveSession | None,
+    *,
+    resume_token: str,
+    owner_namespace: str,
+) -> bool:
+    return bool(
+        parked is not None
+        and not parked.attached
+        and not parked.stopped
+        and resume_token
+        and parked.resume_token
+        and secrets.compare_digest(resume_token, parked.resume_token)
+        and parked.owner_namespace == owner_namespace
+    )
 
 
 def _session_timing_mark(
@@ -2029,14 +2050,16 @@ def create_online_duplex_app(
             await websocket.close(code=1008)
             return
         session_memory = runtime.session_memory
+        owner_namespace = ""
         if session_memory is not None:
             from .live_grants import LiveGrantError, verify_live_grant
 
+            # Header only: a grant in the URL would end up in access logs.
             authorization = websocket.headers.get("authorization", "")
             token = (
                 authorization[7:].strip()
                 if authorization.lower().startswith("bearer ")
-                else websocket.query_params.get("grant", "")
+                else ""
             )
             try:
                 owner = verify_live_grant(
@@ -2047,8 +2070,9 @@ def create_online_duplex_app(
             except LiveGrantError:
                 await websocket.close(code=1008)
                 return
+            owner_namespace = owner.memory_namespace
             session_memory = runtime.session_memory.for_namespace(
-                owner.memory_namespace
+                owner_namespace
             )
         await websocket.accept()
         requested_id = websocket.query_params.get("session_id")
@@ -2141,13 +2165,10 @@ def create_online_duplex_app(
             websocket.query_params.get(HOST_TOOLS_VERSION_PARAM),
         )
         parked = runtime.sessions.get(session_id)
-        resuming = bool(
-            parked is not None
-            and not parked.attached
-            and not parked.stopped
-            and resume_token
-            and parked.resume_token
-            and secrets.compare_digest(resume_token, parked.resume_token)
+        resuming = _can_resume(
+            parked,
+            resume_token=resume_token,
+            owner_namespace=owner_namespace,
         )
         if not resuming:
             if runtime.model_lock.locked():
@@ -2612,6 +2633,7 @@ def create_online_duplex_app(
                         ),
                         media_mode=runtime.settings.media_mode,
                         resume_token=secrets.token_urlsafe(32),
+                        owner_namespace=owner_namespace,
                         expires_at=(
                             time.monotonic() + runtime.settings.max_session_sec
                             if runtime.settings.max_session_sec > 0

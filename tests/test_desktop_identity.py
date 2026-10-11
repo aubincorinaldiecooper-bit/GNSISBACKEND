@@ -7,6 +7,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -87,6 +88,26 @@ class DesktopIdentityTests(unittest.TestCase):
         with self.assertRaises(DesktopIdentityError) as reused:
             complete_challenge(challenge["challenge_id"], valid_signature)
         self.assertEqual(reused.exception.status, 409)
+
+    def test_challenge_issuance_is_bounded(self):
+        from gnsis.service.desktop_identity import (
+            DesktopIdentityError,
+            create_challenge,
+            derive_public_id,
+        )
+
+        create_challenge(self.public_id, self.public_key)
+        other = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+            serialization.Encoding.X962,
+            serialization.PublicFormat.UncompressedPoint,
+        )
+        with patch("gnsis.service.desktop_identity._MAX_OPEN_CHALLENGES", 1):
+            with self.assertRaises(DesktopIdentityError) as limited:
+                create_challenge(
+                    derive_public_id(other),
+                    base64.b64encode(other).decode(),
+                )
+        self.assertEqual(limited.exception.status, 429)
 
     def test_grant_contains_person_and_device_ownership(self):
         from gnsis.service.desktop_identity import (

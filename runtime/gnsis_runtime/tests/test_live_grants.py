@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from gnsis_runtime.live_grants import LiveGrantError, verify_live_grant
+from gnsis_runtime.online_duplex import _can_resume
 
 
 def _token(private_key, **overrides):
@@ -90,3 +92,22 @@ def test_namespace_is_person_owned_not_device_or_session_owned():
     )
     assert first.memory_namespace == second_device.memory_namespace
     assert first.memory_namespace != other_person.memory_namespace
+
+
+def test_resume_token_cannot_cross_memory_owners():
+    parked = SimpleNamespace(
+        attached=False,
+        stopped=False,
+        resume_token="resume-secret",
+        owner_namespace="person:person_one",
+    )
+    assert _can_resume(
+        parked,
+        resume_token="resume-secret",
+        owner_namespace="person:person_one",
+    )
+    assert not _can_resume(
+        parked,
+        resume_token="resume-secret",
+        owner_namespace="person:person_two",
+    )
