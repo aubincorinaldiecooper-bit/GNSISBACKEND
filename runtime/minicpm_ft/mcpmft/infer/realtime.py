@@ -615,6 +615,7 @@ class DuplexLiveSession:
                 token_ids=token_ids,
                 hidden_states=hidden_states,
                 end_of_turn=end_of_turn,
+                text=str(out.get("text") or ""),
             )
         metric_keys = (
             "cost_llm",

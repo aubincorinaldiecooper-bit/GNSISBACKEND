@@ -50,9 +50,12 @@ class ServerConfig:
 @dataclass(frozen=True)
 class DuplexConfig:
     checkpoint: str = ""
+    speech_renderer: Literal["gander", "dots"] = "gander"
     talker_checkpoint: str | None = None
     detached_talker_device: str | None = None
     talker_emit_speech_tokens: int = 25
+    dots_endpoint: str = "http://127.0.0.1:7976"
+    dots_request_timeout_sec: float = 10.0
     generate_audio: bool = False
     # Write sampled camera frames to disk for back-brain context. Off by
     # default. Without this field the opt-in existed only in Python and no
@@ -311,10 +314,20 @@ def validate_release_config(config: ReleaseConfig) -> None:
         raise ValueError("duplex.generate_audio requires duplex.ref_audio_path")
     if duplex.detached_talker_device and not duplex.generate_audio:
         raise ValueError("detached Talker requires duplex.generate_audio=true")
-    if duplex.detached_talker_device and not duplex.talker_checkpoint:
-        raise ValueError("detached Talker requires duplex.talker_checkpoint")
-    if duplex.detached_talker_device and not config.model.token2wav_dir:
-        raise ValueError("detached Talker requires model.token2wav_dir")
+    if duplex.speech_renderer == "gander":
+        if duplex.detached_talker_device and not duplex.talker_checkpoint:
+            raise ValueError("Gander renderer requires duplex.talker_checkpoint")
+        if duplex.detached_talker_device and not config.model.token2wav_dir:
+            raise ValueError("Gander renderer requires model.token2wav_dir")
+    elif duplex.speech_renderer == "dots":
+        if not duplex.detached_talker_device:
+            raise ValueError("Dots renderer requires duplex.detached_talker_device")
+        if not duplex.dots_endpoint.startswith(("http://", "https://")):
+            raise ValueError("duplex.dots_endpoint must be an HTTP(S) URL")
+        if duplex.dots_request_timeout_sec <= 0:
+            raise ValueError("duplex.dots_request_timeout_sec must be positive")
+    else:
+        raise ValueError("duplex.speech_renderer must be 'gander' or 'dots'")
     if duplex.allow_client_video and not config.model.init_vision:
         raise ValueError("client video requires model.init_vision=true")
     if duplex.media_mode != "voice" and not config.model.init_vision:
@@ -668,11 +681,6 @@ def _load_thinker(config: ReleaseConfig) -> tuple[Any, Any | None]:
     if duplex.detached_talker_device:
         import torch
 
-        from mcpmft.infer.detached_talker import (
-            DetachedTalkerConfig,
-            DetachedTalkerRuntime,
-        )
-
         thinker_device = torch.device(next(bundle.model.parameters()).device)
         talker_device = torch.device(duplex.detached_talker_device)
         if talker_device.type != "cuda":
@@ -681,21 +689,40 @@ def _load_thinker(config: ReleaseConfig) -> tuple[Any, Any | None]:
             raise ValueError("Thinker and detached Talker must use different devices")
         talker_gpu_index = talker_device.index if talker_device.index is not None else 0
         startup_timing.mark("detached_talker_init", "start", gpu=talker_gpu_index)
-        detached_talker = DetachedTalkerRuntime.from_thinker_model(
-            bundle.model,
-            base_model_checkpoint=config.model.model_name_or_path,
-            talker_checkpoint=duplex.talker_checkpoint,
-            token2wav_dir=config.model.token2wav_dir,
-            prompt_wav_path=duplex.ref_audio_path,
-            device=str(talker_device),
-            n_timesteps=config.model.token2wav_n_timesteps,
-            enable_float16=config.model.token2wav_enable_float16,
-            config=DetachedTalkerConfig(
-                speech_tokens_per_unit=duplex.talker_speech_tokens_per_unit,
-                emit_speech_tokens=duplex.talker_emit_speech_tokens,
-                final_speech_tokens_max=duplex.talker_final_speech_tokens_max,
-            ),
-        )
+        if duplex.speech_renderer == "dots":
+            from mcpmft.infer.detached_talker import (
+                DotsTalkerConfig,
+                DotsTalkerRuntime,
+            )
+
+            detached_talker = DotsTalkerRuntime(
+                device=str(talker_device),
+                config=DotsTalkerConfig(
+                    endpoint=duplex.dots_endpoint,
+                    request_timeout_sec=duplex.dots_request_timeout_sec,
+                ),
+            )
+        else:
+            from mcpmft.infer.detached_talker import (
+                DetachedTalkerConfig,
+                DetachedTalkerRuntime,
+            )
+
+            detached_talker = DetachedTalkerRuntime.from_thinker_model(
+                bundle.model,
+                base_model_checkpoint=config.model.model_name_or_path,
+                talker_checkpoint=duplex.talker_checkpoint,
+                token2wav_dir=config.model.token2wav_dir,
+                prompt_wav_path=duplex.ref_audio_path,
+                device=str(talker_device),
+                n_timesteps=config.model.token2wav_n_timesteps,
+                enable_float16=config.model.token2wav_enable_float16,
+                config=DetachedTalkerConfig(
+                    speech_tokens_per_unit=duplex.talker_speech_tokens_per_unit,
+                    emit_speech_tokens=duplex.talker_emit_speech_tokens,
+                    final_speech_tokens_max=duplex.talker_final_speech_tokens_max,
+                ),
+            )
         startup_timing.mark("detached_talker_init", "end", gpu=talker_gpu_index)
         startup_timing.mark("detached_talker_ready", "ready", gpu=talker_gpu_index)
         startup_timing.resource_snapshot("after_talker_load")
