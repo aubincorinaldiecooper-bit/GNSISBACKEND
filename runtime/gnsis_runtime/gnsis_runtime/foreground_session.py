@@ -178,6 +178,7 @@ class ForegroundSession(Protocol):
         self, *, unit_capture_start_ms: float | None = None
     ) -> list[Any]: ...
     def step_silence(self) -> Any: ...
+    def feed_text_turn(self, text: str) -> Any | None: ...
     def should_continue_draining(self, trailing_steps: int) -> bool: ...
     def should_stop_after(self, event: Any) -> bool: ...
 
@@ -629,6 +630,13 @@ class NativeForegroundSession:
 
     def step_silence(self) -> Any:
         raise RuntimeError("a native full-duplex model owns its own silence")
+
+    def feed_text_turn(self, text: str) -> Any | None:
+        self._push_native_input(
+            {"kind": "text_input", "text": text},
+            {"kind": "text_input", "delivery_id": None, "claim_token": None},
+        )
+        return None
 
     def should_continue_draining(self, trailing_steps: int) -> bool:
         return False

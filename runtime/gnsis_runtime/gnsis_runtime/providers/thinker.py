@@ -100,6 +100,12 @@ class ThinkerRealtimeSession:
                 self._session.feed_tool_response, control.get("response")
             )
             return
+        if kind == "text_input":
+            event = await asyncio.to_thread(
+                self._session.feed_text_turn, control.get("text")
+            )
+            self._pending = list(getattr(self, "_pending", ())) + [event]
+            return
         raise ValueError(f"unsupported thinker control kind: {kind!r}")
 
     async def next_event(self, timeout_s: float | None = None) -> ProviderEvent:
