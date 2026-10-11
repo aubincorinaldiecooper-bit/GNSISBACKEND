@@ -28,7 +28,7 @@ import { reasonForLog } from "../host/actionPolicy.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
-import { localCommand } from "../host/localCommands.js";
+import { TypedTurnRouter } from "../host/typedTurnRouter.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { DesktopVisualConnector } from "../host/desktopVisualConnector.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
@@ -154,7 +154,12 @@ const typedTurns = new TypedTurns({
   ready: () => host.connected && lastReady !== null && !duplexClosed,
   log: hostLog,
 });
-let localTurnCounter = 0;
+const typedTurnRouter = new TypedTurnRouter({
+  fallback: (input) => typedTurns.send(input),
+  record: (turn) => turns.record(turn),
+  runLocal: (callId, turnId, tool, args) =>
+    broker.runLocal(callId, turnId, tool, args),
+});
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
@@ -782,30 +787,9 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
-  ipcMain.handle("turn:text", async (_e, input: unknown) => {
-    const text = typeof input === "string" ? input.trim() : "";
-    const command = text ? localCommand(text) : null;
-    if (!command) return typedTurns.send(input);
-
-    const now = Date.now();
-    localTurnCounter += 1;
-    const turnId = `local-${now}-${localTurnCounter}`;
-    turns.record({ turnId, text, endedAtMs: now });
-    const response = await broker.runLocal(
-      `local-call-${now}-${localTurnCounter}`,
-      turnId,
-      command.tool,
-      command.args,
-    );
-    if (response.status === "done") return { ok: true, turnId };
-    return {
-      ok: false,
-      reason:
-        typeof response.message === "string"
-          ? response.message
-          : "The local command could not be completed.",
-    };
-  });
+  ipcMain.handle("turn:text", (_e, input: unknown) =>
+    typedTurnRouter.send(input),
+  );
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
