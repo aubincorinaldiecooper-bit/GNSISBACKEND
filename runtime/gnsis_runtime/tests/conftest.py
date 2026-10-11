@@ -212,7 +212,7 @@ class StubCoordinator:
     def bind_final_turn(self, payload: dict[str, Any]) -> Any:
         return SimpleNamespace(
             turn_id=payload["turn_id"],
-            text=payload["text"],
+            final_asr=payload["text"],
             context_revision=1,
         )
 

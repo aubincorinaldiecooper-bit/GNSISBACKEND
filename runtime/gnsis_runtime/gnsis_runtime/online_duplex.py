@@ -3252,7 +3252,10 @@ def create_online_duplex_app(
                         )
                         continue
                     try:
-                        event = await asyncio.to_thread(feed_text_turn, turn.text)
+                        event = await asyncio.to_thread(
+                            feed_text_turn,
+                            turn.final_asr,
+                        )
                     except (TypeError, ValueError, RuntimeError) as exc:
                         await send_text({"type": "error", "message": str(exc)})
                         continue
