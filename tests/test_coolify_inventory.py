@@ -58,6 +58,8 @@ class FakeClient:
                 {"key": name, "value": "not-for-logs"}
                 for name in migration.API_ENV_KEYS - {"DATABASE_URL"}
             ]
+        if route == "/applications/front123/envs":
+            return []
         if route == "/databases/pg123/storages":
             return {"persistent_storages": [{"mount_path": "/var/lib/postgresql"}]}
         raise AssertionError("Unexpected API route")
