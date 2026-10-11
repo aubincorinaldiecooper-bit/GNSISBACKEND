@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "open",
-      "description": "Open an app, a web address, or a file or folder on the person's Mac. Web addresses open in their own browser.",
+      "description": "Open an app, a web address, or a file or folder on the person's Mac. Web addresses open in their own browser. Say it opened only when the result confirms it.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -65,7 +65,7 @@
     },
     {
       "name": "browser",
-      "description": "Use the person's open browser without an extension. Chrome/Edge prefer Cua browser bindings; other browsers use Cua native control.",
+      "description": "Use the person's open browser without an extension. Chrome/Edge prefer Cua browser bindings; other browsers use Cua native control. Inspect before acting and confirm the outcome from fresh page state. A refused step is final.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -139,7 +139,7 @@
     },
     {
       "name": "input",
-      "description": "Type, press keys, click, right-click, scroll, or drag on the desktop through Cua. Optional app/window fields target a specific window. Panoptic verifies visual effects.",
+      "description": "Type, press keys, click, right-click, scroll, or drag on the desktop through Cua. Optional app/window fields target a specific window. Panoptic verifies visual effects. Look at fresh state before acting; say it worked only once the result or a fresh screen view shows it. A refused or declined step is final: do not ask again.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
