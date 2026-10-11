@@ -213,6 +213,22 @@ class GNSISDuplexSession:
     def closed(self) -> bool:
         return bool(self.live.closed)
 
+    def set_voice_preferences(
+        self,
+        *,
+        voice_profile_id: str,
+        voice_pace: str,
+        prompt_audio_wav_b64: str | None = None,
+        prompt_text: str | None = None,
+    ) -> None:
+        with self._model_lock:
+            self.live.set_voice_preferences(
+                voice_profile_id=voice_profile_id,
+                voice_pace=voice_pace,
+                prompt_audio_wav_b64=prompt_audio_wav_b64,
+                prompt_text=prompt_text,
+            )
+
     def acknowledge_playback(
         self, output_id: str, *, phase: str, chunks_played: int
     ) -> None:
