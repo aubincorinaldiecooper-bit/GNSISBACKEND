@@ -931,8 +931,8 @@ def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
     # The action layer is on: the desktop's tools come from the catalog the
     # desktop build carries too, and the budget is raised to fit them.
     assert config.duplex.host_tools_path == "/workspace/runtime/configs/gnsis-host-tools.json"
-    assert config.duplex.max_tool_schemas == 8
-    assert config.duplex.max_tool_schema_tokens == 1792
+    assert config.duplex.max_tool_schemas == 9
+    assert config.duplex.max_tool_schema_tokens == 2304
 
 
 def test_a_refused_switch_hands_the_controls_back(harness):

@@ -65,7 +65,7 @@
     },
     {
       "name": "browser",
-      "description": "Use the person's open browser without an extension. Chrome/Edge prefer Cua browser bindings; other browsers use Cua native control. Inspect before acting and confirm the outcome from fresh page state. A refused step is final.",
+      "description": "Use the person's open browser without an extension. Chrome/Edge prefer exact Cua element bindings; other browsers use native control. For exact element actions, inspect first and use its current ref. Confirm outcomes from fresh state. A refused step is final.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -85,6 +85,13 @@
               "reload",
               "prepare",
               "inspect",
+              "click",
+              "type",
+              "hover",
+              "right_click",
+              "double_click",
+              "scroll",
+              "drag",
               "upload",
               "download",
               "dialog"
@@ -104,7 +111,46 @@
           "ref": {
             "type": "string",
             "maxLength": 256,
-            "description": "Live Cua browser element ref for upload/download."
+            "description": "Current exact element ref returned by inspect."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 160,
+            "description": "Visible element label for summaries and intent matching."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "For type, the text to enter."
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "For type, replace the field instead of inserting at the caret."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "insert_text",
+              "keystrokes"
+            ],
+            "description": "For type, bulk insertion or individual keystrokes."
+          },
+          "destination_ref": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "For drag, destination ref from the same inspect result."
+          },
+          "delta_x": {
+            "type": "number",
+            "minimum": -10000,
+            "maximum": 10000,
+            "description": "For scroll, horizontal CSS-pixel movement."
+          },
+          "delta_y": {
+            "type": "number",
+            "minimum": -10000,
+            "maximum": 10000,
+            "description": "For scroll, vertical CSS-pixel movement."
           },
           "files": {
             "type": "array",
@@ -139,7 +185,7 @@
     },
     {
       "name": "input",
-      "description": "Type, press keys, click, right-click, scroll, or drag on the desktop through Cua. Optional app/window fields target a specific window. Panoptic verifies visual effects. Look at fresh state before acting; say it worked only once the result or a fresh screen view shows it. A refused or declined step is final: do not ask again.",
+      "description": "Type, press keys, click, double-click, right-click, hover, scroll, or drag on the desktop through Cua. Optional app/window fields target a specific window. Look at fresh state before acting; say it worked only once the result or a fresh screen view shows it. A refused or declined step is final: do not ask again.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -153,7 +199,9 @@
               "type",
               "keys",
               "click",
+              "double_click",
               "right_click",
+              "hover",
               "scroll",
               "drag"
             ]
@@ -171,13 +219,13 @@
           "label": {
             "type": "string",
             "maxLength": 128,
-            "description": "For click, the visible name of the button or item."
+            "description": "For click or double_click, the visible name of the button or item."
           },
           "x": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "For click without a name, 0 to 1 across the shared screen."
+            "description": "For click or hover without a name, 0 to 1 across the shared screen."
           },
           "y": {
             "type": "number",
@@ -246,7 +294,7 @@
     },
     {
       "name": "window",
-      "description": "List, focus, move, or resize application windows through Cua Driver.",
+      "description": "List, inspect, focus, move, resize, or choose menu items in application windows through Cua Driver. Inspect returns current controls without screenshots.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -258,6 +306,8 @@
             "type": "string",
             "enum": [
               "list",
+              "inspect",
+              "menu",
               "focus",
               "move_resize"
             ]
@@ -275,6 +325,21 @@
           "on_screen_only": {
             "type": "boolean",
             "description": "For list, return only visible/on-screen windows."
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "For inspect, optionally return only matching controls and their context."
+          },
+          "path": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "For menu, labels from top menu to item, like [\"File\",\"Save As...\"]."
           },
           "x": {
             "type": "number",

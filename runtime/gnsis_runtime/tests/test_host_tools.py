@@ -537,3 +537,17 @@ def test_a_catalog_over_the_tool_budget_turns_actions_off_not_the_runtime(monkey
     assert runtime.prefix_snapshot is not None, "the voice prefix is still prepared"
     assert "2100 tokens" in runtime.host_tools_error
     assert prepared and "files" not in prepared[0]
+
+
+@pytest.mark.parametrize("config_name", ["gnsis-voice.yaml", "gnsis-dots-voice.yaml"])
+def test_the_shipped_catalog_fits_the_shipped_tool_allowance(config_name):
+    """A desktop offering its whole catalog must not push the model over its
+    schema count, or the runtime switches every desktop action off at boot."""
+
+    import yaml
+    from mcpmft.tool_protocol import LEAN_TASK_TOOL_SCHEMAS
+
+    config = yaml.safe_load((Path(CATALOG_PATH).parent / config_name).read_text(encoding="utf-8"))
+    catalog = host_tools_module.load_host_tool_catalog(CATALOG_PATH)
+    business = len(catalog.names()) + len(LEAN_TASK_TOOL_SCHEMAS)
+    assert business <= config["duplex"]["max_tool_schemas"]
