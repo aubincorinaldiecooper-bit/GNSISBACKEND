@@ -76,6 +76,7 @@ class InternalGNSISAdminTests(unittest.TestCase):
             gnsis_models_volume="weights",
             gnsis_secret_name="ornith",
             gnsis_edge_secret="edge-from-settings",
+            desktop_grant_public_key="desktop-public-key",
         )
         compute = Mock()
         compute.ref = SimpleNamespace(app_name="gnsis-voice", environment="main")
@@ -88,6 +89,7 @@ class InternalGNSISAdminTests(unittest.TestCase):
             models_volume="weights",
             secret_name="ornith",
             edge_secret="edge-from-settings",
+            desktop_grant_public_key="desktop-public-key",
         )
         self.assertNotIn("edge-from-settings", repr(result))
 
