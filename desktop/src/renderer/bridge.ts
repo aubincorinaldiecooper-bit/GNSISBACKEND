@@ -110,7 +110,8 @@ export interface GnsisBridge {
   onControl(fn: (control: unknown) => void): void;
   onAudio(fn: (pcm: Uint8Array) => void): void;
   /** GNSIS 0.5 speech rendered on this Mac, 24 kHz PCM16. */
-  onLocalAudio?(fn: (pcm: Uint8Array) => void): void;
+  /** Spoken GNSIS 0.5 replies; `meta.call` marks one that belongs to a live call. */
+  onLocalAudio?(fn: (pcm: Uint8Array, meta?: { call?: boolean }) => void): void;
   onClosed(fn: (code: number, reason: string) => void): void;
   onScreen(fn: (update: ScreenUpdate) => void): void;
   onInterrupted(fn: () => void): void;

@@ -198,7 +198,7 @@ let replyEpoch = 0;
  * the reply epoch its turn started in; a reply from a superseded turn or an
  * ended call is dropped.
  */
-function localReply(text: string, epoch: number): void {
+function localReply(text: string, epoch: number, inCall = false): void {
   if (epoch !== replyEpoch) {
     hostLog("voice", "local reply dropped: a newer turn or call superseded it");
     return;
@@ -216,7 +216,7 @@ function localReply(text: string, epoch: number): void {
         hostLog("voice", "local speech dropped: a newer turn or call superseded it");
         return;
       }
-      sendToRenderer("local:audio", pcm);
+      sendToRenderer("local:audio", pcm, { call: inCall });
     })
     .catch((error: unknown) =>
       hostLog(
@@ -276,10 +276,11 @@ if (OFFERED_ACTIONS.length > 0) {
     routeLocal: async (text) => {
       const epoch = ++replyEpoch;
       const result = await typedTurnRouter.send(text, "gnsis-0.5", (reply) =>
-        localReply(reply, epoch),
+        localReply(reply, epoch, true),
       );
-      if (!result.ok) localReply(result.reason, epoch);
+      if (!result.ok) localReply(result.reason, epoch, true);
     },
+    words: (text) => sendToRenderer("duplex:control", { type: "user.words", text }),
     route: () => ({ local: callModel === "gnsis-0.5", epoch: callEpoch }),
     current: (epoch) => callOpen && epoch === callEpoch,
     turns,

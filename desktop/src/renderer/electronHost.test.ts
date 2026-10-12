@@ -38,6 +38,7 @@ class FakeBridge implements GnsisBridge {
   callTool = async () => ({});
   onControl = (fn: (c: unknown) => void) => { this.handlers.control = fn; };
   onAudio = (fn: (pcm: Uint8Array) => void) => { this.handlers.audio = fn; };
+  onLocalAudio = (fn: (pcm: Uint8Array, meta?: { call?: boolean }) => void) => { this.handlers.localAudio = fn; };
   onClosed = (fn: (code: number, reason: string) => void) => { this.handlers.closed = fn; };
   onScreen = (fn: (u: ScreenUpdate) => void) => { this.handlers.screen = fn; };
   onInterrupted = (fn: () => void) => { this.handlers.interrupted = fn; };
@@ -53,6 +54,7 @@ class FakeBridge implements GnsisBridge {
   // the main process talking to us
   control(c: unknown) { this.handlers.control?.(c); }
   audio(pcm: Uint8Array) { this.handlers.audio?.(pcm); }
+  localAudio(pcm: Uint8Array, meta?: { call?: boolean }) { this.handlers.localAudio?.(pcm, meta); }
   closed(code: number) { this.handlers.closed?.(code, ""); }
   screen(u: ScreenUpdate) { this.handlers.screen?.(u); }
   interrupted() { this.handlers.interrupted?.(); }
@@ -566,4 +568,24 @@ test("Quit GNSIS: offered only when main can close GNSIS, and it asks main to", 
   host.quit();
   assert.equal(bridge.quits, 1);
   assert.ok(bridge.logs.some((l) => l.includes("quit")));
+});
+
+test("the person's recognized words from main show as their own turn", async () => {
+  const { bridge, events } = harness();
+  await tick();
+  bridge.control({ type: "user.words", text: " open Safari " });
+  bridge.control({ type: "user.words", text: "" });
+  assert.deepEqual(events.filter((e) => e.type === "user.words"), [
+    { type: "user.words", text: "open Safari", final: true },
+  ]);
+});
+
+test("a typed GNSIS 0.5 reply plays outside a call; a call's reply does not play after End", async () => {
+  const { bridge, devices } = harness();
+  await tick();
+  bridge.localAudio(new Uint8Array(100), { call: false });
+  assert.ok(devices.calls.includes("play:100"), "typed reply spoken");
+  bridge.localAudio(new Uint8Array(200), { call: true });
+  assert.ok(!devices.calls.includes("play:200"), "ended call stays silent");
+  assert.ok(bridge.logs.some((l) => l.includes("reason=call_ended")));
 });

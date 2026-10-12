@@ -206,3 +206,13 @@ test("a local recognizer outage does not silence GNSIS 1.0 calls", async () => {
   assert.equal(cloud.length, 1);
   assert.equal(sent.filter((c) => c.type === "turn.final").length, 1);
 });
+
+test("recognized words are offered to the chat for both models", async () => {
+  const shown: string[] = [];
+  const s = setup(async () => "open Safari");
+  (s.t as unknown as { opts: { words?: (t: string) => void } }).opts.words = (t) => shown.push(t);
+  speak(s.t, s.clock, 1_000, 0.2);
+  speak(s.t, s.clock, 1_000, 0);
+  await sleep(10);
+  assert.deepEqual(shown, ["open Safari"]);
+});
