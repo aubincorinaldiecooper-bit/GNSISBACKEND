@@ -43,6 +43,7 @@ function setup(opts: { turn?: TrustedTurn; confirm?: (r: ConfirmRequest, s: Abor
   const logs: string[] = [];
   const deps: ActionBrokerDeps = {
     registry,
+    localTools: ["files"],
     send: (c) => sent.push(c),
     event: (e) => events.push(e),
     confirm: async (request, signal) => {
@@ -101,6 +102,35 @@ test("a requested move runs once and answers with the same call id", async () =>
   const policy = events.find((e) => e.type === "action.policy")!;
   assert.equal(policy.provenance, "direct_user");
   assert.equal(policy.turn_id, "t9");
+});
+
+test("a trusted local command uses the same policy and execution path", async () => {
+  const turn: TrustedTurn = {
+    turnId: "local-turn-1",
+    text: "move the report into Projects",
+    endedAtMs: Date.now(),
+  };
+  const { broker, files, sent, events, asked } = setup({ turn });
+  const response = await broker.runLocal(
+    "local-call-1",
+    turn.turnId,
+    "files",
+    move,
+  );
+
+  assert.deepEqual(response, {
+    status: "done",
+    message: "Moved it.",
+    verified: "disk",
+    to: "~/Projects",
+  });
+  assert.equal(files.runs, 1);
+  assert.equal(asked.length, 0);
+  assert.equal(sent.length, 0, "a local call does not send runtime controls");
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["action.requested", "action.policy", "action.started", "action.completed"],
+  );
 });
 
 test("a call delivered again after a reconnect is answered from its result, not run twice", async () => {

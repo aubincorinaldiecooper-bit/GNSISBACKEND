@@ -448,6 +448,21 @@ test("typing is offered only when the runtime says it answers typed turns", asyn
   assert.equal(late.host.capabilities().text, true, "a ready that went by before the page loaded counts too");
 });
 
+test("local deterministic turns keep typing available without the runtime", async () => {
+  const { bridge, host } = harness({
+    state: {
+      ready: null,
+      connected: false,
+      closed: true,
+      local_turns: true,
+    },
+  });
+  await tick();
+  assert.equal(host.capabilities().text, true);
+  await host.sendText("Open Calculator");
+  assert.deepEqual(bridge.turns, ["Open Calculator"]);
+});
+
 test("the host log keeps a control's shape, never its credentials or its words", async () => {
   const { bridge } = harness({ ready: false });
   await tick();

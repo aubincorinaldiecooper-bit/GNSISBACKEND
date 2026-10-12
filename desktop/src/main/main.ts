@@ -29,6 +29,7 @@ import { reasonForLog } from "../host/actionPolicy.js";
 import { TurnLog } from "../host/turns.js";
 import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
+import { TypedTurnRouter } from "../host/typedTurnRouter.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { DesktopVisualConnector } from "../host/desktopVisualConnector.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
@@ -177,6 +178,12 @@ const typedTurns = new TypedTurns({
   turns,
   ready: () => host.connected && lastReady !== null && !duplexClosed,
   log: hostLog,
+});
+const typedTurnRouter = new TypedTurnRouter({
+  fallback: (input) => typedTurns.send(input),
+  record: (turn) => turns.record(turn),
+  runLocal: (callId, turnId, tool, args) =>
+    broker.runLocal(callId, turnId, tool, args),
 });
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
@@ -466,6 +473,7 @@ function registerIdentityHandlers(): void {
 
 const broker = new ActionBroker({
   registry: tools,
+  localTools: OFFERED_ACTIONS,
   send: (control) => {
     if (!desktopVisual?.handleBrokerControl(control)) {
       host.sendControl(control as unknown as ClientControl);
@@ -839,11 +847,14 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
-  ipcMain.handle("turn:text", (_e, text: unknown) => typedTurns.send(text));
+  ipcMain.handle("turn:text", (_e, input: unknown) =>
+    typedTurnRouter.send(input),
+  );
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
     closed: duplexClosed,
+    local_turns: OFFERED_ACTIONS.includes("open"),
   }));
   ipcMain.on("session:reconnect", () => {
     // The renderer asks for this when the person starts live voice after the
