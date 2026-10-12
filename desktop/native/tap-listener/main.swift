@@ -245,9 +245,9 @@ guard SPUAccelerometer.isSupported() else {
     exit(EXIT_SUCCESS)
 }
 
-let detector = ImpulseDetector()
-let recognizer = TapRecognizer()
-let accelerometer = SPUAccelerometer()
+private let detector = ImpulseDetector()
+private let recognizer = TapRecognizer()
+private let accelerometer = SPUAccelerometer()
 accelerometer.onSample = { magnitude, time in
     if let gesture = recognizer.flush(at: time), gesture == .single {
         emit(["gesture": "single"])
