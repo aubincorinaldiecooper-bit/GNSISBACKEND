@@ -1,5 +1,5 @@
 import { AGENT_ANSWER, AGENT_STEPS, APPROVAL, STEP_TICKS, type Conv, type Turn } from "../demo/data";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { actions, activity, getState, isWorking, liveTurnsFor, phrase, presence, setState, useStore, type State } from "../store/store";
 import { liveThinking } from "../store/live";
 import { AgentFace, Face, ThinkingDots, GNSIS_ICON_NAME } from "../lib/face";
@@ -12,7 +12,12 @@ export function ChatWindow({ height }: { height: number | "auto" }) {
   // keep it scrolled to the newest; scrolled up to read, it stays put.
   const scroller = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
-  useEffect(() => { atEnd.current = true; }, [s.active]);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    atEnd.current = true;
+    el.scrollTop = el.scrollHeight;
+  }, [s.active]);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && atEnd.current) el.scrollTop = el.scrollHeight;

@@ -94,7 +94,13 @@ function ClipRow({ clip, fill, end, tone }: { clip: Clip; fill?: number; end?: R
   const audio = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [played, setPlayed] = useState(0);
-  useEffect(() => () => audio.current?.pause(), []);
+  useEffect(() => {
+    audio.current?.pause();
+    audio.current = null;
+    setPlaying(false);
+    setPlayed(0);
+    return () => audio.current?.pause();
+  }, [clip.url]);
   const toggle = () => {
     if (!audio.current) {
       const a = new Audio(clip.url);
@@ -141,7 +147,13 @@ export function VoiceUpload({ onUploaded }: { onUploaded: (prefs: VoicePreferenc
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [fill, setFill] = useState(0);
   const seq = useRef(0);
+  const ownedUrls = useRef(new Set<string>());
   const busy = uploads.some((u) => u.state === "uploading");
+
+  useEffect(() => () => {
+    for (const url of ownedUrls.current) URL.revokeObjectURL(url);
+    ownedUrls.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!busy) return;
@@ -155,7 +167,14 @@ export function VoiceUpload({ onUploaded }: { onUploaded: (prefs: VoicePreferenc
     setProblem("");
     const clip = await readClip(file);
     if (typeof clip === "string") { setProblem(clip); return; }
-    setDraft(clip);
+    ownedUrls.current.add(clip.url);
+    setDraft((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous.url);
+        ownedUrls.current.delete(previous.url);
+      }
+      return clip;
+    });
     setName(file.name.replace(/\.wav$/i, ""));
     setWords("");
   };
@@ -181,6 +200,15 @@ export function VoiceUpload({ onUploaded }: { onUploaded: (prefs: VoicePreferenc
     e.preventDefault();
     void pick(e.dataTransfer.files[0]);
   };
+  const clearDraft = () => {
+    setDraft((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous.url);
+        ownedUrls.current.delete(previous.url);
+      }
+      return null;
+    });
+  };
 
   return (
     <>
@@ -194,12 +222,12 @@ export function VoiceUpload({ onUploaded }: { onUploaded: (prefs: VoicePreferenc
         <div className="voice-draft">
           <ClipRow
             clip={draft}
-            end={<button type="button" className="clip-end" aria-label="Remove file" onClick={() => setDraft(null)}><I.Close size={16} /></button>}
+            end={<button type="button" className="clip-end" aria-label="Remove file" onClick={clearDraft}><I.Close size={16} /></button>}
           />
           <input className="text-field" aria-label="Voice name" placeholder="Voice name" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} />
           <textarea className="persona-field words-field" aria-label="Words spoken in the recording" placeholder="The exact words spoken in the recording" rows={2} value={words} onChange={(e) => setWords(e.target.value)} />
           <div className="field-actions">
-            <button type="button" className="btn-secondary compact" onClick={() => setDraft(null)}>Cancel</button>
+            <button type="button" className="btn-secondary compact" onClick={clearDraft}>Cancel</button>
             <button type="button" className="btn-secondary compact" disabled={!name.trim() || !words.trim()} onClick={upload}>Upload</button>
           </div>
         </div>

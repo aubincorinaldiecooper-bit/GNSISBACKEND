@@ -39,6 +39,7 @@ export function Settings() {
     useState<VoicePreferences | null>(null);
   const [voiceNote, setVoiceNote] = useState("");
   const [personaDraft, setPersonaDraft] = useState<string | null>(null);
+  const [personaSaving, setPersonaSaving] = useState(false);
   const [mics, setMics] = useState<Array<{ id: string; label: string }>>([]);
   const [mic, setMic] = useState(loadMicrophone);
   const [speak, setSpeak] = useState(loadSpeakReplies);
@@ -108,7 +109,16 @@ export function Settings() {
   const savedPersona = voicePreferences?.persona_description ?? "";
   const persona = personaDraft ?? savedPersona;
   const savePersona = async () => {
-    if (await updateVoice({ persona_description: persona })) setPersonaDraft(null);
+    if (personaSaving) return;
+    const submitted = persona;
+    setPersonaSaving(true);
+    try {
+      if (await updateVoice({ persona_description: submitted })) {
+        setPersonaDraft((current) => current === submitted ? null : current);
+      }
+    } finally {
+      setPersonaSaving(false);
+    }
   };
 
   return (
@@ -265,7 +275,7 @@ export function Settings() {
                     <button
                       type="button"
                       className="btn-secondary compact"
-                      disabled={!voicePreferences || persona === savedPersona}
+                      disabled={!voicePreferences || personaSaving || persona === savedPersona}
                       onClick={() => void savePersona()}
                     >
                       Save
