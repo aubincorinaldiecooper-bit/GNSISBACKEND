@@ -27,9 +27,18 @@ import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
 import { reasonForLog } from "../host/actionPolicy.js";
 import { TurnLog } from "../host/turns.js";
-import { runtimeTranscriber, UtteranceTranscriber } from "../host/utterances.js";
+import {
+  localWhisperTranscriber,
+  runtimeTranscriber,
+  UtteranceTranscriber,
+} from "../host/utterances.js";
 import { TypedTurns } from "../host/typedTurns.js";
 import { TypedTurnRouter } from "../host/typedTurnRouter.js";
+import { LocalController } from "../host/localController.js";
+import {
+  HttpLocalDecisionProvider,
+  localSpeech,
+} from "../host/localDecisionHttp.js";
 import { ScreenWatch } from "../host/screenWatch.js";
 import { DesktopVisualConnector } from "../host/desktopVisualConnector.js";
 import { actionsAllowed } from "../host/runtimeTrust.js";
@@ -58,6 +67,7 @@ import { MenuBar } from "./menuBar.js";
 import { TapGesture } from "./tapGesture.js";
 import { applyWindowRules } from "./windowRules.js";
 import { PersonApp, appToRestore } from "./personApp.js";
+import type { GnsisModel } from "@gnsis/ui";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +80,7 @@ interface DesktopSettings {
   runtimeUrl?: unknown;
   actions?: unknown;
   wakeGesture?: unknown;
+  model?: unknown;
 }
 
 function readSettings(): DesktopSettings {
@@ -83,6 +94,8 @@ function readSettings(): DesktopSettings {
 }
 const SETTINGS = readSettings();
 let wakeGestureEnabled = SETTINGS.wakeGesture === true;
+let selectedModel: GnsisModel =
+  SETTINGS.model === "gnsis-0.5" ? "gnsis-0.5" : "gnsis-1.0";
 
 function saveWakeGesture(enabled: boolean): boolean {
   try {
@@ -98,6 +111,18 @@ function saveWakeGesture(enabled: boolean): boolean {
     hostLog("host", `tap gesture: could not save preference (${String(error)})`);
     return false;
   }
+}
+
+function saveModel(model: GnsisModel): GnsisModel {
+  writeFileSync(
+    path.join(app.getPath("userData"), "gnsis.json"),
+    JSON.stringify({ ...SETTINGS, model }, null, 2) + "\n",
+    "utf8",
+  );
+  SETTINGS.model = model;
+  selectedModel = model;
+  hostLog("host", `model selected ${model}`);
+  return model;
 }
 
 function resolveRuntimeUrl(): string {
@@ -160,17 +185,10 @@ const OFFERED_ACTIONS = ACTIONS_TRUST.allowed
 const turns = new TurnLog();
 const screenWatch = new ScreenWatch();
 let desktopVisual: DesktopVisualConnector | null = null;
+const localControllerUrl = process.env.GNSIS_LOCAL_CONTROLLER_URL?.trim();
 // The person's own words, so an action they asked for by name runs without a
 // second ask. Only where actions are offered; see host/utterances.ts.
-const utterances =
-  OFFERED_ACTIONS.length > 0
-    ? new UtteranceTranscriber({
-        transcribe: runtimeTranscriber(RUNTIME_URL),
-        send: (control) => host.sendControl(control as unknown as ClientControl),
-        turns,
-        log: hostLog,
-      })
-    : null;
+let utterances: UtteranceTranscriber | null = null;
 // What the person types, sent as their own turn on this connection and kept
 // in the same TurnLog once the runtime accepts it. See host/typedTurns.ts.
 const typedTurns = new TypedTurns({
@@ -179,12 +197,69 @@ const typedTurns = new TypedTurns({
   ready: () => host.connected && lastReady !== null && !duplexClosed,
   log: hostLog,
 });
+const localController: LocalController | undefined =
+  localControllerUrl && OFFERED_ACTIONS.length > 0
+    ? new LocalController({
+        provider: new HttpLocalDecisionProvider({
+          baseUrl: localControllerUrl,
+          tools: OFFERED_ACTIONS,
+          toolSchemas: HOST_TOOL_SCHEMAS.filter((schema) =>
+            OFFERED_ACTIONS.includes(schema.name),
+          ),
+          token: process.env.GNSIS_LOCAL_CONTROLLER_TOKEN,
+        }),
+        tools: OFFERED_ACTIONS,
+        record: (turn) => turns.record(turn),
+        runLocal: (callId, turnId, tool, args): Promise<Record<string, unknown>> =>
+          broker.runLocal(callId, turnId, tool, args),
+        answer: (text) => {
+          sendToRenderer("duplex:control", {
+            type: "chunk",
+            text,
+            end_of_turn: true,
+            interrupted: false,
+          });
+          void localSpeech(
+            localControllerUrl,
+            text,
+            process.env.GNSIS_LOCAL_CONTROLLER_TOKEN,
+          )
+            .then((pcm) => sendToRenderer("local:audio", pcm))
+            .catch((error: unknown) =>
+              hostLog(
+                "voice",
+                `local speech unavailable: ${error instanceof Error ? error.message : "unknown error"}`,
+              ),
+            );
+        },
+        log: hostLog,
+      })
+    : undefined;
 const typedTurnRouter = new TypedTurnRouter({
   fallback: (input) => typedTurns.send(input),
   record: (turn) => turns.record(turn),
-  runLocal: (callId, turnId, tool, args) =>
+  runLocal: (callId, turnId, tool, args): Promise<Record<string, unknown>> =>
     broker.runLocal(callId, turnId, tool, args),
+  controller: localController,
 });
+if (OFFERED_ACTIONS.length > 0) {
+  utterances = new UtteranceTranscriber({
+    transcribe: localControllerUrl
+      ? localWhisperTranscriber(
+          localControllerUrl,
+          process.env.GNSIS_LOCAL_CONTROLLER_TOKEN,
+        )
+      : runtimeTranscriber(RUNTIME_URL),
+    send: (control) => host.sendControl(control as unknown as ClientControl),
+    routeLocal: async (text) => {
+      await typedTurnRouter.send(text, "gnsis-0.5");
+    },
+    shouldRouteLocal: (): boolean =>
+      selectedModel === "gnsis-0.5" && localController !== undefined,
+    turns,
+    log: hostLog,
+  });
+}
 
 const sendToRenderer = (channel: string, ...args: unknown[]) =>
   win?.webContents.send(channel, ...args);
@@ -471,7 +546,7 @@ function registerIdentityHandlers(): void {
   });
 }
 
-const broker = new ActionBroker({
+const broker: ActionBroker = new ActionBroker({
   registry: tools,
   localTools: OFFERED_ACTIONS,
   send: (control) => {
@@ -484,7 +559,8 @@ const broker = new ActionBroker({
   accessibility: (prompt) =>
     process.platform === "darwin" ? systemPreferences.isTrustedAccessibilityClient(prompt) : true,
   latestTurn: () => turns.latest(),
-  waitForWords: () => utterances?.settled() ?? Promise.resolve(),
+  waitForWords: (): Promise<void> =>
+    utterances?.settled() ?? Promise.resolve(),
   log: hostLog,
   notify: (update) => sendToRenderer("action:update", update),
   lookAfter: (sinceMs) => screenWatch.lookAfter(sinceMs),
@@ -848,8 +924,15 @@ app.whenReady().then(async () => {
     host.emit(event as HostEvent);
   });
   ipcMain.handle("turn:text", (_e, input: unknown) =>
-    typedTurnRouter.send(input),
+    typedTurnRouter.send(input, selectedModel),
   );
+  ipcMain.handle("model:preference", () => selectedModel);
+  ipcMain.handle("model:preference:set", (_e, model: unknown) => {
+    if (model !== "gnsis-1.0" && model !== "gnsis-0.5") {
+      throw new Error("The GNSIS model selection is invalid.");
+    }
+    return saveModel(model);
+  });
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
@@ -867,17 +950,20 @@ app.whenReady().then(async () => {
   // total when it ends, so "the mic was on but nothing arrived" shows in the log.
   let callFrames = 0;
   let droppedFrames = 0;
+  let callModel: GnsisModel | null = null;
   ipcMain.on("call:start", () => {
+    callModel = selectedModel;
     callOpen = true;
     callFrames = 0;
-    hostLog("host", "call started");
-    host.startCall();
+    hostLog("host", `call started model=${callModel}`);
+    if (callModel === "gnsis-1.0") host.startCall();
   });
   ipcMain.on("call:end", (_e, reason) => {
     callOpen = false;
     const why = typeof reason === "string" && reason ? reason : "renderer";
     hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
-    host.endCall(why, { stop: false });
+    if (callModel === "gnsis-1.0") host.endCall(why, { stop: false });
+    callModel = null;
   });
   ipcMain.on("duplex:audioFrame", (_e, raw: unknown, pcm: unknown) => {
     const header = audioFrameHeader(raw);
@@ -892,7 +978,7 @@ app.whenReady().then(async () => {
       return;
     }
     const audio = Buffer.from(pcm);
-    host.sendAudioFrame(header, audio);
+    if (callModel === "gnsis-1.0") host.sendAudioFrame(header, audio);
     callFrames += 1;
     if (callFrames === 1) hostLog("audio", `first microphone frame sent (${audio.byteLength} bytes)`);
     utterances?.feed(header, audio);

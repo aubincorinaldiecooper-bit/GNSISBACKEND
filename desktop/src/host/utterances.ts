@@ -35,6 +35,9 @@ export interface UtteranceOptions {
   transcribe: Transcribe;
   /** Send `turn.final` on this desktop's duplex socket. */
   send(control: Record<string, unknown>): void;
+  /** Route recognized words through the local typed path while cloud is unavailable. */
+  routeLocal?(text: string): Promise<void>;
+  shouldRouteLocal?(): boolean;
   turns: TurnLog;
   log(area: string, line: string): void;
   now?(): number;
@@ -172,7 +175,7 @@ export class UtteranceTranscriber {
     this.opts.log("turns", `utterance detected (${endMs - startMs} ms); transcribing`);
     void this.opts
       .transcribe(pcm, startMs)
-      .then((text) => {
+      .then(async (text) => {
         const words = text.trim();
         const took = (this.opts.now?.() ?? Date.now()) - now;
         if (!words) {
@@ -180,6 +183,11 @@ export class UtteranceTranscriber {
           return;
         }
         this.opts.log("turns", `speech-to-text done (${words.length} chars, ${took} ms)`);
+        if (this.opts.routeLocal && this.opts.shouldRouteLocal?.()) {
+          await this.opts.routeLocal(words);
+          this.opts.log("turns", `offline words routed locally (${words.length} chars)`);
+          return;
+        }
         this.counter += 1;
         const turnId = `desk-${startMs}-${this.counter}`;
         this.pending.set(turnId, { text: words, endedAtMs: endMs });
@@ -247,6 +255,38 @@ export function runtimeTranscriber(runtimeUrl: string, fetchFn: typeof fetch = f
       throw new TranscriberUnavailable(`HTTP ${response.status}`);
     }
     if (!response.ok) throw new Error(`speech-to-text answered HTTP ${response.status}`);
+    const body = (await response.json()) as { text?: unknown };
+    return typeof body.text === "string" ? body.text : "";
+  };
+}
+
+/** GNSIS 0.5 local speech recognition, served by the loopback process. */
+export function localWhisperTranscriber(
+  baseUrl: string,
+  token?: string,
+  fetchFn: typeof fetch = fetch,
+): Transcribe {
+  return async (pcm, startMs) => {
+    const url = new URL("/v1/transcribe", baseUrl);
+    url.searchParams.set("start_ms", String(Math.round(startMs)));
+    let response: Response;
+    try {
+      response = await fetchFn(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: new Uint8Array(pcm),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      throw new Error(`local speech-to-text did not answer: ${String((err as Error)?.message ?? err)}`);
+    }
+    if (response.status === 503 || response.status === 404 || response.status === 401 || response.status === 403) {
+      throw new TranscriberUnavailable(`HTTP ${response.status}`);
+    }
+    if (!response.ok) throw new Error(`local speech-to-text answered HTTP ${response.status}`);
     const body = (await response.json()) as { text?: unknown };
     return typeof body.text === "string" ? body.text : "";
   };

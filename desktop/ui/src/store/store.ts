@@ -5,7 +5,7 @@ import {
   demoAgents, focusConv, homeConv, recipeConv, spawnedConv,
   type Conv, type StepState, type Turn,
 } from "../demo/data";
-import type { HostCapabilities, Identity, IdentityStore, LinkState, LiveEvent, LiveHost, VisionSource } from "../host";
+import type { GnsisModel, HostCapabilities, Identity, IdentityStore, LinkState, LiveEvent, LiveHost, VisionSource } from "../host";
 import { actionLine, applyLiveEvent, cutText, endLiveTurns, liveInfo, liveThinking, openTurns, startLiveState, type LiveInfo, type LiveState } from "./live";
 import { greetedBefore, markGreeted } from "../lib/place";
 import { menuBarGlyph } from "../lib/menuBarFace";
@@ -34,6 +34,7 @@ export interface State {
   heard: number;
   hold: number;
   text: string;
+  model: GnsisModel;
   /** stand-in clock, in ticks of TICK_MS; drives the demo agents */
   t: number;
   /** wall clock, refreshed each tick while live voice is on */
@@ -96,7 +97,7 @@ export const TYPING_WHILE_CONNECTING = "Typing isn’t connected to GNSIS yet. I
 const initial: State = {
   phase: "loading", creating: false, identity: null, caps: NO_CAPS,
   mode: "dock", convs: {}, agentIds: [], tabs: ["gnsis"], active: "gnsis", winOpen: false,
-  listening: false, listenTo: null, heard: 0, hold: 0, text: "", t: 0, now: Date.now(), seq: 0,
+  listening: false, listenTo: null, heard: 0, hold: 0, text: "", model: "gnsis-1.0", t: 0, now: Date.now(), seq: 0,
   panelHidden: true, menuOpen: false, dockMenu: false, visionMenu: false, settingsOpen: false,
   toast: null, apPick: null, apCustom: "", live: null, awaiting: null, reply: null, working: null, asking: null,
   dropTail: false, typingOffered: false, link: "connecting",
@@ -142,6 +143,7 @@ export function configure(h: LiveHost, ids: IdentityStore) {
   setState({ caps: h.capabilities() });
   h.setMicrophone?.(loadMicrophone());
   h.setSpeakReplies?.(loadSpeakReplies());
+  void h.modelPreference?.().then((model) => setState({ model })).catch(() => {});
   unsubscribeHost = h.subscribe(onLiveEvent);
 }
 export const getHost = () => host;
@@ -517,6 +519,22 @@ const plain = (e: unknown) => (e instanceof Error ? e.message : typeof e === "st
 
 // ---- actions ----------------------------------------------------------------
 export const actions = {
+  async setModel(model: GnsisModel) {
+    const h = host;
+    if (!h?.setModelPreference) return;
+    try {
+      const selected = await h.setModelPreference(model);
+      setState({ model: selected });
+    } catch (e) {
+      setState({
+        toast: {
+          id: "model",
+          text: plain(e) || "The model could not be changed.",
+          ttl: 80,
+        },
+      });
+    }
+  },
   /** The person closed the first-launch greeting. */
   closeGreeting() {
     setState({ greet: false });

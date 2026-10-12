@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld("gnsis", {
   sendControl: (control: unknown) => ipcRenderer.send("duplex:control", control),
   sendHostEvent: (event: unknown) => ipcRenderer.send("host:event", event),
   sendTurn: (text: string) => ipcRenderer.invoke("turn:text", text),
+  modelPreference: () => ipcRenderer.invoke("model:preference"),
+  setModelPreference: (model: string) =>
+    ipcRenderer.invoke("model:preference:set", model),
   hostLog: (line: string) => ipcRenderer.send("host:log", line),
   linkState: () => ipcRenderer.invoke("link:state"),
   reconnect: () => ipcRenderer.send("session:reconnect"),
@@ -62,6 +65,8 @@ contextBridge.exposeInMainWorld("gnsis", {
     ipcRenderer.on("duplex:control", (_e, c) => fn(c)),
   onAudio: (fn: (pcm: Uint8Array) => void) =>
     ipcRenderer.on("duplex:audio", (_e, pcm) => fn(pcm)),
+  onLocalAudio: (fn: (pcm: Uint8Array) => void) =>
+    ipcRenderer.on("local:audio", (_e, pcm) => fn(pcm)),
   onClosed: (fn: (code: number, reason: string) => void) =>
     ipcRenderer.on("duplex:closed", (_e, code, reason) => fn(code, reason)),
   onScreen: (fn: (update: unknown) => void) =>

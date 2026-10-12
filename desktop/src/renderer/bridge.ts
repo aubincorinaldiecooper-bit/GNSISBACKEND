@@ -4,6 +4,7 @@
  * a socket or an Electron object.
  */
 import type { ScreenChannelConfig, ScreenFrameMetadata } from "../shared/protocol.js";
+import type { GnsisModel } from "@gnsis/ui";
 
 export interface ScreenUpdate {
   channel?: ScreenChannelConfig;
@@ -66,6 +67,8 @@ export interface GnsisBridge {
    * as a trusted turn once the runtime accepts it.
    */
   sendTurn(text: string): Promise<TurnResult>;
+  modelPreference?(): Promise<GnsisModel>;
+  setModelPreference?(model: GnsisModel): Promise<GnsisModel>;
   hostLog(line: string): void;
   /** What the main process knows about the runtime link right now. */
   linkState(): Promise<LinkState>;
@@ -104,6 +107,8 @@ export interface GnsisBridge {
   callTool(tool: string, args: Record<string, unknown>): Promise<unknown>;
   onControl(fn: (control: unknown) => void): void;
   onAudio(fn: (pcm: Uint8Array) => void): void;
+  /** GNSIS 0.5 speech rendered on this Mac, 24 kHz PCM16. */
+  onLocalAudio?(fn: (pcm: Uint8Array) => void): void;
   onClosed(fn: (code: number, reason: string) => void): void;
   onScreen(fn: (update: ScreenUpdate) => void): void;
   onInterrupted(fn: () => void): void;

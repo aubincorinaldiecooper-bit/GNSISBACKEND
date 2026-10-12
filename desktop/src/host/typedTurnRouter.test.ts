@@ -61,6 +61,49 @@ test("reasoning-heavy text remains cloud-bound and preserves its original input"
   assert.deepEqual(fallback, ["Open Notes and draft a letter"]);
 });
 
+test("requests outside the fixed grammar try the local controller before cloud", async () => {
+  const fallback: unknown[] = [];
+  const local: string[] = [];
+  const router = new TypedTurnRouter({
+    fallback: async (input) => {
+      fallback.push(input);
+      return { ok: true, turnId: "typed-cloud" };
+    },
+    controller: {
+      send: async (text) => {
+        local.push(text);
+        return { ok: true, turnId: "local-controller" };
+      },
+    },
+    record: () => {},
+    runLocal: async () => assert.fail("the controller owns its tool loop"),
+  });
+
+  assert.deepEqual(await router.send("Organize my desktop"), {
+    ok: true,
+    turnId: "local-controller",
+  });
+  assert.deepEqual(local, ["Organize my desktop"]);
+  assert.deepEqual(fallback, []);
+});
+
+test("a local controller abstention preserves cloud fallback", async () => {
+  const router = new TypedTurnRouter({
+    fallback: async (input) => ({
+      ok: true,
+      turnId: `cloud-${String(input)}`,
+    }),
+    controller: { send: async () => null },
+    record: () => {},
+    runLocal: async () => assert.fail("the controller abstained"),
+  });
+
+  assert.deepEqual(await router.send("Research this topic"), {
+    ok: true,
+    turnId: "cloud-Research this topic",
+  });
+});
+
 test("a local execution failure is reported without silently retrying in the cloud", async () => {
   const router = new TypedTurnRouter({
     fallback: async () => {
@@ -76,5 +119,33 @@ test("a local execution failure is reported without silently retrying in the clo
   assert.deepEqual(await router.send("Open Abacus"), {
     ok: false,
     reason: "There is no app called Abacus on this Mac.",
+  });
+});
+
+test("GNSIS 1.0 routes directly to the cloud model", async () => {
+  const router = new TypedTurnRouter({
+    fallback: async () => ({ ok: true, turnId: "gnsis-1.0" }),
+    controller: { send: async () => assert.fail("GNSIS 1.0 must not use the local controller") },
+    record: () => assert.fail("GNSIS 1.0 must not record a local turn"),
+    runLocal: async () => assert.fail("GNSIS 1.0 must not run a local action"),
+  });
+
+  assert.deepEqual(await router.send("Open Calculator", "gnsis-1.0"), {
+    ok: true,
+    turnId: "gnsis-1.0",
+  });
+});
+
+test("GNSIS 0.5 never silently falls back to GNSIS 1.0", async () => {
+  const router = new TypedTurnRouter({
+    fallback: async () => assert.fail("GNSIS 0.5 must not reach the cloud"),
+    controller: { send: async () => null },
+    record: () => {},
+    runLocal: async () => assert.fail("the local controller abstained"),
+  });
+
+  assert.deepEqual(await router.send("Research this topic", "gnsis-0.5"), {
+    ok: false,
+    reason: "GNSIS 0.5 is not available on this Mac.",
   });
 });

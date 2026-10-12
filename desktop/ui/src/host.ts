@@ -15,6 +15,7 @@
  */
 
 export type VisionSource = "screen" | "camera";
+export type GnsisModel = "gnsis-1.0" | "gnsis-0.5";
 
 export interface HostCapabilities {
   /** Live speech-to-speech is available at all. */
@@ -111,6 +112,8 @@ export interface LiveHost {
    * whose capabilities say `text: false` need not implement it.
    */
   sendText?(text: string): Promise<void>;
+  modelPreference?(): Promise<GnsisModel>;
+  setModelPreference?(model: GnsisModel): Promise<GnsisModel>;
   /** Audio inputs the person can choose from; empty labels until mic access is granted. */
   microphones?(): Promise<Array<{ id: string; label: string }>>;
   /** Use this input next time the microphone opens; "" is the system default. */
