@@ -29,6 +29,9 @@ const host = new ElectronLiveHost(
   log,
 );
 host.attach();
+bridge.onWakeGesture?.((kind) => {
+  window.dispatchEvent(new CustomEvent("gnsis:wake-gesture", { detail: kind }));
+});
 
 let identity: LocalIdentityStore;
 identity = new LocalIdentityStore("gnsis-identity", (created) => {

@@ -92,6 +92,8 @@ export interface GnsisBridge {
     transcript: string,
   ): Promise<VoicePreferences | null>;
   deleteVoiceProfile?(profileId: string): Promise<VoicePreferences>;
+  wakeGestureEnabled?(): Promise<boolean>;
+  setWakeGestureEnabled?(enabled: boolean): Promise<boolean>;
   startCall(): void;
   /** Close the call on the timeline; the daemon session stays alive. */
   endCall(reason: string): void;
@@ -103,6 +105,8 @@ export interface GnsisBridge {
   onClosed(fn: (code: number, reason: string) => void): void;
   onScreen(fn: (update: ScreenUpdate) => void): void;
   onInterrupted(fn: () => void): void;
+  /** A tap recognized by the optional supported-MacBook wake gesture. */
+  onWakeGesture?(fn: (kind: "single" | "double") => void): void;
   /** What GNSIS is doing or did on this computer (main's ActionBroker). */
   onAction(fn: (update: ActionUpdate) => void): void;
 }
