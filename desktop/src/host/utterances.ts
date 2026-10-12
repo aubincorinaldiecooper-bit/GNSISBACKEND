@@ -65,7 +65,8 @@ export class UtteranceTranscriber {
   private partial = Buffer.alloc(0);
   private inFlight = 0;
   private counter = 0;
-  private unavailableUntil = 0;
+  /** Per recognizer, so an outage of one never silences the other model. */
+  private unavailableUntil = { local: 0, cloud: 0 };
   private readonly pending = new Map<string, Pending>();
   private readonly waiters: Array<() => void> = [];
 
@@ -170,14 +171,15 @@ export class UtteranceTranscriber {
       return;
     }
     const now = this.opts.now?.() ?? Date.now();
-    if (now < this.unavailableUntil) {
+    const route = this.opts.route?.() ?? { local: false, epoch: 0 };
+    const recognizer = route.local ? "local" : "cloud";
+    if (now < this.unavailableUntil[recognizer]) {
       this.release();
       return;
     }
     const pcm = Buffer.concat(speech);
     const startMs = this.startedAtMs;
     const endMs = startMs + Math.round((pcm.length / 2 / SAMPLE_RATE) * 1000);
-    const route = this.opts.route?.() ?? { local: false, epoch: 0 };
     if (route.local && !(this.opts.transcribeLocal && this.opts.routeLocal)) {
       this.opts.log("turns", "utterance dropped: GNSIS 0.5 is not available on this Mac");
       this.release();
@@ -195,11 +197,11 @@ export class UtteranceTranscriber {
           return;
         }
         this.opts.log("turns", `speech-to-text done (${words.length} chars, ${took} ms)`);
+        if (this.opts.current?.(route.epoch) === false) {
+          this.opts.log("turns", "words dropped: the call they were spoken in ended");
+          return;
+        }
         if (route.local && this.opts.routeLocal) {
-          if (this.opts.current?.(route.epoch) === false) {
-            this.opts.log("turns", "local words dropped: the call ended");
-            return;
-          }
           await this.opts.routeLocal(words);
           this.opts.log("turns", `offline words routed locally (${words.length} chars)`);
           return;
@@ -226,10 +228,10 @@ export class UtteranceTranscriber {
       })
       .catch((err: unknown) => {
         if (err instanceof TranscriberUnavailable) {
-          if (now >= this.unavailableUntil) {
+          if (now >= this.unavailableUntil[recognizer]) {
             this.opts.log("turns", `no speech-to-text at the runtime (${err.message}); actions will ask first`);
           }
-          this.unavailableUntil = now + QUIET_BACKOFF_MS;
+          this.unavailableUntil[recognizer] = now + QUIET_BACKOFF_MS;
         } else {
           this.opts.log("turns", `transcribing an utterance failed: ${String((err as Error)?.message ?? err)}`);
         }

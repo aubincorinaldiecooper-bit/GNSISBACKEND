@@ -69,7 +69,10 @@ export class LocalController {
    * `null` means nothing ran locally and the caller may use GNSIS 1.0.
    * Once a local action has run, the same request is never retried elsewhere.
    */
-  async send(text: string): Promise<TypedTurnResult | null> {
+  async send(
+    text: string,
+    answer: ((text: string) => void) | undefined = this.opts.answer,
+  ): Promise<TypedTurnResult | null> {
     const now = this.opts.now?.() ?? Date.now();
     this.counter += 1;
     const requestId = `gnsis05-${now}-${this.counter}`;
@@ -112,9 +115,9 @@ export class LocalController {
       }
 
       if (decision.kind === "done") {
-        const answer = decision.message?.trim();
-        if (!recorded && !answer) return null;
-        if (answer) this.opts.answer?.(answer);
+        const reply = decision.message?.trim();
+        if (!recorded && !reply) return null;
+        if (reply) answer?.(reply);
         return { ok: true, turnId };
       }
 

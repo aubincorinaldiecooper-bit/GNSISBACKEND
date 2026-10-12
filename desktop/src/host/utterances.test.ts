@@ -154,3 +154,55 @@ test("recognized speech routes locally instead of creating a cloud turn while of
   assert.deepEqual(routed, ["Open Safari"]);
   assert.equal(sent.length, 0);
 });
+
+test("words that finish after their call ended never reach the runtime", async () => {
+  let release: (text: string) => void = () => {};
+  const sent: Array<Record<string, unknown>> = [];
+  let open = true;
+  const transcriber = new UtteranceTranscriber({
+    transcribe: () => new Promise((r) => (release = r)),
+    send: (control) => sent.push(control),
+    route: () => ({ local: false, epoch: 1 }),
+    current: (epoch) => open && epoch === 1,
+    turns: new TurnLog(),
+    log: () => {},
+  });
+  const clock = { ms: 1_700_000_000_000, seq: 0 };
+  speak(transcriber, clock, 1_000, 0.2);
+  speak(transcriber, clock, 1_000, 0);
+  await sleep(5);
+  open = false;
+  release("open Safari");
+  await sleep(5);
+  assert.equal(sent.length, 0);
+});
+
+test("a local recognizer outage does not silence GNSIS 1.0 calls", async () => {
+  let local = true;
+  const cloud: string[] = [];
+  const sent: Array<Record<string, unknown>> = [];
+  const transcriber = new UtteranceTranscriber({
+    transcribe: async () => {
+      cloud.push("asked");
+      return "open Safari";
+    },
+    transcribeLocal: async () => {
+      throw new TranscriberUnavailable("HTTP 503");
+    },
+    routeLocal: async () => {},
+    send: (control) => sent.push(control),
+    route: () => ({ local, epoch: 1 }),
+    turns: new TurnLog(),
+    log: () => {},
+  });
+  const clock = { ms: 1_700_000_000_000, seq: 0 };
+  speak(transcriber, clock, 1_000, 0.2);
+  speak(transcriber, clock, 1_000, 0);
+  await sleep(5);
+  local = false;
+  speak(transcriber, clock, 1_000, 0.2);
+  speak(transcriber, clock, 1_000, 0);
+  await sleep(5);
+  assert.equal(cloud.length, 1);
+  assert.equal(sent.filter((c) => c.type === "turn.final").length, 1);
+});

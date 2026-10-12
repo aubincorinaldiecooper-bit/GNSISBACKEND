@@ -193,8 +193,16 @@ let callEpoch = 0;
 // Bumped by every new turn and call change, so a slow local reply never plays late.
 let replyEpoch = 0;
 
-/** A GNSIS 0.5 reply: shown in the chat, then spoken on this Mac. */
-function localReply(text: string): void {
+/**
+ * A GNSIS 0.5 reply: shown in the chat, then spoken on this Mac. `epoch` is
+ * the reply epoch its turn started in; a reply from a superseded turn or an
+ * ended call is dropped.
+ */
+function localReply(text: string, epoch: number): void {
+  if (epoch !== replyEpoch) {
+    hostLog("voice", "local reply dropped: a newer turn or call superseded it");
+    return;
+  }
   sendToRenderer("duplex:control", {
     type: "chunk",
     text,
@@ -202,7 +210,6 @@ function localReply(text: string): void {
     interrupted: false,
   });
   if (!localControllerUrl) return;
-  const epoch = replyEpoch;
   void localSpeech(localControllerUrl, text, process.env.GNSIS_LOCAL_CONTROLLER_TOKEN)
     .then((pcm) => {
       if (epoch !== replyEpoch) {
@@ -244,7 +251,6 @@ const localController: LocalController | undefined =
         record: (turn) => turns.record(turn),
         runLocal: (callId, turnId, tool, args): Promise<Record<string, unknown>> =>
           broker.runLocal(callId, turnId, tool, args),
-        answer: localReply,
         log: hostLog,
       })
     : undefined;
@@ -268,9 +274,11 @@ if (OFFERED_ACTIONS.length > 0) {
       : {}),
     send: (control) => host.sendControl(control as unknown as ClientControl),
     routeLocal: async (text) => {
-      replyEpoch += 1;
-      const result = await typedTurnRouter.send(text, "gnsis-0.5");
-      if (!result.ok) localReply(result.reason);
+      const epoch = ++replyEpoch;
+      const result = await typedTurnRouter.send(text, "gnsis-0.5", (reply) =>
+        localReply(reply, epoch),
+      );
+      if (!result.ok) localReply(result.reason, epoch);
     },
     route: () => ({ local: callModel === "gnsis-0.5", epoch: callEpoch }),
     current: (epoch) => callOpen && epoch === callEpoch,
@@ -946,8 +954,10 @@ app.whenReady().then(async () => {
     host.emit(event as HostEvent);
   });
   ipcMain.handle("turn:text", (_e, input: unknown) => {
-    replyEpoch += 1;
-    return typedTurnRouter.send(input, selectedModel);
+    const epoch = ++replyEpoch;
+    return typedTurnRouter.send(input, selectedModel, (reply) =>
+      localReply(reply, epoch),
+    );
   });
   ipcMain.handle("model:preference", () => selectedModel);
   ipcMain.handle("model:preference:set", (_e, model: unknown) => {

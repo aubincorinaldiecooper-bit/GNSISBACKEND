@@ -256,3 +256,19 @@ test("nested credential fields never reach the next local model step", async () 
     { status: "done", page: { title: "Login", fields: [{ name: "email" }] } },
   ]);
 });
+
+test("each request's answer goes to the reply it was started with", async () => {
+  const shared: string[] = [];
+  const own: string[] = [];
+  const controller = new LocalController({
+    provider: { decide: async () => ({ kind: "done", message: "Four." }) },
+    tools: ["files"],
+    record: () => {},
+    runLocal: async () => assert.fail("no action"),
+    answer: (text) => shared.push(text),
+    now: () => 100,
+  });
+  await controller.send("what is two plus two", (text) => own.push(text));
+  assert.deepEqual(own, ["Four."]);
+  assert.deepEqual(shared, []);
+});

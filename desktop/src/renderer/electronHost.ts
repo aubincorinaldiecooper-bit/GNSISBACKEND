@@ -558,12 +558,12 @@ export class ElectronLiveHost implements LiveHost {
     this.devices.playback.play(pcm);
   }
 
-  /** Local speech uses the same speaker, acknowledgements and cancellation. */
+  /**
+   * Local speech uses the same speaker, acknowledgements and cancellation.
+   * Typed GNSIS 0.5 replies play outside a call too; main drops replies from
+   * ended calls and superseded turns before they get here.
+   */
   private onLocalAudio(pcm: Uint8Array): void {
-    if (!this.live) {
-      this.log(`local speech dropped bytes=${pcm.byteLength} reason=not_live`);
-      return;
-    }
     if (this.talking) {
       this.log(`local speech dropped bytes=${pcm.byteLength} reason=user_speaking`);
       return;
