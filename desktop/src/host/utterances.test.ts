@@ -140,7 +140,8 @@ test("recognized speech routes locally instead of creating a cloud turn while of
     routeLocal: async (text) => {
       routed.push(text);
     },
-    shouldRouteLocal: () => true,
+    transcribeLocal: async () => "Open Safari",
+    route: () => ({ local: true, epoch: 1 }),
     turns: new TurnLog(),
     log: () => {},
   });

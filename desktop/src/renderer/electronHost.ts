@@ -560,6 +560,10 @@ export class ElectronLiveHost implements LiveHost {
 
   /** Local speech uses the same speaker, acknowledgements and cancellation. */
   private onLocalAudio(pcm: Uint8Array): void {
+    if (!this.live) {
+      this.log(`local speech dropped bytes=${pcm.byteLength} reason=not_live`);
+      return;
+    }
     if (this.talking) {
       this.log(`local speech dropped bytes=${pcm.byteLength} reason=user_speaking`);
       return;

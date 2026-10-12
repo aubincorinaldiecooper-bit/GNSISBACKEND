@@ -14,6 +14,7 @@
  * papered over.
  */
 import type { AudioFrameHeader } from "../shared/protocol.js";
+import { loopbackUrl } from "./localDecisionHttp.js";
 import type { TurnLog } from "./turns.js";
 
 const SAMPLE_RATE = 16_000;
@@ -37,7 +38,12 @@ export interface UtteranceOptions {
   send(control: Record<string, unknown>): void;
   /** Route recognized words through the local typed path while cloud is unavailable. */
   routeLocal?(text: string): Promise<void>;
-  shouldRouteLocal?(): boolean;
+  /** GNSIS 0.5 speech recognition, used for utterances `route` marks local. */
+  transcribeLocal?: Transcribe;
+  /** The call an utterance belongs to, fixed when it ends. */
+  route?(): { local: boolean; epoch: number };
+  /** Whether that call is still the open one. */
+  current?(epoch: number): boolean;
   turns: TurnLog;
   log(area: string, line: string): void;
   now?(): number;
@@ -171,10 +177,16 @@ export class UtteranceTranscriber {
     const pcm = Buffer.concat(speech);
     const startMs = this.startedAtMs;
     const endMs = startMs + Math.round((pcm.length / 2 / SAMPLE_RATE) * 1000);
+    const route = this.opts.route?.() ?? { local: false, epoch: 0 };
+    if (route.local && !(this.opts.transcribeLocal && this.opts.routeLocal)) {
+      this.opts.log("turns", "utterance dropped: GNSIS 0.5 is not available on this Mac");
+      this.release();
+      return;
+    }
+    const transcribe = route.local && this.opts.transcribeLocal ? this.opts.transcribeLocal : this.opts.transcribe;
     this.inFlight += 1;
     this.opts.log("turns", `utterance detected (${endMs - startMs} ms); transcribing`);
-    void this.opts
-      .transcribe(pcm, startMs)
+    void transcribe(pcm, startMs)
       .then(async (text) => {
         const words = text.trim();
         const took = (this.opts.now?.() ?? Date.now()) - now;
@@ -183,7 +195,11 @@ export class UtteranceTranscriber {
           return;
         }
         this.opts.log("turns", `speech-to-text done (${words.length} chars, ${took} ms)`);
-        if (this.opts.routeLocal && this.opts.shouldRouteLocal?.()) {
+        if (route.local && this.opts.routeLocal) {
+          if (this.opts.current?.(route.epoch) === false) {
+            this.opts.log("turns", "local words dropped: the call ended");
+            return;
+          }
           await this.opts.routeLocal(words);
           this.opts.log("turns", `offline words routed locally (${words.length} chars)`);
           return;
@@ -267,12 +283,13 @@ export function localWhisperTranscriber(
   fetchFn: typeof fetch = fetch,
 ): Transcribe {
   return async (pcm, startMs) => {
-    const url = new URL("/v1/transcribe", baseUrl);
+    const url = new URL("/v1/transcribe", loopbackUrl(baseUrl));
     url.searchParams.set("start_ms", String(Math.round(startMs)));
     let response: Response;
     try {
       response = await fetchFn(url, {
         method: "POST",
+        redirect: "error",
         headers: {
           "Content-Type": "application/octet-stream",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),

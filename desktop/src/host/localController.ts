@@ -78,7 +78,7 @@ export class LocalController {
     let recorded = false;
     const maxSteps = this.opts.maxSteps ?? MAX_LOCAL_STEPS;
 
-    for (let step = 0; step < maxSteps; step += 1) {
+    for (let step = 0; step <= maxSteps; step += 1) {
       let decision: LocalControllerDecision;
       try {
         decision = await this.opts.provider.decide({
@@ -112,11 +112,14 @@ export class LocalController {
       }
 
       if (decision.kind === "done") {
-        if (!recorded) return null;
         const answer = decision.message?.trim();
+        if (!recorded && !answer) return null;
         if (answer) this.opts.answer?.(answer);
         return { ok: true, turnId };
       }
+
+      // The step after the last allowed action may only finish the task.
+      if (step === maxSteps) break;
 
       if (
         !Number.isFinite(decision.confidence) ||
@@ -176,21 +179,32 @@ export class LocalController {
   }
 }
 
+const SECRET_KEY = /pass(word|code|phrase)?|secret|token|cookie|api[-_]?key|private[-_]?key|credential|authori[sz]ation/i;
+
 function boundedResult(result: LocalToolResult): LocalToolResult {
-  const out: LocalToolResult = {};
-  for (const [key, value] of Object.entries(result).slice(0, 16)) {
-    if (typeof value === "string") out[key] = value.slice(0, 1_000);
-    else if (
-      value === null ||
-      typeof value === "number" ||
-      typeof value === "boolean"
-    ) {
-      out[key] = value;
-    } else if (Array.isArray(value)) {
-      out[key] = value.slice(0, 20);
-    } else if (value && typeof value === "object") {
-      out[key] = value;
-    }
+  return boundedObject(result, 0);
+}
+
+function boundedObject(value: object, depth: number): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 16)) {
+    if (SECRET_KEY.test(key)) continue;
+    const bounded = boundedValue(item, depth);
+    if (bounded !== undefined) out[key] = bounded;
   }
   return out;
+}
+
+function boundedValue(value: unknown, depth: number): unknown {
+  if (typeof value === "string") return value.slice(0, 1_000);
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (depth >= 3) return undefined;
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 20)
+      .map((item) => boundedValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+  if (typeof value === "object") return boundedObject(value, depth + 1);
+  return undefined;
 }
