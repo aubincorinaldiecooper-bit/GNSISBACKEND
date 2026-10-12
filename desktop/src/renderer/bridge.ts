@@ -87,10 +87,12 @@ export interface GnsisBridge {
       >
     >,
   ): Promise<VoicePreferences>;
+  /** Upload a reference WAV (base64) as a new private voice; it becomes the selected voice. */
   uploadVoiceProfile?(
     name: string,
     transcript: string,
-  ): Promise<VoicePreferences | null>;
+    audioWavB64: string,
+  ): Promise<VoicePreferences>;
   deleteVoiceProfile?(profileId: string): Promise<VoicePreferences>;
   wakeGestureEnabled?(): Promise<boolean>;
   setWakeGestureEnabled?(enabled: boolean): Promise<boolean>;

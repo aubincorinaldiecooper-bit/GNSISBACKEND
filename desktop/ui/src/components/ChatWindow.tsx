@@ -1,5 +1,5 @@
 import { AGENT_ANSWER, AGENT_STEPS, APPROVAL, STEP_TICKS, type Conv, type Turn } from "../demo/data";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { actions, activity, getState, isWorking, liveTurnsFor, phrase, presence, setState, useStore, type State } from "../store/store";
 import { liveThinking } from "../store/live";
 import { AgentFace, Face, ThinkingDots, GNSIS_ICON_NAME } from "../lib/face";
@@ -8,11 +8,27 @@ import * as I from "./Icons";
 export function ChatWindow({ height }: { height: number | "auto" }) {
   const s = useStore((x) => x);
   const conv = s.convs[s.active];
+  // Messages start at the top. While the person is at the bottom, new ones
+  // keep it scrolled to the newest; scrolled up to read, it stays put.
+  const scroller = useRef<HTMLDivElement>(null);
+  const atEnd = useRef(true);
+  useEffect(() => { atEnd.current = true; }, [s.active]);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && atEnd.current) el.scrollTop = el.scrollHeight;
+  });
   if (!conv) return null;
   return (
     <section data-hit className="window glass" style={{ height }} aria-label={`Chat with ${conv.title}`}>
       <Tabs s={s} />
-      <div className="thread-scroll">
+      <div
+        ref={scroller}
+        className="thread-scroll"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+      >
         <div className="thread">
           {conv.req && <UserBubble turn={{ role: "user", text: conv.req, spoken: conv.spoken }} />}
           {conv.kind === "chat" && <ChatBody s={s} c={conv} />}

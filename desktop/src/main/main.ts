@@ -288,7 +288,14 @@ async function voiceApi<T>(
     }
   }
   if (!response.ok) {
-    throw new Error(`Voice settings endpoint returned ${response.status}.`);
+    // The server's 4xx reasons ("reference audio must be 3 to 30 seconds") are
+    // written for people; show those, and only a status for anything else.
+    const detail = response.status < 500
+      ? await response.json().then((b: { detail?: unknown }) => b?.detail).catch(() => null)
+      : null;
+    throw new Error(
+      typeof detail === "string" ? detail : `Voice settings endpoint returned ${response.status}.`,
+    );
   }
   return (await response.json()) as T;
 }
@@ -420,7 +427,7 @@ function registerIdentityHandlers(): void {
   });
   ipcMain.handle(
     "voice:profile:upload",
-    async (_e, name: unknown, transcript: unknown) => {
+    async (_e, name: unknown, transcript: unknown, audio: unknown) => {
       if (
         typeof name !== "string" ||
         !name.trim() ||
@@ -429,13 +436,10 @@ function registerIdentityHandlers(): void {
       ) {
         throw new Error("Voice name and transcript are required.");
       }
-      const selected = await dialog.showOpenDialog({
-        title: "Choose a reference voice",
-        properties: ["openFile"],
-        filters: [{ name: "WAV audio", extensions: ["wav"] }],
-      });
-      if (selected.canceled || !selected.filePaths[0]) return null;
-      const audio = readFileSync(selected.filePaths[0]).toString("base64");
+      // 5 MB of WAV is just under 7 MB of base64; the server checks the rest.
+      if (typeof audio !== "string" || !audio || audio.length > 7_000_000) {
+        throw new Error("Reference audio must be a WAV file of at most 5 MB.");
+      }
       const result = await voiceApi<VoicePreferences>(
         "/v1/desktop/voice-profiles",
         {

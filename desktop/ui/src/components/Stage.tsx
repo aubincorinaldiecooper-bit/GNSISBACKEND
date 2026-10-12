@@ -31,10 +31,13 @@ const DRAWER_GAP = 24;
 /** Narrow enough to leave room for the chat, wide enough for an agent's work to be read. */
 export const DRAWER_MIN = 440;
 const DRAWER_MAX = 600;
+/** The chat is one fixed height whatever it holds; shorter only on a short screen. */
+export const CHAT_H = 480;
 
 export interface StageLayout {
   chatLeft: number;
   chatW: number;
+  chatH: number;
   drawerLeft: number;
   drawerW: number;
   drawerH: number;
@@ -52,17 +55,19 @@ export interface StageLayout {
  * the chat keep a readable width, centred, and the drawer lie over it.
  */
 export function stageLayout(w: number, h: number): StageLayout {
-  const drawerH = Math.min(642, h - BOTTOM - 48);
+  // The drawer runs from the chat's top down to the bar's bottom.
+  const chatH = Math.max(0, Math.min(CHAT_H, h - 236));
+  const drawerH = chatH + GAP + BAR_H;
   if (w - 2 * EDGE - DRAWER_GAP - DRAWER_MIN < CHAT_MIN) {
     const chatW = Math.max(0, Math.min(CHAT_W, w - 2 * EDGE));
     const drawerW = Math.max(0, Math.min(DRAWER_MIN, w - 2 * EDGE));
-    return { chatLeft: Math.round((w - chatW) / 2), chatW, drawerLeft: w - EDGE - drawerW, drawerW, drawerH, drawerOver: true };
+    return { chatLeft: Math.round((w - chatW) / 2), chatW, drawerLeft: w - EDGE - drawerW, drawerW, drawerH, chatH, drawerOver: true };
   }
   const chatW = Math.min(CHAT_W, w - 2 * EDGE - DRAWER_GAP - DRAWER_MIN);
   const chatLeft = Math.max(EDGE, Math.min(Math.round((w - chatW) / 2), w - EDGE - DRAWER_MIN - DRAWER_GAP - chatW));
   const room = w - EDGE - (chatLeft + chatW) - DRAWER_GAP;
   const drawerW = Math.min(DRAWER_MAX, room);
-  return { chatLeft, chatW, drawerLeft: w - EDGE - drawerW, drawerW, drawerH, drawerOver: false };
+  return { chatLeft, chatW, chatH, drawerLeft: w - EDGE - drawerW, drawerW, drawerH, drawerOver: false };
 }
 
 /** The dock sits on the chat's centre line, so opening the bar grows it in place. */
@@ -208,7 +213,7 @@ export function Stage() {
   const winOpen = bar && s.winOpen && hasConversation(s, s.active);
   const showPanel = winOpen && !s.panelHidden;
   const layout = stageLayout(w, h);
-  const { chatLeft: left, chatW: stackW, drawerLeft, drawerW, drawerH } = layout;
+  const { chatLeft: left, chatW: stackW, chatH, drawerLeft, drawerW, drawerH } = layout;
   const dockW = dockGeometry(s).width;
   const shellW = bar ? stackW : dockW;
   const shellLeft = bar ? left : dockLeft(layout, dockW, w);
@@ -224,7 +229,7 @@ export function Stage() {
         <div className="stack" style={{ left, width: stackW, bottom: BOTTOM + BAR_H + GAP }}>
           {/* News goes above an open chat, never over its newest lines. */}
           {toast && aboveChat && <Toast />}
-          {winOpen && !showCommands && <ChatWindow height="auto" />}
+          {winOpen && !showCommands && <ChatWindow height={chatH} />}
           {showCommands && <Commands />}
         </div>
         {showPanel && <AgentPanel left={drawerLeft} width={drawerW} height={drawerH} />}
