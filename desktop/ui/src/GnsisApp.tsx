@@ -39,7 +39,7 @@ export function GnsisApp({ host, identity, demo = false }: GnsisAppProps) {
   }, [overlay]);
 
   useHitRects(host);
-  useGesture(actions.toggleLive);
+  useGesture(actions.toggleLive, actions.endLive);
 
   if (phase === "loading") return null;
   if (phase !== "desktop") return <div className="setup-stage"><Setup /></div>;

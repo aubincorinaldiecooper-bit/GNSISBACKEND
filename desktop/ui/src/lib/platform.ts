@@ -48,21 +48,33 @@ export function useHitRects(host: LiveHost) {
 /** Ask the overlay host to take the interactive surfaces' new places at once. */
 export const HIT_RECTS_NOW = "gnsis:hit-rects-now";
 
-/**
- * The wake gesture. The hardware is not specified yet, so ⌥Space stands in
- * while the window has focus. It toggles live voice with whoever is in front.
- */
-export function useGesture(onGesture: () => void) {
+export function dispatchWakeGesture(
+  kind: unknown,
+  onDoubleTap: () => void,
+  onSingleTap: () => void,
+): void {
+  if (kind === "double") onDoubleTap();
+  else if (kind === "single") onSingleTap();
+}
+
+/** A MacBook tap gesture, or the focused-window ⌥Space development fallback. */
+export function useGesture(onDoubleTap: () => void, onSingleTap: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey && e.code === "Space") {
         e.preventDefault();
-        onGesture();
+        onDoubleTap();
       }
     };
+    const onHardware = (e: Event) =>
+      dispatchWakeGesture((e as CustomEvent<unknown>).detail, onDoubleTap, onSingleTap);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onGesture]);
+    window.addEventListener("gnsis:wake-gesture", onHardware);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("gnsis:wake-gesture", onHardware);
+    };
+  }, [onDoubleTap, onSingleTap]);
 }
 
 export async function copyText(text: string): Promise<boolean> {
