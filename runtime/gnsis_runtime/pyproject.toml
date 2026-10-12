@@ -44,7 +44,7 @@ visual = [
   "opencv-python==5.0.0.93",
   "xgrammar==0.2.8",
 ]
-genesis2 = [
+gnsis-local = [
   "torch>=2.4",
   "transformers>=5.0",
   "peft>=0.15,<1",

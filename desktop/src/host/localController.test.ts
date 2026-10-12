@@ -42,25 +42,25 @@ test("a bounded local controller runs multiple actions through the broker", asyn
     await controller.send(
       "Create a Receipts folder on my desktop and move the selected file into it",
     ),
-    { ok: true, turnId: "local-genesis2-100-1" },
+    { ok: true, turnId: "local-gnsis05-100-1" },
   );
   assert.deepEqual(recorded, [
     {
-      turnId: "local-genesis2-100-1",
+      turnId: "local-gnsis05-100-1",
       text: "Create a Receipts folder on my desktop and move the selected file into it",
       endedAtMs: 100,
     },
   ]);
   assert.deepEqual(calls, [
     [
-      "genesis2-100-1-call-1",
-      "local-genesis2-100-1",
+      "gnsis05-100-1-call-1",
+      "local-gnsis05-100-1",
       "files",
       { action: "new_folder", path: "Desktop", name: "Receipts" },
     ],
     [
-      "genesis2-100-1-call-2",
-      "local-genesis2-100-1",
+      "gnsis05-100-1-call-2",
+      "local-gnsis05-100-1",
       "files",
       { action: "move", path: "selected", to: "Receipts" },
     ],
@@ -135,7 +135,7 @@ test("invalid and partial local decisions fail closed", async () => {
   });
   assert.deepEqual(await invalid.send("Run this command"), {
     ok: false,
-    reason: "The local Genesis proposed an action this Mac did not offer.",
+    reason: "GNSIS 0.5 proposed an action this Mac did not offer.",
   });
 });
 
@@ -161,7 +161,7 @@ test("the controller stops a runaway local loop", async () => {
 
   assert.deepEqual(await controller.send("Keep listing forever"), {
     ok: false,
-    reason: "The local Genesis reached its step limit before finishing.",
+    reason: "GNSIS 0.5 reached its step limit before finishing.",
   });
   assert.equal(calls, 2);
 });

@@ -66,13 +66,13 @@ export class LocalController {
   }
 
   /**
-   * `null` means nothing ran locally and the caller may use Genesis 01.
+   * `null` means nothing ran locally and the caller may use GNSIS 1.0.
    * Once a local action has run, the same request is never retried elsewhere.
    */
   async send(text: string): Promise<TypedTurnResult | null> {
     const now = this.opts.now?.() ?? Date.now();
     this.counter += 1;
-    const requestId = `genesis2-${now}-${this.counter}`;
+    const requestId = `gnsis05-${now}-${this.counter}`;
     const turnId = `local-${requestId}`;
     const history: LocalControllerContext["history"] = [];
     let recorded = false;
@@ -97,7 +97,7 @@ export class LocalController {
         if (!recorded) return null;
         return {
           ok: false,
-          reason: "The local Genesis stopped after beginning this task.",
+          reason: "GNSIS 0.5 stopped after beginning this task.",
         };
       }
 
@@ -107,7 +107,7 @@ export class LocalController {
           ok: false,
           reason:
             decision.reason?.trim() ||
-            "The local Genesis could not safely finish this task.",
+            "GNSIS 0.5 could not safely finish this task.",
         };
       }
 
@@ -126,7 +126,7 @@ export class LocalController {
         if (!recorded) return null;
         return {
           ok: false,
-          reason: "The local Genesis was not confident enough to continue safely.",
+          reason: "GNSIS 0.5 was not confident enough to continue safely.",
         };
       }
 
@@ -137,7 +137,7 @@ export class LocalController {
         );
         return {
           ok: false,
-          reason: "The local Genesis proposed an action this Mac did not offer.",
+          reason: "GNSIS 0.5 proposed an action this Mac did not offer.",
         };
       }
 
@@ -170,7 +170,7 @@ export class LocalController {
     return recorded
       ? {
           ok: false,
-          reason: "The local Genesis reached its step limit before finishing.",
+          reason: "GNSIS 0.5 reached its step limit before finishing.",
         }
       : null;
   }
