@@ -30,6 +30,9 @@ export const ChevronDown = (p: P) => <Icon {...p}><path d="M6 9l6 6 6-6" /></Ico
 export const ChevronUp = (p: P) => <Icon {...p}><path d="M6 15l6-6 6 6" /></Icon>;
 export const ChevronLeft = (p: P) => <Icon {...p}><path d="M15 6l-6 6 6 6" /></Icon>;
 export const ChevronRight = (p: P) => <Icon {...p}><path d="M9 6l6 6-6 6" /></Icon>;
+export const Play = (p: P) => <Icon {...p}><path d="M8 5.5v13l10.5-6.5z" fill="currentColor" /></Icon>;
+export const Pause = (p: P) => <Icon {...p}><path d="M8 5v14M16 5v14" /></Icon>;
+export const Retry = (p: P) => <Icon {...p}><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" /></Icon>;
 export const Check = (p: P) => <Icon sw={2.4} {...p}><path d="M5 12.5l4.5 4.5L19 7.5" /></Icon>;
 export const Menu = (p: P) => <Icon {...p}><path d="M4 7h16M4 12h16M4 17h16" /></Icon>;
 export const Globe = (p: P) => <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" /></Icon>;

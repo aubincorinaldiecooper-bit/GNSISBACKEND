@@ -46,8 +46,8 @@ contextBridge.exposeInMainWorld("gnsis", {
   voicePreferences: () => ipcRenderer.invoke("voice:preferences"),
   updateVoicePreferences: (values: unknown) =>
     ipcRenderer.invoke("voice:preferences:update", values),
-  uploadVoiceProfile: (name: string, transcript: string) =>
-    ipcRenderer.invoke("voice:profile:upload", name, transcript),
+  uploadVoiceProfile: (name: string, transcript: string, audioWavB64: string) =>
+    ipcRenderer.invoke("voice:profile:upload", name, transcript, audioWavB64),
   deleteVoiceProfile: (profileId: string) =>
     ipcRenderer.invoke("voice:profile:delete", profileId),
   wakeGestureEnabled: () => ipcRenderer.invoke("wake:enabled"),

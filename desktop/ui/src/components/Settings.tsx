@@ -6,6 +6,7 @@ import { loadMicrophone, loadSpeakReplies, saveMicrophone, saveSpeakReplies } fr
 import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore } from "../store/store";
 import type { VoicePreferences } from "../../../src/renderer/bridge";
 import * as I from "./Icons";
+import { VoiceUpload } from "./VoiceUpload";
 
 type Section = "profile" | "voice" | "agents" | "notif" | "appear" | "privacy";
 const SECTIONS: { id: Section; label: string }[] = [
@@ -37,6 +38,7 @@ export function Settings() {
   const [voicePreferences, setVoicePreferences] =
     useState<VoicePreferences | null>(null);
   const [voiceNote, setVoiceNote] = useState("");
+  const [personaDraft, setPersonaDraft] = useState<string | null>(null);
   const [mics, setMics] = useState<Array<{ id: string; label: string }>>([]);
   const [mic, setMic] = useState(loadMicrophone);
   const [speak, setSpeak] = useState(loadSpeakReplies);
@@ -93,28 +95,20 @@ export function Settings() {
       >
     >,
   ) => {
-    if (!window.gnsis.updateVoicePreferences) return;
+    if (!window.gnsis.updateVoicePreferences) return false;
     setVoiceNote("");
     try {
       setVoicePreferences(await window.gnsis.updateVoicePreferences(values));
+      return true;
     } catch {
       setVoiceNote("Voice settings could not be saved.");
+      return false;
     }
   };
-  const uploadVoice = async () => {
-    if (!window.gnsis.uploadVoiceProfile) return;
-    const name = window.prompt("Name this voice");
-    if (!name?.trim()) return;
-    const transcript = window.prompt(
-      "Enter the exact words spoken in the WAV file",
-    );
-    if (!transcript?.trim()) return;
-    try {
-      const result = await window.gnsis.uploadVoiceProfile(name, transcript);
-      if (result) setVoicePreferences(result);
-    } catch {
-      setVoiceNote("The voice could not be uploaded.");
-    }
+  const savedPersona = voicePreferences?.persona_description ?? "";
+  const persona = personaDraft ?? savedPersona;
+  const savePersona = async () => {
+    if (await updateVoice({ persona_description: persona })) setPersonaDraft(null);
   };
 
   return (
@@ -253,6 +247,9 @@ export function Settings() {
                     </div>
                   </div>
                 </Row>
+                {voicePreferences?.can_upload_voice && window.gnsis.uploadVoiceProfile && (
+                  <VoiceUpload onUploaded={setVoicePreferences} />
+                )}
                 <div className="field-block">
                   <Label title="Persona" />
                   <textarea
@@ -260,36 +257,21 @@ export function Settings() {
                     aria-label="Persona"
                     rows={3}
                     maxLength={800}
-                    value={voicePreferences?.persona_description ?? ""}
+                    value={persona}
                     disabled={!voicePreferences}
-                    onChange={(event) =>
-                      setVoicePreferences((current) =>
-                        current
-                          ? {
-                              ...current,
-                              persona_description: event.target.value,
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={(event) =>
-                      void updateVoice({
-                        persona_description: event.target.value,
-                      })
-                    }
+                    onChange={(event) => setPersonaDraft(event.target.value)}
                   />
-                </div>
-                {voicePreferences?.can_upload_voice && (
-                  <Row title="Private voice">
+                  <div className="field-actions">
                     <button
                       type="button"
-                      className="btn-secondary"
-                      onClick={() => void uploadVoice()}
+                      className="btn-secondary compact"
+                      disabled={!voicePreferences || persona === savedPersona}
+                      onClick={() => void savePersona()}
                     >
-                      Upload WAV…
+                      Save
                     </button>
-                  </Row>
-                )}
+                  </div>
+                </div>
                 {voiceNote && <div className="muted small voice-note">{voiceNote}</div>}
               </Group>
             )}

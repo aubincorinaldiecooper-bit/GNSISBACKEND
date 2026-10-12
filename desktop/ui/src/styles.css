@@ -176,8 +176,8 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .tab-close { width: 36px; height: 40px; border: 0; background: transparent; color: var(--ink-2); display: grid; place-items: center; padding: 0; }
 .tab.off { width: 44px; height: 40px; flex-shrink: 0; border: 0; border-radius: 14px; background: transparent; display: grid; place-items: center; padding: 0; }
 .tab.off:hover { background: rgba(20, 24, 33, 0.05); }
-/* newest message stays in view */
-.thread-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column-reverse; overflow-y: auto; }
+/* messages start at the top; ChatWindow keeps the newest in view */
+.thread-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .thread { padding: 20px 28px 28px; display: flex; flex-direction: column; gap: 16px; }
 .user-msg { align-self: flex-end; max-width: 78%; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .bubble { background: rgba(255, 255, 255, 0.72); border-radius: 20px; padding: 11px 16px; font-size: 15.5px; line-height: 1.45; }
@@ -372,6 +372,25 @@ input[type='range'] { width: 200px; accent-color: var(--accent); }
 .persona-field:focus { box-shadow: inset 0 0 0 2px var(--accent); }
 .persona-field:disabled { opacity: 0.5; cursor: not-allowed; }
 .voice-note { padding: 0 18px 14px; }
+.field-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pick-btn { min-width: 0; color: var(--ink); cursor: pointer; }
+.text-field { height: 42px; padding: 0 14px; border: 0; border-radius: 12px; background: #fff; box-shadow: inset 0 0 0 1px rgba(20, 24, 33, 0.14); font: inherit; font-size: 15px; outline: 0; }
+.text-field:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.words-field { min-height: 0; }
+.voice-draft, .voice-item { display: flex; flex-direction: column; gap: 10px; padding: 0 18px 16px; }
+.voice-item { gap: 6px; }
+.voice-item strong { font-size: 14px; font-weight: 500; }
+.voice-error { padding: 0 18px 14px; color: var(--red-ink); }
+.voice-error-text { color: var(--red-ink); }
+.clip-row { height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 6px; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1px rgba(20, 24, 33, 0.1); }
+.clip-row.is-failed { background: rgba(201, 54, 54, 0.06); box-shadow: inset 0 0 0 1px rgba(201, 54, 54, 0.25); }
+.clip-play { width: 36px; height: 36px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(20, 24, 33, 0.06); color: var(--ink); padding: 0; }
+.clip-wave { flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; gap: 2px; }
+.clip-wave i { flex: 1; min-width: 2px; border-radius: 2px; background: rgba(20, 24, 33, 0.18); transition: background-color 120ms; }
+.clip-wave i.on { background: var(--green-ink); }
+.clip-time { flex-shrink: 0; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.clip-end { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--ink-2); padding: 0; }
+.clip-end.is-ok { color: var(--green-ink); }
 
 /* ---------- small movements ---------- */
 @keyframes card-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
