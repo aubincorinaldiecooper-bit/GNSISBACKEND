@@ -142,7 +142,7 @@ export class ElectronLiveHost implements LiveHost {
 
     this.bridge.onControl((c) => this.onControl(c));
     this.bridge.onAudio((pcm) => this.onAudio(pcm));
-    this.bridge.onLocalAudio?.((pcm) => this.onLocalAudio(pcm));
+    this.bridge.onLocalAudio?.((pcm, meta) => this.onLocalAudio(pcm, meta?.call === true));
     this.bridge.onClosed((code) => {
       this.log(`duplex closed ${code}`);
       this.setLink("closed", "The connection to GNSIS closed.");
@@ -525,6 +525,12 @@ export class ElectronLiveHost implements LiveHost {
         if (gen !== null) this.lastGeneration = Math.max(this.lastGeneration ?? -1, gen);
         break;
       }
+      case "user.words": {
+        // The person's own recognized words, from main's speech-to-text.
+        const text = typeof c?.text === "string" ? c.text.trim() : "";
+        if (text) this.emit({ type: "user.words", text, final: true });
+        break;
+      }
       case "chunk": {
         const text = typeof c?.text === "string" ? c.text : "";
         const endOfTurn = !!c?.end_of_turn;
@@ -560,10 +566,14 @@ export class ElectronLiveHost implements LiveHost {
 
   /**
    * Local speech uses the same speaker, acknowledgements and cancellation.
-   * Typed GNSIS 0.5 replies play outside a call too; main drops replies from
-   * ended calls and superseded turns before they get here.
+   * Typed GNSIS 0.5 replies play outside a call too; a reply that belongs to
+   * a call is dropped once that call has ended, even if it was already queued.
    */
-  private onLocalAudio(pcm: Uint8Array): void {
+  private onLocalAudio(pcm: Uint8Array, call: boolean): void {
+    if (call && !this.live) {
+      this.log(`local speech dropped bytes=${pcm.byteLength} reason=call_ended`);
+      return;
+    }
     if (this.talking) {
       this.log(`local speech dropped bytes=${pcm.byteLength} reason=user_speaking`);
       return;

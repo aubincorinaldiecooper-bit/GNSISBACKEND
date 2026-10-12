@@ -38,6 +38,8 @@ export interface UtteranceOptions {
   send(control: Record<string, unknown>): void;
   /** Route recognized words through the local typed path while cloud is unavailable. */
   routeLocal?(text: string): Promise<void>;
+  /** The person's recognized words, for the chat; called for both models. */
+  words?(text: string): void;
   /** GNSIS 0.5 speech recognition, used for utterances `route` marks local. */
   transcribeLocal?: Transcribe;
   /** The call an utterance belongs to, fixed when it ends. */
@@ -201,6 +203,7 @@ export class UtteranceTranscriber {
           this.opts.log("turns", "words dropped: the call they were spoken in ended");
           return;
         }
+        this.opts.words?.(words);
         if (route.local && this.opts.routeLocal) {
           await this.opts.routeLocal(words);
           this.opts.log("turns", `offline words routed locally (${words.length} chars)`);

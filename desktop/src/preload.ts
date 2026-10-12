@@ -65,8 +65,8 @@ contextBridge.exposeInMainWorld("gnsis", {
     ipcRenderer.on("duplex:control", (_e, c) => fn(c)),
   onAudio: (fn: (pcm: Uint8Array) => void) =>
     ipcRenderer.on("duplex:audio", (_e, pcm) => fn(pcm)),
-  onLocalAudio: (fn: (pcm: Uint8Array) => void) =>
-    ipcRenderer.on("local:audio", (_e, pcm) => fn(pcm)),
+  onLocalAudio: (fn: (pcm: Uint8Array, meta?: { call?: boolean }) => void) =>
+    ipcRenderer.on("local:audio", (_e, pcm, meta) => fn(pcm, meta)),
   onClosed: (fn: (code: number, reason: string) => void) =>
     ipcRenderer.on("duplex:closed", (_e, code, reason) => fn(code, reason)),
   onScreen: (fn: (update: unknown) => void) =>
