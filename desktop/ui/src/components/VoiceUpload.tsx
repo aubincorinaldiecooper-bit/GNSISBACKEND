@@ -150,9 +150,14 @@ export function VoiceUpload({ onUploaded }: { onUploaded: (prefs: VoicePreferenc
   const ownedUrls = useRef(new Set<string>());
   const busy = uploads.some((u) => u.state === "uploading");
 
-  useEffect(() => () => {
-    for (const url of ownedUrls.current) URL.revokeObjectURL(url);
-    ownedUrls.current.clear();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      for (const url of ownedUrls.current) URL.revokeObjectURL(url);
+      ownedUrls.current.clear();
+    };
   }, []);
 
   useEffect(() => {
@@ -166,6 +171,10 @@ export function VoiceUpload({ onUploaded }: { onUploaded: (prefs: VoicePreferenc
     if (!file) return;
     setProblem("");
     const clip = await readClip(file);
+    if (!mounted.current) {
+      if (typeof clip !== "string") URL.revokeObjectURL(clip.url);
+      return;
+    }
     if (typeof clip === "string") { setProblem(clip); return; }
     ownedUrls.current.add(clip.url);
     setDraft((previous) => {

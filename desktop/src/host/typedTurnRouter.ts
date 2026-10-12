@@ -25,12 +25,13 @@ export class TypedTurnRouter {
   async send(
     input: unknown,
     model: GnsisModel | "auto" = "auto",
+    answer?: (text: string) => void,
   ): Promise<TypedTurnResult> {
     if (model === "gnsis-1.0") return this.opts.fallback(input);
     const text = typeof input === "string" ? input.trim() : "";
     const command = text ? localCommand(text) : null;
     if (!command) {
-      const local = text ? await this.opts.controller?.send(text) : null;
+      const local = text ? await this.opts.controller?.send(text, answer) : null;
       if (local) return local;
       if (model === "gnsis-0.5") {
         return {
