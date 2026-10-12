@@ -1,6 +1,7 @@
 import type { TypedTurnResult } from "./typedTurns.js";
 import { localCommand, type LocalCommand } from "./localCommands.js";
 import type { LocalController } from "./localController.js";
+import type { GnsisModel } from "@gnsis/ui";
 
 export interface TypedTurnRouterOptions {
   fallback(input: unknown): Promise<TypedTurnResult>;
@@ -21,12 +22,23 @@ export class TypedTurnRouter {
 
   constructor(private readonly opts: TypedTurnRouterOptions) {}
 
-  async send(input: unknown): Promise<TypedTurnResult> {
+  async send(
+    input: unknown,
+    model: GnsisModel | "auto" = "auto",
+  ): Promise<TypedTurnResult> {
+    if (model === "gnsis-1.0") return this.opts.fallback(input);
     const text = typeof input === "string" ? input.trim() : "";
     const command = text ? localCommand(text) : null;
     if (!command) {
       const local = text ? await this.opts.controller?.send(text) : null;
-      return local ?? this.opts.fallback(input);
+      if (local) return local;
+      if (model === "gnsis-0.5") {
+        return {
+          ok: false,
+          reason: "GNSIS 0.5 is not available on this Mac.",
+        };
+      }
+      return this.opts.fallback(input);
     }
 
     const now = this.opts.now?.() ?? Date.now();

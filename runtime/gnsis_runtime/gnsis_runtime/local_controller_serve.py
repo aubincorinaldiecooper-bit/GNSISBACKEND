@@ -12,7 +12,7 @@ from .omnijev_local import backend_from_env
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Serve Genesis 2.0 locally.")
+    parser = argparse.ArgumentParser(description="Serve GNSIS 0.5 locally.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8766, type=int)
     args = parser.parse_args(argv)

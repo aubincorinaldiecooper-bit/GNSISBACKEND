@@ -1,4 +1,6 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { GnsisModel } from "../host";
 import { AgentFace, Face, ThinkingDots, GNSIS_ICON_NAME } from "../lib/face";
 import { actions, isWorking, liveInfoFor, phrase, presence, setState, useStore, type State } from "../store/store";
 import { barHeights } from "../store/live";
@@ -164,7 +166,7 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
             />
             {!hasText && placeholder && <span className="bar-placeholder" aria-hidden="true">{placeholder}</span>}
           </div>
-          <button type="button" className="model-btn" disabled title="Choosing a model isn’t in this build yet">Auto <I.ChevronDown size={16} /></button>
+          <ModelPicker model={s.model} />
           {live.on && !live.connecting ? (
             <button type="button" className={"icon-btn round mute" + (live.muted ? " is-muted" : "")} aria-label={live.muted ? "Unmute" : "Mute"} aria-pressed={live.muted} onClick={actions.toggleMute}>
               {live.muted ? <I.MicOff size={21} /> : <I.Mic size={21} />}
@@ -213,5 +215,60 @@ function BarLayer({ s, hidden, width }: { s: State; hidden: boolean; width: numb
         </>
       )}
     </div>
+  );
+}
+
+function ModelPicker({ model }: { model: GnsisModel }) {
+  const button = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState({ left: 0, top: 0 });
+  const label = model === "gnsis-0.5" ? "GNSIS 0.5" : "GNSIS 1.0";
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!button.current?.contains(target) && !menu.current?.contains(target)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  const toggle = () => {
+    const rect = button.current?.getBoundingClientRect();
+    if (rect) setAt({ left: rect.right - 142, top: rect.top - 88 });
+    setOpen((value) => !value);
+  };
+  const select = (next: GnsisModel) => {
+    setOpen(false);
+    void actions.setModel(next);
+  };
+
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        className="model-btn"
+        aria-label={`Model: ${label}`}
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        {label} <I.ChevronDown size={16} />
+      </button>
+      {open &&
+        createPortal(
+          <div ref={menu} className="model-menu glass" role="menu" style={at}>
+            <button type="button" role="menuitemradio" aria-checked={model === "gnsis-1.0"} onClick={() => select("gnsis-1.0")}>
+              GNSIS 1.0 {model === "gnsis-1.0" && <span aria-hidden="true">✓</span>}
+            </button>
+            <button type="button" role="menuitemradio" aria-checked={model === "gnsis-0.5"} onClick={() => select("gnsis-0.5")}>
+              GNSIS 0.5 {model === "gnsis-0.5" && <span aria-hidden="true">✓</span>}
+            </button>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }

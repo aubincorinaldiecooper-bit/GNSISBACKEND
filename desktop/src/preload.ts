@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld("gnsis", {
   sendControl: (control: unknown) => ipcRenderer.send("duplex:control", control),
   sendHostEvent: (event: unknown) => ipcRenderer.send("host:event", event),
   sendTurn: (text: string) => ipcRenderer.invoke("turn:text", text),
+  modelPreference: () => ipcRenderer.invoke("model:preference"),
+  setModelPreference: (model: string) =>
+    ipcRenderer.invoke("model:preference:set", model),
   hostLog: (line: string) => ipcRenderer.send("host:log", line),
   linkState: () => ipcRenderer.invoke("link:state"),
   reconnect: () => ipcRenderer.send("session:reconnect"),

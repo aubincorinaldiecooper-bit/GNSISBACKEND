@@ -260,7 +260,7 @@ export function runtimeTranscriber(runtimeUrl: string, fetchFn: typeof fetch = f
   };
 }
 
-/** Local CPU Whisper, served by the loopback Genesis 2.0 process. */
+/** GNSIS 0.5 local speech recognition, served by the loopback process. */
 export function localWhisperTranscriber(
   baseUrl: string,
   token?: string,

@@ -1,4 +1,4 @@
-"""OmniJev choice plus shared Qwen generation for Genesis 2.0.
+"""Third-party model adapter for GNSIS 0.5.
 
 The upstream source remains external and pinned in runtime/PROVENANCE.md. This
 adapter loads it from an explicit source directory so GNSIS does not maintain a
@@ -24,7 +24,7 @@ from .local_controller import Candidate, Selection
 _JSON_BLOCK = re.compile(r"\[[\s\S]*\]")
 
 
-class OmniJevQwenBackend:
+class GnsisLocalBackend:
     def __init__(
         self,
         *,
@@ -160,7 +160,7 @@ class OmniJevQwenBackend:
         )[0]
 
 
-def backend_from_env() -> OmniJevQwenBackend:
+def backend_from_env() -> GnsisLocalBackend:
     required = {
         "source_dir": os.environ.get("GNSIS_OMNIJEV_SOURCE"),
         "checkpoint_dir": os.environ.get("GNSIS_OMNIJEV_CHECKPOINT"),
@@ -169,7 +169,7 @@ def backend_from_env() -> OmniJevQwenBackend:
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise RuntimeError(f"Missing local model settings: {', '.join(missing)}")
-    return OmniJevQwenBackend(
+    return GnsisLocalBackend(
         source_dir=required["source_dir"] or "",
         checkpoint_dir=required["checkpoint_dir"] or "",
         base_model_dir=required["base_model_dir"] or "",

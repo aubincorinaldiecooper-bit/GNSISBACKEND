@@ -9,7 +9,7 @@ The realtime multimodal runtime under `runtime/` is vendored into GNSIS so produ
 
 The current repository is the source of truth for the GNSIS realtime runtime.
 
-## Genesis 2.0 local model
+## GNSIS 0.5 local model
 
 - OmniJev source contract: `tinnel123666888/OmniJev` commit
   `14dbec4f71e194852c8d7b88ab36ef639493f400`, Apache-2.0.

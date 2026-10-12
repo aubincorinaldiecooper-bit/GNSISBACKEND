@@ -67,6 +67,7 @@ import { MenuBar } from "./menuBar.js";
 import { TapGesture } from "./tapGesture.js";
 import { applyWindowRules } from "./windowRules.js";
 import { PersonApp, appToRestore } from "./personApp.js";
+import type { GnsisModel } from "@gnsis/ui";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +80,7 @@ interface DesktopSettings {
   runtimeUrl?: unknown;
   actions?: unknown;
   wakeGesture?: unknown;
+  model?: unknown;
 }
 
 function readSettings(): DesktopSettings {
@@ -92,6 +94,8 @@ function readSettings(): DesktopSettings {
 }
 const SETTINGS = readSettings();
 let wakeGestureEnabled = SETTINGS.wakeGesture === true;
+let selectedModel: GnsisModel =
+  SETTINGS.model === "gnsis-0.5" ? "gnsis-0.5" : "gnsis-1.0";
 
 function saveWakeGesture(enabled: boolean): boolean {
   try {
@@ -107,6 +111,18 @@ function saveWakeGesture(enabled: boolean): boolean {
     hostLog("host", `tap gesture: could not save preference (${String(error)})`);
     return false;
   }
+}
+
+function saveModel(model: GnsisModel): GnsisModel {
+  writeFileSync(
+    path.join(app.getPath("userData"), "gnsis.json"),
+    JSON.stringify({ ...SETTINGS, model }, null, 2) + "\n",
+    "utf8",
+  );
+  SETTINGS.model = model;
+  selectedModel = model;
+  hostLog("host", `model selected ${model}`);
+  return model;
 }
 
 function resolveRuntimeUrl(): string {
@@ -236,10 +252,10 @@ if (OFFERED_ACTIONS.length > 0) {
       : runtimeTranscriber(RUNTIME_URL),
     send: (control) => host.sendControl(control as unknown as ClientControl),
     routeLocal: async (text) => {
-      await typedTurnRouter.send(text);
+      await typedTurnRouter.send(text, "gnsis-0.5");
     },
     shouldRouteLocal: (): boolean =>
-      !host.connected && localController !== undefined,
+      selectedModel === "gnsis-0.5" && localController !== undefined,
     turns,
     log: hostLog,
   });
@@ -908,8 +924,15 @@ app.whenReady().then(async () => {
     host.emit(event as HostEvent);
   });
   ipcMain.handle("turn:text", (_e, input: unknown) =>
-    typedTurnRouter.send(input),
+    typedTurnRouter.send(input, selectedModel),
   );
+  ipcMain.handle("model:preference", () => selectedModel);
+  ipcMain.handle("model:preference:set", (_e, model: unknown) => {
+    if (model !== "gnsis-1.0" && model !== "gnsis-0.5") {
+      throw new Error("The GNSIS model selection is invalid.");
+    }
+    return saveModel(model);
+  });
   ipcMain.handle("link:state", () => ({
     ready: lastReady,
     connected: host.connected,
@@ -927,17 +950,20 @@ app.whenReady().then(async () => {
   // total when it ends, so "the mic was on but nothing arrived" shows in the log.
   let callFrames = 0;
   let droppedFrames = 0;
+  let callModel: GnsisModel | null = null;
   ipcMain.on("call:start", () => {
+    callModel = selectedModel;
     callOpen = true;
     callFrames = 0;
-    hostLog("host", "call started");
-    host.startCall();
+    hostLog("host", `call started model=${callModel}`);
+    if (callModel === "gnsis-1.0") host.startCall();
   });
   ipcMain.on("call:end", (_e, reason) => {
     callOpen = false;
     const why = typeof reason === "string" && reason ? reason : "renderer";
     hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
-    host.endCall(why, { stop: false });
+    if (callModel === "gnsis-1.0") host.endCall(why, { stop: false });
+    callModel = null;
   });
   ipcMain.on("duplex:audioFrame", (_e, raw: unknown, pcm: unknown) => {
     const header = audioFrameHeader(raw);
@@ -952,7 +978,7 @@ app.whenReady().then(async () => {
       return;
     }
     const audio = Buffer.from(pcm);
-    host.sendAudioFrame(header, audio);
+    if (callModel === "gnsis-1.0") host.sendAudioFrame(header, audio);
     callFrames += 1;
     if (callFrames === 1) hostLog("audio", `first microphone frame sent (${audio.byteLength} bytes)`);
     utterances?.feed(header, audio);

@@ -118,6 +118,10 @@ hr { border: 0; height: 1px; background: rgba(20, 24, 33, 0.09); margin: 6px 8px
 .stop-square { width: 13px; height: 13px; border-radius: 3px; background: #fff; }
 .voice-btn { width: 52px; height: 52px; border: 0; border-radius: 26px; background: var(--ink); color: #fff; display: grid; place-items: center; flex-shrink: 0; }
 .model-btn { height: 40px; display: flex; align-items: center; gap: 4px; padding: 0 10px 0 12px; border: 0; border-radius: 20px; background: transparent; font-size: 15px; color: var(--ink-2); flex-shrink: 0; }
+.model-btn[aria-expanded="true"] { background: rgba(20, 24, 33, 0.07); color: var(--ink); }
+.model-menu { position: fixed; z-index: 60; width: 142px; padding: 6px; border-radius: 14px; }
+.model-menu button { width: 100%; height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; }
+.model-menu button:hover, .model-menu button[aria-checked="true"] { background: rgba(20, 24, 33, 0.07); }
 .pill { height: 40px; padding: 0 18px; border: 0; border-radius: 20px; font-size: 15px; font-weight: 500; }
 .pill.quiet { background: rgba(20, 24, 33, 0.07); }
 .pill.accent { background: var(--accent); color: #fff; }

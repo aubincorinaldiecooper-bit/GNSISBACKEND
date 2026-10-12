@@ -1,4 +1,4 @@
-"""Loopback-only HTTP boundary for the Genesis 2.0 local model."""
+"""Loopback-only HTTP boundary for GNSIS 0.5."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def build_local_controller_app(
     whisper: LocalWhisper | None = None,
     speech: LocalKittenSpeech | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Genesis 2.0 Local Controller")
+    app = FastAPI(title="GNSIS 0.5 Local Controller")
 
     def authorize(authorization: str | None) -> None:
         if host_token is None:

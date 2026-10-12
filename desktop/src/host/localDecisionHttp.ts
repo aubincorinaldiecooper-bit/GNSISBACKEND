@@ -11,7 +11,7 @@ type FetchRequest = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-/** Kitten TTS 2 speech from the same loopback Genesis 2.0 process. */
+/** GNSIS 0.5 speech from the same loopback local process. */
 export async function localSpeech(
   baseUrl: string,
   text: string,

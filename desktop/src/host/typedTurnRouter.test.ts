@@ -121,3 +121,31 @@ test("a local execution failure is reported without silently retrying in the clo
     reason: "There is no app called Abacus on this Mac.",
   });
 });
+
+test("GNSIS 1.0 routes directly to the cloud model", async () => {
+  const router = new TypedTurnRouter({
+    fallback: async () => ({ ok: true, turnId: "gnsis-1.0" }),
+    controller: { send: async () => assert.fail("GNSIS 1.0 must not use the local controller") },
+    record: () => assert.fail("GNSIS 1.0 must not record a local turn"),
+    runLocal: async () => assert.fail("GNSIS 1.0 must not run a local action"),
+  });
+
+  assert.deepEqual(await router.send("Open Calculator", "gnsis-1.0"), {
+    ok: true,
+    turnId: "gnsis-1.0",
+  });
+});
+
+test("GNSIS 0.5 never silently falls back to GNSIS 1.0", async () => {
+  const router = new TypedTurnRouter({
+    fallback: async () => assert.fail("GNSIS 0.5 must not reach the cloud"),
+    controller: { send: async () => null },
+    record: () => {},
+    runLocal: async () => assert.fail("the local controller abstained"),
+  });
+
+  assert.deepEqual(await router.send("Research this topic", "gnsis-0.5"), {
+    ok: false,
+    reason: "GNSIS 0.5 is not available on this Mac.",
+  });
+});

@@ -1,4 +1,4 @@
-"""Bounded Genesis 2.0 decisions over Host-offered action candidates."""
+"""Bounded GNSIS 0.5 decisions over Host-offered action candidates."""
 
 from __future__ import annotations
 

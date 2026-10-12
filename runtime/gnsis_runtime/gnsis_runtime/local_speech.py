@@ -1,4 +1,4 @@
-"""Kitten TTS 2 speech for Genesis 2.0, returned as in-memory 24 kHz PCM16."""
+"""Local speech output for GNSIS 0.5, returned as in-memory 24 kHz PCM16."""
 
 from __future__ import annotations
 

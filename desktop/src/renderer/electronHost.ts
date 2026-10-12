@@ -16,7 +16,7 @@
  * see forLog.
  */
 
-import type { HostCapabilities, LinkState, LiveEvent, LiveHost, VisionSource } from "@gnsis/ui";
+import type { GnsisModel, HostCapabilities, LinkState, LiveEvent, LiveHost, VisionSource } from "@gnsis/ui";
 import { DAEMON_CANCEL_REASON, type ScreenChannelConfig } from "../shared/protocol.js";
 import type { GnsisBridge, ScreenUpdate, TurnResult } from "./bridge.js";
 import type { Log } from "./devices.js";
@@ -108,6 +108,7 @@ export class ElectronLiveHost implements LiveHost {
   private settling: Promise<void> = Promise.resolve();
   /** The runtime said, in its `ready`, that it answers typed turns. */
   private typedTurns = false;
+  private model: GnsisModel = "gnsis-1.0";
   /** The main process can answer deterministic local commands without a runtime. */
   private localTurns = false;
   /** Where the menu bar icon is, as main last said, so GNSIS shrinks toward it. */
@@ -305,6 +306,16 @@ export class ElectronLiveHost implements LiveHost {
     this.log(`typed turn ${result.turnId} accepted`);
   }
 
+  async modelPreference(): Promise<GnsisModel> {
+    this.model = (await this.bridge.modelPreference?.()) ?? "gnsis-1.0";
+    return this.model;
+  }
+
+  async setModelPreference(model: GnsisModel): Promise<GnsisModel> {
+    this.model = (await this.bridge.setModelPreference?.(model)) ?? model;
+    return this.model;
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     // Read the link at delivery time, not at subscribe time: a `ready` that
@@ -336,7 +347,7 @@ export class ElectronLiveHost implements LiveHost {
     // The microphone opens only once the runtime is ready to hear it: frames
     // sent into a connecting socket would queue up and arrive as one stale
     // burst, and a dead socket would leave the UI "listening" to nothing.
-    if (this.link !== "ready") {
+    if (this.model === "gnsis-1.0" && this.link !== "ready") {
       if (this.link === "closed" || this.link === "error") {
         this.log("reconnect: live voice requested while the link is down");
         this.setLink("connecting", "Reconnecting to GNSIS.");

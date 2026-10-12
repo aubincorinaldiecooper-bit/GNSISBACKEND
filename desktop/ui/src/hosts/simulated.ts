@@ -1,4 +1,4 @@
-import type { HostCapabilities, LiveEvent, LiveHost, VisionSource } from "../host";
+import type { GnsisModel, HostCapabilities, LiveEvent, LiveHost, VisionSource } from "../host";
 import { liveScript, type LiveSegment } from "../demo/data";
 
 type Listener = (e: LiveEvent) => void;
@@ -14,6 +14,7 @@ export class SimulatedLiveHost implements LiveHost {
   private readonly listeners = new Set<Listener>();
   private timers: Array<ReturnType<typeof setTimeout>> = [];
   private muted = false;
+  private model: GnsisModel = "gnsis-1.0";
   private readonly script: () => LiveSegment[];
   private readonly caps: HostCapabilities;
   /** Time scale: 1 = the script's own pace; tests use a small number. */
@@ -107,6 +108,15 @@ export class SimulatedLiveHost implements LiveHost {
         interrupted: false,
       }),
     );
+  }
+
+  async modelPreference(): Promise<GnsisModel> {
+    return this.model;
+  }
+
+  async setModelPreference(model: GnsisModel): Promise<GnsisModel> {
+    this.model = model;
+    return model;
   }
 
   /**
