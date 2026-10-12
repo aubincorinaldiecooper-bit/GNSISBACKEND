@@ -104,6 +104,8 @@ export interface GnsisBridge {
   callTool(tool: string, args: Record<string, unknown>): Promise<unknown>;
   onControl(fn: (control: unknown) => void): void;
   onAudio(fn: (pcm: Uint8Array) => void): void;
+  /** Genesis 2.0 speech rendered on this Mac, 24 kHz PCM16. */
+  onLocalAudio?(fn: (pcm: Uint8Array) => void): void;
   onClosed(fn: (code: number, reason: string) => void): void;
   onScreen(fn: (update: ScreenUpdate) => void): void;
   onInterrupted(fn: () => void): void;

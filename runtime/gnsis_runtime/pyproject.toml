@@ -44,12 +44,23 @@ visual = [
   "opencv-python==5.0.0.93",
   "xgrammar==0.2.8",
 ]
+genesis2 = [
+  "torch>=2.4",
+  "transformers>=5.0",
+  "peft>=0.15,<1",
+  "accelerate>=1,<2",
+  "safetensors>=0.4,<1",
+  "pillow>=10,<13",
+  "faster-whisper>=1.1,<2",
+  "kittenml>=0.9.4,<1",
+]
 
 [project.scripts]
 gnsis-serve = "gnsis_runtime.cli:main"
 gnsis-realtime-bench = "gnsis_runtime.realtime_bench:main"
 gnsis-live-qr = "gnsis_runtime.live_qr:main"
 smaller-gnsis-serve = "gnsis_runtime.visual.serve:main"
+gnsis-local-controller = "gnsis_runtime.local_controller_serve:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TurnLog } from "./turns.js";
-import { runtimeTranscriber, TranscriberUnavailable, UtteranceTranscriber } from "./utterances.js";
+import {
+  localWhisperTranscriber,
+  runtimeTranscriber,
+  TranscriberUnavailable,
+  UtteranceTranscriber,
+} from "./utterances.js";
 import type { AudioFrameHeader } from "../shared/protocol.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -104,4 +109,47 @@ test("the runtime's transcriber: 503 means none here; words come back as text", 
   }) as unknown as typeof fetch);
   assert.equal(await working(Buffer.alloc(10), 1234), "hello");
   assert.equal(asked, "https://gnsis.studio/api/asr/transcribe?start_ms=1234");
+});
+
+test("local Whisper sends PCM only to the loopback endpoint with its token", async () => {
+  let asked = "";
+  let authorization = "";
+  const transcribe = localWhisperTranscriber(
+    "http://127.0.0.1:8766",
+    "local-secret",
+    (async (url: URL, init?: RequestInit) => {
+      asked = String(url);
+      authorization = new Headers(init?.headers).get("Authorization") ?? "";
+      return new Response(JSON.stringify({ text: "create a folder" }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch,
+  );
+
+  assert.equal(await transcribe(Buffer.alloc(640), 4567), "create a folder");
+  assert.equal(asked, "http://127.0.0.1:8766/v1/transcribe?start_ms=4567");
+  assert.equal(authorization, "Bearer local-secret");
+});
+
+test("recognized speech routes locally instead of creating a cloud turn while offline", async () => {
+  const routed: string[] = [];
+  const sent: Array<Record<string, unknown>> = [];
+  const transcriber = new UtteranceTranscriber({
+    transcribe: async () => "Open Safari",
+    send: (control) => sent.push(control),
+    routeLocal: async (text) => {
+      routed.push(text);
+    },
+    shouldRouteLocal: () => true,
+    turns: new TurnLog(),
+    log: () => {},
+  });
+  const clock = { ms: 1_700_000_000_000, seq: 0 };
+
+  speak(transcriber, clock, 1_000, 0.2);
+  speak(transcriber, clock, 1_000, 0);
+  await sleep(10);
+
+  assert.deepEqual(routed, ["Open Safari"]);
+  assert.equal(sent.length, 0);
 });

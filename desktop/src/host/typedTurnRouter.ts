@@ -1,8 +1,10 @@
 import type { TypedTurnResult } from "./typedTurns.js";
 import { localCommand, type LocalCommand } from "./localCommands.js";
+import type { LocalController } from "./localController.js";
 
 export interface TypedTurnRouterOptions {
   fallback(input: unknown): Promise<TypedTurnResult>;
+  controller?: Pick<LocalController, "send">;
   record(turn: { turnId: string; text: string; endedAtMs: number }): void;
   runLocal(
     callId: string,
@@ -22,7 +24,10 @@ export class TypedTurnRouter {
   async send(input: unknown): Promise<TypedTurnResult> {
     const text = typeof input === "string" ? input.trim() : "";
     const command = text ? localCommand(text) : null;
-    if (!command) return this.opts.fallback(input);
+    if (!command) {
+      const local = text ? await this.opts.controller?.send(text) : null;
+      return local ?? this.opts.fallback(input);
+    }
 
     const now = this.opts.now?.() ?? Date.now();
     this.counter += 1;

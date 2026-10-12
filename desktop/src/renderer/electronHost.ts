@@ -141,6 +141,7 @@ export class ElectronLiveHost implements LiveHost {
 
     this.bridge.onControl((c) => this.onControl(c));
     this.bridge.onAudio((pcm) => this.onAudio(pcm));
+    this.bridge.onLocalAudio?.((pcm) => this.onLocalAudio(pcm));
     this.bridge.onClosed((code) => {
       this.log(`duplex closed ${code}`);
       this.setLink("closed", "The connection to GNSIS closed.");
@@ -541,6 +542,15 @@ export class ElectronLiveHost implements LiveHost {
     else if (gen !== null && gen <= this.staleGeneration) reason = "cancelled_generation";
     if (reason) {
       this.log(`stale audio dropped gen=${gen ?? "?"} bytes=${pcm.byteLength} reason=${reason}`);
+      return;
+    }
+    this.devices.playback.play(pcm);
+  }
+
+  /** Local speech uses the same speaker, acknowledgements and cancellation. */
+  private onLocalAudio(pcm: Uint8Array): void {
+    if (this.talking) {
+      this.log(`local speech dropped bytes=${pcm.byteLength} reason=user_speaking`);
       return;
     }
     this.devices.playback.play(pcm);
