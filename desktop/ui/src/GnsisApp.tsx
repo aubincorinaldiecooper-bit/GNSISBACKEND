@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { TICK_MS } from "./demo/data";
 import type { IdentityStore, LiveHost } from "./host";
+import { applyLook, loadLook } from "./lib/look";
 import { useGesture, useHitRects } from "./lib/platform";
 import { actions, configure, loadIdentity, setState, tick, useStore } from "./store/store";
 import { Setup } from "./components/Setup";
@@ -37,6 +38,7 @@ export function GnsisApp({ host, identity, demo = false }: GnsisAppProps) {
     document.body.classList.toggle("gnsis-backdrop", !overlay);
     document.body.classList.toggle("gnsis-overlay", overlay);
   }, [overlay]);
+  useEffect(() => applyLook(loadLook()), []);
 
   useHitRects(host);
   useGesture(actions.toggleLive, actions.endLive);
