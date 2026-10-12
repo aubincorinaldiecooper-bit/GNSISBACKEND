@@ -22,3 +22,4 @@ htmlcov/
 desktop/node_modules/
 desktop/dist/
 desktop/release/
+desktop/native/bin/

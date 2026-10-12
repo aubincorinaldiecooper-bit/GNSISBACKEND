@@ -47,6 +47,9 @@ contextBridge.exposeInMainWorld("gnsis", {
     ipcRenderer.invoke("voice:profile:upload", name, transcript),
   deleteVoiceProfile: (profileId: string) =>
     ipcRenderer.invoke("voice:profile:delete", profileId),
+  wakeGestureEnabled: () => ipcRenderer.invoke("wake:enabled"),
+  setWakeGestureEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke("wake:enabled:set", enabled),
   startCall: () => ipcRenderer.send("call:start"),
   endCall: (reason: string) => ipcRenderer.send("call:end", reason),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>
@@ -64,6 +67,10 @@ contextBridge.exposeInMainWorld("gnsis", {
   onScreen: (fn: (update: unknown) => void) =>
     ipcRenderer.on("screen:update", (_e, update) => fn(update)),
   onInterrupted: (fn: () => void) => ipcRenderer.on("ui:interrupted", fn),
+  onWakeGesture: (fn: (kind: "single" | "double") => void) =>
+    ipcRenderer.on("wake:gesture", (_event, kind) => {
+      if (kind === "single" || kind === "double") fn(kind);
+    }),
   onAction: (fn: (update: unknown) => void) =>
     ipcRenderer.on("action:update", (_e, update) => fn(update)),
 });

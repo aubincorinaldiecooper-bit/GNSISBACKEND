@@ -10,12 +10,13 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:tap": "node scripts/build-tap-listener.mjs",
     "start": "npm run build && electron .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ui",
     "test": "tsx --test src/**/*.test.ts ui/src/**/*.test.ts",
     "package": "npm run build && electron-builder",
-    "package:mac": "npm run build && electron-builder --mac --universal",
-    "package:mac:dir": "npm run build && electron-builder --mac --arm64 --dir",
+    "package:mac": "npm run build && npm run build:tap && electron-builder --mac --universal",
+    "package:mac:dir": "npm run build && npm run build:tap && electron-builder --mac --arm64 --dir",
     "ui:preview": "node scripts/ui-preview.mjs",
     "icon": "node scripts/app-icon.mjs"
   },

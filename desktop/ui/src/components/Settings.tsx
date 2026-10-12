@@ -40,6 +40,7 @@ export function Settings() {
   const [mics, setMics] = useState<Array<{ id: string; label: string }>>([]);
   const [mic, setMic] = useState(loadMicrophone);
   const [speak, setSpeak] = useState(loadSpeakReplies);
+  const [wakeGesture, setWakeGesture] = useState(false);
   const host = getHost();
   // Esc closes Settings, as it would any panel: floating, it sits over other apps.
   useEffect(() => {
@@ -56,6 +57,10 @@ export function Settings() {
       .then(setVoicePreferences)
       .catch(() => setVoiceNote("Voice settings are unavailable."));
   }, [identity]);
+  useEffect(() => {
+    if (!window.gnsis.wakeGestureEnabled) return;
+    void window.gnsis.wakeGestureEnabled().then(setWakeGesture).catch(() => {});
+  }, []);
   useEffect(() => {
     if (section !== "voice" || !host?.microphones) return;
     void host.microphones().then(setMics).catch(() => setMics([]));
@@ -153,7 +158,23 @@ export function Settings() {
             )}
             {section === "voice" && (
               <Group>
-                <Row title="Wake gesture" desc="Starts or ends live voice with whoever is in front, same as the voice button. There is no hardware gesture yet; ⌥Space stands in while GNSIS is focused."><span className="chip">⌥Space</span></Row>
+                <Row title="Wake gesture" desc="Double tap a supported MacBook to bring GNSIS forward and start listening. Tap once to finish the voice prompt.">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Wake gesture"
+                    aria-checked={wakeGesture}
+                    className={"switch" + (wakeGesture ? " on" : "")}
+                    disabled={!window.gnsis.setWakeGestureEnabled}
+                    onClick={() => {
+                      const enabled = !wakeGesture;
+                      setWakeGesture(enabled);
+                      void window.gnsis.setWakeGestureEnabled?.(enabled)
+                        .then(setWakeGesture)
+                        .catch(() => setWakeGesture(!enabled));
+                    }}
+                  ><span /></button>
+                </Row>
                 <Row title="Microphone">
                   <select
                     aria-label="Microphone"

@@ -41,6 +41,11 @@ mac:
   # @electron/universal requires identical Mach-O resources to be explicitly
   # exempted from lipo; runtime selection happens by package name/process.arch.
   x64ArchFiles: "{**/node_modules/@trycua/cua-driver-darwin-*/**,**/node_modules/@ubjs/node-darwin-*/**}"
+  extraResources:
+    - from: native/bin/gnsis-tap-listener
+      to: tap/gnsis-tap-listener
+    - from: native/tap-listener/THIRD_PARTY_NOTICES.md
+      to: tap/THIRD_PARTY_NOTICES.md
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

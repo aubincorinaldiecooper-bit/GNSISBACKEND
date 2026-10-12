@@ -15,12 +15,13 @@ import {
   nativeImage,
   screen as displays,
   session,
+  shell,
   systemPreferences,
   Tray,
 } from "electron";
 import os from "node:os";
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { HostSession } from "../host/hostSession.js";
 import { ActionBroker, type ConfirmRequest } from "../host/actionBroker.js";
@@ -54,6 +55,7 @@ import { NativeCuaControl } from "../tools/cua/driver.js";
 import { systemShell } from "../tools/mac/shell.js";
 import { ClickThrough, hitRectsFrom } from "./clickThrough.js";
 import { MenuBar } from "./menuBar.js";
+import { TapGesture } from "./tapGesture.js";
 import { applyWindowRules } from "./windowRules.js";
 import { PersonApp, appToRestore } from "./personApp.js";
 
@@ -64,16 +66,39 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // then the public GNSIS service. Normal users never configure this: a fresh
 // install connects to https://gnsis.studio automatically. The env/JSON seams
 // remain for local development and future LocalGNSISProvider work.
-function readSettings(): { runtimeUrl?: unknown; actions?: unknown } {
+interface DesktopSettings {
+  runtimeUrl?: unknown;
+  actions?: unknown;
+  wakeGesture?: unknown;
+}
+
+function readSettings(): DesktopSettings {
   try {
     const cfgPath = path.join(app.getPath("userData"), "gnsis.json");
-    return JSON.parse(readFileSync(cfgPath, "utf8")) as { runtimeUrl?: unknown; actions?: unknown };
+    return JSON.parse(readFileSync(cfgPath, "utf8")) as DesktopSettings;
   } catch {
     // no config file / unreadable — defaults apply
     return {};
   }
 }
 const SETTINGS = readSettings();
+let wakeGestureEnabled = SETTINGS.wakeGesture === true;
+
+function saveWakeGesture(enabled: boolean): boolean {
+  try {
+    writeFileSync(
+      path.join(app.getPath("userData"), "gnsis.json"),
+      JSON.stringify({ ...SETTINGS, wakeGesture: enabled }, null, 2) + "\n",
+      "utf8",
+    );
+    SETTINGS.wakeGesture = enabled;
+    wakeGestureEnabled = enabled;
+    return true;
+  } catch (error) {
+    hostLog("host", `tap gesture: could not save preference (${String(error)})`);
+    return false;
+  }
+}
 
 function resolveRuntimeUrl(): string {
   const env = process.env.GNSIS_RUNTIME_URL;
@@ -591,6 +616,33 @@ let callOpen = false;
 /** Microphone frames that arrived while GNSIS was tucked into the menu bar, and were not sent. */
 let tuckedFrames = 0;
 
+function bringGnsisForward(): void {
+  if (win === null) createWindow();
+  else {
+    if (menuBar?.tucked) menuBar.show();
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+  app.focus({ steal: true });
+}
+
+function deliverWakeGesture(kind: "single" | "double"): void {
+  if (kind === "double") bringGnsisForward();
+  const deliver = () => {
+    if (kind === "double") shell.beep();
+    sendToRenderer("wake:gesture", kind);
+  };
+  if (win?.webContents.isLoadingMainFrame()) win.webContents.once("did-finish-load", deliver);
+  else deliver();
+}
+
+const tapGesture = new TapGesture({
+  resourcesPath: process.resourcesPath,
+  log: (line) => hostLog("host", line),
+  onGesture: deliverWakeGesture,
+});
+
 /**
  * "Quit GNSIS" (the owner's call, 30 September), from the ≡ menu or the menu
  * bar icon. Floating over full-screen apps makes macOS treat GNSIS as a
@@ -726,6 +778,14 @@ app.whenReady().then(async () => {
   );
   registerIdentityHandlers();
   createWindow();
+  if (wakeGestureEnabled) tapGesture.start();
+  ipcMain.handle("wake:enabled", () => wakeGestureEnabled);
+  ipcMain.handle("wake:enabled:set", (_event, enabled: unknown) => {
+    if (typeof enabled !== "boolean" || !saveWakeGesture(enabled)) return wakeGestureEnabled;
+    if (enabled) tapGesture.start();
+    else tapGesture.stop();
+    return wakeGestureEnabled;
+  });
   await connectRuntime();
   const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
   const visualHostToken = process.env.GNSIS_VISUAL_HOST_TOKEN?.trim();
@@ -895,6 +955,7 @@ app.whenReady().then(async () => {
 
 app.on("will-quit", () => {
   hostLog("host", "will-quit");
+  tapGesture.stop();
   menuBar?.destroy();
   shortcuts.unregisterAll();
   void desktopVisual?.close();
@@ -910,18 +971,10 @@ app.on("activate", () => {
   // macOS: closing the window keeps the app alive; a dock click must bring a
   // usable window back rather than leaving a windowless Host.
   hostLog("host", "activate");
-  if (win === null) createWindow();
-  // Tucked into the menu bar: the Dock icon brings GNSIS back too.
-  else if (menuBar?.tucked) menuBar.show();
+  bringGnsisForward();
 });
 
 app.on("second-instance", () => {
   hostLog("host", "second-instance");
-  if (win !== null) {
-    if (menuBar?.tucked) menuBar.show();
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  } else {
-    createWindow();
-  }
+  bringGnsisForward();
 });
