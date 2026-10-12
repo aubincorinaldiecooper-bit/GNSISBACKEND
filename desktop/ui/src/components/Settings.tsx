@@ -3,6 +3,7 @@ import { Face } from "../lib/face";
 import { shareLink } from "../lib/identity";
 import { copyText } from "../lib/platform";
 import { loadMicrophone, loadSpeakReplies, saveMicrophone, saveSpeakReplies } from "../lib/audioPrefs";
+import { applyLook, loadLook, saveLook, type Look } from "../lib/look";
 import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore } from "../store/store";
 import type { VoicePreferences } from "../../../src/renderer/bridge";
 import * as I from "./Icons";
@@ -34,7 +35,7 @@ export function Settings() {
   const [copied, setCopied] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [dock, setDock] = useState<"bottom" | "top">("bottom");
-  const [glass, setGlass] = useState(55);
+  const [look, setLook] = useState<Look>(loadLook);
   const [voicePreferences, setVoicePreferences] =
     useState<VoicePreferences | null>(null);
   const [voiceNote, setVoiceNote] = useState("");
@@ -301,7 +302,11 @@ export function Settings() {
             )}
             {section === "appear" && (
               <Group note={inert ? NOT_YET_NOTE : undefined}>
-                <Row title="Glass transparency"><input type="range" aria-label="Glass transparency" min={20} max={85} value={glass} disabled={inert} title={notYet} onChange={(e) => setGlass(Number(e.target.value))} /></Row>
+                <Row title="Glass">
+                  <div className="segmented" role="radiogroup" aria-label="Glass">
+                    {(["clear", "dark"] as const).map((l) => <button key={l} type="button" role="radio" aria-checked={look === l} className={look === l ? "on" : ""} onClick={() => { setLook(l); saveLook(l); applyLook(l); }}>{l === "clear" ? "Clear" : "Dark"}</button>)}
+                  </div>
+                </Row>
                 <Row title="Dock position">
                   <div className="segmented" role="radiogroup" aria-label="Dock position">
                     {(["bottom", "top"] as const).map((d) => <button key={d} type="button" role="radio" aria-checked={dock === d} className={dock === d ? "on" : ""} disabled={inert} title={notYet} onClick={() => setDock(d)}>{d === "bottom" ? "Bottom" : "Top"}</button>)}
