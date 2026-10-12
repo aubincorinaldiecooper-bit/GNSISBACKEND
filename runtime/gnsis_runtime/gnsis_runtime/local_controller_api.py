@@ -14,15 +14,15 @@ from .local_whisper import LocalWhisper
 
 def build_local_controller_app(
     engine: LocalDecisionEngine,
-    host_token: str | None,
+    host_token: str,
     whisper: LocalWhisper | None = None,
     speech: LocalKittenSpeech | None = None,
 ) -> FastAPI:
+    if not host_token:
+        raise ValueError("GNSIS 0.5 needs a host token on every request.")
     app = FastAPI(title="GNSIS 0.5 Local Controller")
 
     def authorize(authorization: str | None) -> None:
-        if host_token is None:
-            return
         expected = f"Bearer {host_token}"
         if authorization is None or not hmac.compare_digest(authorization, expected):
             raise HTTPException(status_code=401, detail="Unauthorized")

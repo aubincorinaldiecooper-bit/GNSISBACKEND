@@ -186,6 +186,38 @@ const turns = new TurnLog();
 const screenWatch = new ScreenWatch();
 let desktopVisual: DesktopVisualConnector | null = null;
 const localControllerUrl = process.env.GNSIS_LOCAL_CONTROLLER_URL?.trim();
+// The model a live call started with, and which call it is: its words, audio
+// and spoken replies stay on that model until the call ends.
+let callModel: GnsisModel | null = null;
+let callEpoch = 0;
+// Bumped by every new turn and call change, so a slow local reply never plays late.
+let replyEpoch = 0;
+
+/** A GNSIS 0.5 reply: shown in the chat, then spoken on this Mac. */
+function localReply(text: string): void {
+  sendToRenderer("duplex:control", {
+    type: "chunk",
+    text,
+    end_of_turn: true,
+    interrupted: false,
+  });
+  if (!localControllerUrl) return;
+  const epoch = replyEpoch;
+  void localSpeech(localControllerUrl, text, process.env.GNSIS_LOCAL_CONTROLLER_TOKEN)
+    .then((pcm) => {
+      if (epoch !== replyEpoch) {
+        hostLog("voice", "local speech dropped: a newer turn or call superseded it");
+        return;
+      }
+      sendToRenderer("local:audio", pcm);
+    })
+    .catch((error: unknown) =>
+      hostLog(
+        "voice",
+        `local speech unavailable: ${error instanceof Error ? error.message : "unknown error"}`,
+      ),
+    );
+}
 // The person's own words, so an action they asked for by name runs without a
 // second ask. Only where actions are offered; see host/utterances.ts.
 let utterances: UtteranceTranscriber | null = null;
@@ -212,26 +244,7 @@ const localController: LocalController | undefined =
         record: (turn) => turns.record(turn),
         runLocal: (callId, turnId, tool, args): Promise<Record<string, unknown>> =>
           broker.runLocal(callId, turnId, tool, args),
-        answer: (text) => {
-          sendToRenderer("duplex:control", {
-            type: "chunk",
-            text,
-            end_of_turn: true,
-            interrupted: false,
-          });
-          void localSpeech(
-            localControllerUrl,
-            text,
-            process.env.GNSIS_LOCAL_CONTROLLER_TOKEN,
-          )
-            .then((pcm) => sendToRenderer("local:audio", pcm))
-            .catch((error: unknown) =>
-              hostLog(
-                "voice",
-                `local speech unavailable: ${error instanceof Error ? error.message : "unknown error"}`,
-              ),
-            );
-        },
+        answer: localReply,
         log: hostLog,
       })
     : undefined;
@@ -244,18 +257,23 @@ const typedTurnRouter = new TypedTurnRouter({
 });
 if (OFFERED_ACTIONS.length > 0) {
   utterances = new UtteranceTranscriber({
-    transcribe: localControllerUrl
-      ? localWhisperTranscriber(
-          localControllerUrl,
-          process.env.GNSIS_LOCAL_CONTROLLER_TOKEN,
-        )
-      : runtimeTranscriber(RUNTIME_URL),
+    transcribe: runtimeTranscriber(RUNTIME_URL),
+    ...(localControllerUrl
+      ? {
+          transcribeLocal: localWhisperTranscriber(
+            localControllerUrl,
+            process.env.GNSIS_LOCAL_CONTROLLER_TOKEN,
+          ),
+        }
+      : {}),
     send: (control) => host.sendControl(control as unknown as ClientControl),
     routeLocal: async (text) => {
-      await typedTurnRouter.send(text, "gnsis-0.5");
+      replyEpoch += 1;
+      const result = await typedTurnRouter.send(text, "gnsis-0.5");
+      if (!result.ok) localReply(result.reason);
     },
-    shouldRouteLocal: (): boolean =>
-      selectedModel === "gnsis-0.5" && localController !== undefined,
+    route: () => ({ local: callModel === "gnsis-0.5", epoch: callEpoch }),
+    current: (epoch) => callOpen && epoch === callEpoch,
     turns,
     log: hostLog,
   });
@@ -923,9 +941,10 @@ app.whenReady().then(async () => {
     }
     host.emit(event as HostEvent);
   });
-  ipcMain.handle("turn:text", (_e, input: unknown) =>
-    typedTurnRouter.send(input, selectedModel),
-  );
+  ipcMain.handle("turn:text", (_e, input: unknown) => {
+    replyEpoch += 1;
+    return typedTurnRouter.send(input, selectedModel);
+  });
   ipcMain.handle("model:preference", () => selectedModel);
   ipcMain.handle("model:preference:set", (_e, model: unknown) => {
     if (model !== "gnsis-1.0" && model !== "gnsis-0.5") {
@@ -950,9 +969,10 @@ app.whenReady().then(async () => {
   // total when it ends, so "the mic was on but nothing arrived" shows in the log.
   let callFrames = 0;
   let droppedFrames = 0;
-  let callModel: GnsisModel | null = null;
   ipcMain.on("call:start", () => {
     callModel = selectedModel;
+    callEpoch += 1;
+    replyEpoch += 1;
     callOpen = true;
     callFrames = 0;
     hostLog("host", `call started model=${callModel}`);
@@ -964,6 +984,8 @@ app.whenReady().then(async () => {
     hostLog("host", `call ended reason=${why} audio_frames_sent=${callFrames}`);
     if (callModel === "gnsis-1.0") host.endCall(why, { stop: false });
     callModel = null;
+    callEpoch += 1;
+    replyEpoch += 1;
   });
   ipcMain.on("duplex:audioFrame", (_e, raw: unknown, pcm: unknown) => {
     const header = audioFrameHeader(raw);

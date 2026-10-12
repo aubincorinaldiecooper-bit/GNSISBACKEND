@@ -19,11 +19,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.host not in {"127.0.0.1", "::1", "localhost"}:
         parser.error("The local controller may bind only to loopback.")
 
+    token = os.environ.get("GNSIS_LOCAL_CONTROLLER_TOKEN", "").strip()
+    if not token:
+        parser.error("Set GNSIS_LOCAL_CONTROLLER_TOKEN; every request must carry it.")
+
     import uvicorn
 
     app = build_local_controller_app(
         LocalDecisionEngine(backend_from_env()),
-        os.environ.get("GNSIS_LOCAL_CONTROLLER_TOKEN"),
+        token,
         LocalWhisper(os.environ.get("GNSIS_WHISPER_MODEL", "small.en")),
         LocalKittenSpeech(
             os.environ.get("GNSIS_KITTEN_MODEL", "KittenML/kitten-tts-2"),

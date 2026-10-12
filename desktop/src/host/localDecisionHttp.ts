@@ -20,6 +20,7 @@ export async function localSpeech(
 ): Promise<Buffer> {
   const response = await fetchFn(new URL("/v1/speak", loopbackUrl(baseUrl)), {
     method: "POST",
+    redirect: "error",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -44,7 +45,7 @@ export interface HttpLocalDecisionProviderOptions {
   timeoutMs?: number;
 }
 
-function loopbackUrl(value: string): URL {
+export function loopbackUrl(value: string): URL {
   const url = new URL(value);
   const host = url.hostname.toLowerCase();
   if (
@@ -124,6 +125,7 @@ export class HttpLocalDecisionProvider implements LocalDecisionProvider {
   ): Promise<LocalControllerDecision> {
     const response = await this.request(this.endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         "Content-Type": "application/json",
         ...(this.opts.token

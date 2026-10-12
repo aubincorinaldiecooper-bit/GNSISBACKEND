@@ -623,7 +623,7 @@ export const actions = {
       // the same chat; in another chat it is kept as it stands.
       const carry = s.reply?.to === id ? s.reply.text : null;
       const base = { ...s, convs: carry ? s.convs : flushReply(s, false) };
-      const live = startLiveState(id, Date.now(), s.link);
+      const live = startLiveState(id, Date.now(), s.link, s.model === "gnsis-0.5");
       return {
         mode: "bar", winOpen: true, active: id, tabs: withTab(s.tabs, id), panelHidden: panelFor(s, id),
         convs: withConv(base, id, { unread: false, archived: false, readAt: s.t }),

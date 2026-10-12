@@ -189,3 +189,70 @@ test("low-confidence actions abstain before execution", async () => {
   assert.equal(await controller.send("Organize this"), null);
   assert.equal(calls, 0);
 });
+
+test("a local answer without an action is shown, not reported as unavailable", async () => {
+  const answers: string[] = [];
+  const controller = new LocalController({
+    provider: { decide: async () => ({ kind: "done", message: "Four." }) },
+    tools: ["files"],
+    record: () => assert.fail("nothing ran, so no turn is recorded"),
+    runLocal: async () => assert.fail("no action was chosen"),
+    answer: (text) => answers.push(text),
+    now: () => 100,
+  });
+
+  assert.deepEqual(await controller.send("What is two plus two?"), {
+    ok: true,
+    turnId: "local-gnsis05-100-1",
+  });
+  assert.deepEqual(answers, ["Four."]);
+});
+
+test("the model may finish after the last allowed action", async () => {
+  const decisions: LocalControllerDecision[] = [
+    { kind: "tool", tool: "files", args: { a: 1 }, confidence: 0.9 },
+    { kind: "tool", tool: "files", args: { a: 2 }, confidence: 0.9 },
+    { kind: "done", message: "Both done." },
+  ];
+  const controller = new LocalController({
+    provider: { decide: async () => decisions.shift()! },
+    tools: ["files"],
+    record: () => {},
+    runLocal: async () => ({ status: "done" }),
+    maxSteps: 2,
+    now: () => 100,
+  });
+
+  assert.deepEqual(await controller.send("Do two things"), {
+    ok: true,
+    turnId: "local-gnsis05-100-1",
+  });
+});
+
+test("nested credential fields never reach the next local model step", async () => {
+  const seen: unknown[] = [];
+  const decisions: LocalControllerDecision[] = [
+    { kind: "tool", tool: "files", args: {}, confidence: 0.9 },
+    { kind: "done" },
+  ];
+  const controller = new LocalController({
+    provider: {
+      decide: async (context) => {
+        seen.push(context.history.map((entry) => entry.result));
+        return decisions.shift()!;
+      },
+    },
+    tools: ["files"],
+    record: () => {},
+    runLocal: async () => ({
+      status: "done",
+      page: { title: "Login", password: "hunter2", fields: [{ apiKey: "k", name: "email" }] },
+    }),
+    now: () => 100,
+  });
+
+  await controller.send("Look at the page");
+  assert.deepEqual(seen[1], [
+    { status: "done", page: { title: "Login", fields: [{ name: "email" }] } },
+  ]);
+});

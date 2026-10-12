@@ -150,8 +150,12 @@ def test_kitten_speech_loads_on_cpu_and_returns_pcm16():
 
     speech = LocalKittenSpeech(loader=loader)
     engine = LocalDecisionEngine(FixedBackend([], Selection(key=None, confidence=0.0)))
-    client = TestClient(build_local_controller_app(engine, None, speech=speech))
-    response = client.post("/v1/speak", json={"text": " Done. "})
+    client = TestClient(build_local_controller_app(engine, "secret", speech=speech))
+    response = client.post(
+        "/v1/speak",
+        json={"text": " Done. "},
+        headers={"Authorization": "Bearer secret"},
+    )
 
     assert response.status_code == 200
     assert np.frombuffer(response.content, dtype="<i2").tolist() == [0, 16383, -32767]
@@ -161,3 +165,10 @@ def test_kitten_speech_loads_on_cpu_and_returns_pcm16():
         "text": "Done.",
         "voice": "Luna",
     }
+
+
+def test_local_controller_refuses_to_run_without_a_token() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        build_local_controller_app(LocalDecisionEngine(FixedBackend([], Selection(key=None, confidence=0.0))), "")

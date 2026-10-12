@@ -28,6 +28,8 @@ export interface LiveState {
   muted: boolean;
   link: LinkState;
   linkDetail?: string;
+  /** A GNSIS 0.5 call runs on this Mac: losing the cloud link does not end it. */
+  local?: boolean;
   /** The reply being spoken right now: its words so far. */
   agent: { text: string } | null;
   /** The person's turn in progress: since when, and its words if the host has them. */
@@ -63,8 +65,9 @@ export interface LiveStep {
   ended?: { reason: string };
 }
 
-export function startLiveState(to: string, now: number, link: LinkState): LiveState {
+export function startLiveState(to: string, now: number, link: LinkState, local = false): LiveState {
   return {
+    ...(local ? { local: true } : {}),
     to,
     startedAt: now,
     phase: "connecting",
@@ -97,7 +100,7 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
   switch (ev.type) {
     case "link": {
       next = { ...live, link: ev.state, linkDetail: ev.detail };
-      if (ev.state === "error" || ev.state === "closed") {
+      if (!live.local && (ev.state === "error" || ev.state === "closed")) {
         return { live: next, commit, ended: { reason: ev.detail || (ev.state === "error" ? "The connection failed." : "The session ended.") } };
       }
       break;
