@@ -19,7 +19,7 @@ from typing import List, Optional
 EXECUTION_PROVIDER_GITHUB_ACTIONS = "github_actions"
 
 #: Models a run may call through the gateway when none is configured explicitly.
-DEFAULT_ALLOWED_MODELS: List[str] = ["anthropic/claude-opus-4.8"]
+DEFAULT_ALLOWED_MODELS: List[str] = ["moonshotai/kimi-k3", "anthropic/claude-opus-4.8"]
 
 
 def _parse_json_env(name: str) -> dict:
@@ -45,6 +45,16 @@ def _normalize_db_url(url: str) -> str:
     if url.startswith("postgresql://"):
         url = "postgresql+psycopg://" + url[len("postgresql://") :]
     return url
+
+
+EXECUTOR_HARNESSES = ("openhands", "omp")
+
+
+def _executor_harness(raw: Optional[str]) -> str:
+    value = (raw or "openhands").strip().lower()
+    if value not in EXECUTOR_HARNESSES:
+        raise ValueError(f"GNSIS_EXECUTOR_HARNESS must be one of {EXECUTOR_HARNESSES}, got {raw!r}")
+    return value
 
 
 @dataclass
@@ -160,6 +170,8 @@ class Settings:
     executor_token_ttl_seconds: int = 1800
     run_token_ttl_seconds: int = 1800
     executor_timeout_seconds: int = 1800
+    # Coding harness run inside the sandbox: "openhands" (default) or "omp".
+    executor_harness: str = "openhands"
 
     # Callback / source / patch / event size ceilings (bytes).
     executor_source_max_bytes: int = 262_144_000
@@ -538,6 +550,7 @@ class Settings:
             executor_token_ttl_seconds=_int("GNSIS_EXECUTOR_TOKEN_TTL_SECONDS", 1800),
             run_token_ttl_seconds=_int("GNSIS_RUN_TOKEN_TTL_SECONDS", 1800),
             executor_timeout_seconds=_int("GNSIS_EXECUTOR_TIMEOUT_SECONDS", 1800),
+            executor_harness=_executor_harness(os.environ.get("GNSIS_EXECUTOR_HARNESS")),
             executor_source_max_bytes=_int("GNSIS_EXECUTOR_SOURCE_MAX_BYTES", 262_144_000),
             executor_callback_max_bytes=_int("GNSIS_EXECUTOR_CALLBACK_MAX_BYTES", 10_485_760),
             executor_patch_max_bytes=_int("GNSIS_EXECUTOR_PATCH_MAX_BYTES", 5_242_880),

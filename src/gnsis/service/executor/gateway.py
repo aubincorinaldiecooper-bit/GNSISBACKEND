@@ -63,6 +63,7 @@ _RATES = {
     "anthropic/claude-opus": (1.5e-5, 7.5e-5),
     "anthropic/claude-sonnet": (3.0e-6, 1.5e-5),
     "anthropic/claude-haiku": (8.0e-7, 4.0e-6),
+    "moonshotai/kimi-k3": (7.3e-7, 1.0e-5),
 }
 _DEFAULT_RATE = (1.5e-5, 7.5e-5)
 
