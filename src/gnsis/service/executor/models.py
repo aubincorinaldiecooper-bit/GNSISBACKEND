@@ -168,6 +168,7 @@ class RunSpec:
     # {memory_id, kind, content, selection_reason}. Delivered as a SEPARATE field
     # — the executor must never concatenate it into the instruction.
     memory_context: list = field(default_factory=list)
+    harness: str = "openhands"
 
     def to_public_dict(self) -> dict:
         return {
@@ -198,4 +199,5 @@ class RunSpec:
             "output_files": ["patch.diff", "tests.json", "receipt.json", "events.jsonl"],
             "policy": self.policy,
             "memory_context": list(self.memory_context),
+            "harness": self.harness,
         }

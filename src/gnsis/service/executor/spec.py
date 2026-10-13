@@ -112,4 +112,5 @@ def build_run_spec(settings, job, run: ExecutionRunRecord) -> RunSpec:
         },
         policy=_reconstruct_policy(run),
         memory_context=_reconstruct_memory(job, run),
+        harness=settings.executor_harness,
     )
