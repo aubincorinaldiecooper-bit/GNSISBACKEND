@@ -18,6 +18,8 @@ on:
 jobs:
   dmg:
     runs-on: macos-14
+    permissions:
+      contents: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -110,3 +112,15 @@ jobs:
           name: GNSIS for Mac
           path: desktop/release/*.dmg
           if-no-files-found: error
+      # Each main build becomes the public "latest" release that gnsis.studio's
+      # Download for Mac button links to (releases/latest/download/GNSIS-for-Mac.dmg).
+      - name: Publish public release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "desktop/release/GNSIS for Mac.dmg" GNSIS-for-Mac.dmg
+          gh release create "desktop-${{ github.run_number }}" GNSIS-for-Mac.dmg \
+            --target "${{ github.sha }}" --latest \
+            --title "GNSIS for Mac (build ${{ github.run_number }})" \
+            --notes "Built from ${{ github.sha }}. Unsigned development build."
