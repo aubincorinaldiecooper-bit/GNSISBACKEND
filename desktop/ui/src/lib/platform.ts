@@ -13,6 +13,7 @@ export function useHitRects(host: LiveHost) {
     const report = host.reportHitRects?.bind(host);
     if (!report || !host.capabilities().overlay) return;
     let last = "";
+    let still = 0;
     let timer = 0;
     const tick = () => {
       const rects = Array.from(document.querySelectorAll<HTMLElement>("[data-hit]")).map((el) => {
@@ -25,8 +26,13 @@ export function useHitRects(host: LiveHost) {
         ];
       });
       const key = JSON.stringify(rects);
-      if (key !== last) {
+      // Main learns the cards only through these reports. One sent before it
+      // was listening is lost, and a page whose cards never move would never
+      // send again — every click then falls through forever — so an unchanged
+      // report is repeated about once a second.
+      if (key !== last || ++still >= 8) {
         last = key;
+        still = 0;
         report(rects);
       }
       timer = window.setTimeout(tick, 120);

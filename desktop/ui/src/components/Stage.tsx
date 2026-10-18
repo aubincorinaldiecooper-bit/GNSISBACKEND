@@ -81,7 +81,7 @@ const DRAG_FROM = ".shell, .tabs, .panel-head";
 /** …but not on their controls, except the faces, which still open or close the chat when simply clicked. */
 const NOT_FROM = "input, textarea, select, a, [contenteditable], button:not(.dock-sun):not(.addr-face)";
 /** How far the pointer moves before a press becomes a drag, so a click stays a click. */
-const DRAG_SLOP = 5;
+const DRAG_SLOP = 10;
 
 /**
  * Where everything in the cluster sits before it is moved: the union of its

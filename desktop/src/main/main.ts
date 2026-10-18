@@ -884,6 +884,22 @@ app.whenReady().then(async () => {
     { useSystemPicker: true },
   );
   registerIdentityHandlers();
+  // Where the floating window's cards are, so clicks elsewhere fall through.
+  // Registered before the window exists: the page sends its first report
+  // about 120 ms after it loads, and anything sent before this listener
+  // attaches is gone for good — the page only re-sends when the cards move,
+  // so a missed report left every click falling through to the desktop.
+  let reported = false;
+  ipcMain.on("hit:rects", (_e, rects: unknown) => {
+    if (!clickThrough) return;
+    clickThrough.setRects(rects);
+    // Once: proof the page is telling main where its cards are. Without it,
+    // every click would fall through and GNSIS could not be used.
+    const cards = hitRectsFrom(rects).length;
+    if (reported || cards === 0) return;
+    reported = true;
+    hostLog("host", `floating window: the page reported ${cards} card(s) that take clicks`);
+  });
   createWindow();
   if (wakeGestureEnabled) tapGesture.start();
   ipcMain.handle("wake:enabled", () => wakeGestureEnabled);
@@ -1036,18 +1052,6 @@ app.whenReady().then(async () => {
     const options = { type: "warning" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, noLink: true, title: "GNSIS", message };
     const result = win && !OVERLAY ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
     return result.response === 0;
-  });
-  // Where the floating window's cards are, so clicks elsewhere fall through.
-  let reported = false;
-  ipcMain.on("hit:rects", (_e, rects: unknown) => {
-    if (!clickThrough) return;
-    clickThrough.setRects(rects);
-    // Once: proof the page is telling main where its cards are. Without it,
-    // every click would fall through and GNSIS could not be used.
-    const cards = hitRectsFrom(rects).length;
-    if (reported || cards === 0) return;
-    reported = true;
-    hostLog("host", `floating window: the page reported ${cards} card(s) that take clicks`);
   });
   if (process.platform === "darwin") {
     // Each time an app comes to the front, note it if it is not GNSIS.
