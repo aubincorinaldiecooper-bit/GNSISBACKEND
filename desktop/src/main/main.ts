@@ -909,41 +909,10 @@ app.whenReady().then(async () => {
     else tapGesture.stop();
     return wakeGestureEnabled;
   });
-  await connectRuntime();
-  const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
-  const visualHostToken = process.env.GNSIS_VISUAL_HOST_TOKEN?.trim();
-  const visualTask = process.env.GNSIS_VISUAL_TASK?.trim();
-  if (visualBaseUrl && visualHostToken && visualTask) {
-    desktopVisual = new DesktopVisualConnector({
-      baseUrl: visualBaseUrl,
-      hostToken: visualHostToken,
-      task: visualTask,
-      capabilityManifestId: HOST_TOOLS_VERSION,
-      latestTurnId: () => turns.latest()?.turnId ?? null,
-      dispatch: (control) => broker.handleControl(control),
-      log: hostLog,
-    });
-    try {
-      await desktopVisual.start();
-    } catch (error) {
-      hostLog(
-        "visual",
-        `desktop visual session did not start: ${String((error as Error).message ?? error)}`,
-      );
-      desktopVisual = null;
-    }
-  } else if (visualBaseUrl || visualHostToken || visualTask) {
-    hostLog(
-      "visual",
-      "desktop visual connector requires base URL, host token, and task together",
-    );
-  }
-
-  shortcuts.register("Control+Alt+Space", () => {
-    host.interrupt("global_shortcut");
-    sendToRenderer("ui:interrupted");
-  });
-
+  // Every renderer-facing channel is registered before the first network
+  // wait below. The page can call or send to any of them within about 120 ms
+  // of loading; a listener that attaches late either fails the call or loses
+  // the message for good, because fire-and-forget sends are never retried.
   ipcMain.handle("media:permissions", async () => {
     const status = {
       microphone: await permissions.status("microphone"),
@@ -1077,6 +1046,44 @@ app.whenReady().then(async () => {
       hostLog("execution", `tool ${String(tool)} failed: ${String(err)}`);
       throw err;
     }
+  });
+
+  // The waits: connecting to the runtime and starting the desktop visual
+  // session both block on the network, and nothing the page can say is left
+  // unregistered by now. Handlers above read these as they settle.
+  await connectRuntime();
+  const visualBaseUrl = process.env.GNSIS_VISUAL_BASE_URL?.trim();
+  const visualHostToken = process.env.GNSIS_VISUAL_HOST_TOKEN?.trim();
+  const visualTask = process.env.GNSIS_VISUAL_TASK?.trim();
+  if (visualBaseUrl && visualHostToken && visualTask) {
+    desktopVisual = new DesktopVisualConnector({
+      baseUrl: visualBaseUrl,
+      hostToken: visualHostToken,
+      task: visualTask,
+      capabilityManifestId: HOST_TOOLS_VERSION,
+      latestTurnId: () => turns.latest()?.turnId ?? null,
+      dispatch: (control) => broker.handleControl(control),
+      log: hostLog,
+    });
+    try {
+      await desktopVisual.start();
+    } catch (error) {
+      hostLog(
+        "visual",
+        `desktop visual session did not start: ${String((error as Error).message ?? error)}`,
+      );
+      desktopVisual = null;
+    }
+  } else if (visualBaseUrl || visualHostToken || visualTask) {
+    hostLog(
+      "visual",
+      "desktop visual connector requires base URL, host token, and task together",
+    );
+  }
+
+  shortcuts.register("Control+Alt+Space", () => {
+    host.interrupt("global_shortcut");
+    sendToRenderer("ui:interrupted");
   });
 });
 
