@@ -20,11 +20,16 @@ own. Every action it proposes must be carried out by your host.
    `Authorization: Bearer $GNSIS_API_KEY`.
 2. The host opens a session with the grant:
    `POST $PANOPTIC_API_BASE/v1/visual/sessions`. The response returns the session
-   id, a WebSocket stream URL, and **two tokens**:
-   - **host token** — streams frames and closes the session. Keep it in the
-     trusted host.
-   - **planner token** — read and plan only inside that one session. Hand this to
-     the agent; it cannot open, close or stream to anything.
+   id and **two tokens** — so there are **three credentials** in play:
+   - **the grant** — authenticates all host HTTP operations (set task via the
+     host path, `record_attempt`, close). The grant expires after ~5 minutes:
+     keep the workspace API key in the trusted host and mint a fresh grant when
+     one is needed; closing a session still accepts an expired grant.
+   - **`stream.token`** — authenticates the session's WebSocket only. It is
+     independent of grant expiry, so streaming can keep a session alive after
+     the grant lapses.
+   - **`planner.token`** — read and plan only inside that one session. Hand this
+     to the agent; it cannot open, close or stream to anything.
 3. Send `X-Panoptic-Client: <your-agent>/<version>` with requests so usage is
    attributed to your agent.
 
@@ -80,8 +85,9 @@ with VisualClient(base_url, api_token) as client:
     client.set_task(session.session_id, "Save the document", allowed_actions=["click", "type"])
     # … host streams frames to session.stream_path …
     decision = client.decide(session.session_id)        # one grounded action proposal
-    # host executes it (or refuses), then:
-    client.record_attempt(session.session_id, decision["decision_id"])   # host token only
+    # host decides whether to execute; record only what it actually did:
+    if host_executed:
+        client.record_attempt(session.session_id, decision["decision_id"])   # host token only
     answer = client.perceive(session.session_id, focus="Did the save dialog close?")
     client.close_session(session.session_id)
 ```
@@ -100,12 +106,17 @@ A grounded agent loop looks like:
    proposals stay inside what the host can actually do.
 2. **Stream** — the host pushes frames to the session's WebSocket. This is all
    Panoptic ever sees.
-3. **Decide or perceive** — `decide` returns one proposal
-   (`{"action", "target": {"x","y"}, "reason", "request_id"}`); `perceive`
-   answers a free-form question about the current screen or a pixel.
+3. **Decide or perceive** — `decide` returns one proposal nested under
+   `decision` (`{"request_id", "decision_id", "decision": {"action", "target":
+   {"x","y"}, "reason"}, "gate", "frame_seq", "current"}`); `perceive`
+   answers a free-form question about the current screen or a pixel. If frames
+   changed while the decision was generated the call answers 409
+   `stale_decision` — decide again on the fresh frame.
 4. **Host executes** — the host decides whether to carry out the proposal.
-5. **Record the attempt** — `record_attempt` tells Panoptic what actually
-   happened, so the next proposal accounts for it.
+5. **Record the attempt** — only when the host actually executed:
+   `record_attempt(session_id, decision_id)` moves the proposal into the
+   session's action history. A refused proposal must stay unrecorded, or later
+   decisions reason from an action that never happened.
 
 Use `inspect`/`read_pixels` when a region needs a closer look before acting, and
 `history` to see what changed between two states.
