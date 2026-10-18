@@ -87,7 +87,7 @@ with VisualClient(base_url, api_token) as client:
     decision = client.decide(session.session_id)        # one grounded action proposal
     # host decides whether to execute; record only what it actually did:
     if host_executed:
-        client.record_attempt(session.session_id, decision["decision_id"])   # host token only
+        client.record_attempt(session.session_id, decision["decision_id"])   # grant (host credential) only
     answer = client.perceive(session.session_id, focus="Did the save dialog close?")
     client.close_session(session.session_id)
 ```
@@ -95,7 +95,7 @@ with VisualClient(base_url, api_token) as client:
 `VisualClient` methods: `create_session`, `close_session`, `set_task`,
 `reset_task`, `decide`, `perceive`, `record_attempt`, `state`, `history`,
 `inspect`, `read_pixels`. TypeScript: `npm install @gnsis/visual-sdk`.
-`record_attempt` requires the host token — only the trusted host reports what
+`record_attempt` requires the grant — only the trusted host reports what
 it actually executed.
 
 ## The decide loop
