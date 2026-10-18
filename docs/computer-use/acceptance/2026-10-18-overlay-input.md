@@ -32,6 +32,12 @@
 | 8 | Click "GNSIS 0.5" in the open model menu | **FAIL on #193 build** — menu lacks `data-hit`, click fell through to the app beneath (Simulator took focus). **Fixed in this PR** by adding `data-hit` to `.model-menu` |
 | 9 | Startup "No handler registered" errors for `link:state` / `media:permissions` / `model:preference` | PASS — zero after #193 (3+ per launch before) |
 | 10 | Vision menu closes via its `+` toggle (outside clicks fall through by design on a transparent overlay) | PASS |
+| 11 | `≡` menu (dock mode) opens via real click: Open chat, Settings, Hide to menu bar, Quit GNSIS | PASS |
+| 12 | Settings opens via real click; Appearance tab; Glass Clear↔Dark applies (`gnsis-dark` class toggles); close button | PASS |
+| 13 | "Hide to menu bar" → window shrinks/hides (`menu bar: tucked away`); menu-bar icon click → returns (`menu bar: come back`) | PASS — icon bounds verified via Accessibility API |
+| 14 | Real drag on the face moves the cluster and persists `gnsis.place` | PASS (dx -151, dy -11 recorded) |
+| 15 | Typing `/` in the bar opens the commands palette (`/screen` listed) | PASS |
+| 16 | "Quit GNSIS" ends the app cleanly (`quit: from GNSIS's menu` → `will-quit`, process exits) | PASS |
 
 ## Notes
 
