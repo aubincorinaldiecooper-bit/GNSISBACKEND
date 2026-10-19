@@ -9,14 +9,14 @@ export interface LocalCommand {
   args: { target: string };
 }
 
-const OPEN = /^(?:please\s+)?(?:open|launch|start)\s+(.+?)(?:\s+please)?[.!]?$/i;
+const OPEN = /^(?:please\s*,?\s+)?(?:open|launch|start)\s+(.+?)(?:\s*,?\s+please)?[.!?]?$/i;
 const UNSAFE_JOIN = /\b(?:and|then|after|before|while|but)\b/i;
 
 export function localCommand(input: string): LocalCommand | null {
   const text = input.trim();
   if (!text || text.length > 240 || UNSAFE_JOIN.test(text)) return null;
   const match = OPEN.exec(text);
-  const target = match?.[1]?.trim();
+  const target = match?.[1]?.trim().replace(/[.,!?\s]+$/, "");
   if (!target || target.length > 180) return null;
   return { tool: "open", args: { target } };
 }

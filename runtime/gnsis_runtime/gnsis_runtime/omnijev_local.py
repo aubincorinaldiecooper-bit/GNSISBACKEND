@@ -19,9 +19,18 @@ from typing import Any
 import torch
 from PIL import Image
 
-from .local_controller import Candidate, Selection
+from .local_controller import Candidate, Selection, schema_candidates
 
 _JSON_BLOCK = re.compile(r"\[[\s\S]*\]")
+
+
+def _candidate_mode() -> str:
+    """How candidates are built. `schema` (default) derives them from the
+    offered tool schemas — one fast `system_one` judgment call per decide.
+    `generate` keeps the free-form candidate generation, which needs a GPU to
+    be usable (several minutes on CPU)."""
+    mode = os.environ.get("GNSIS_LOCAL_CANDIDATE_MODE", "schema").strip().lower()
+    return mode if mode in {"schema", "generate"} else "schema"
 
 
 class GnsisLocalBackend:
@@ -58,6 +67,8 @@ class GnsisLocalBackend:
         tools: list[str],
         tool_schemas: list[dict[str, Any]],
     ) -> list[Candidate]:
+        if _candidate_mode() == "schema":
+            return schema_candidates(text=text, tools=tools, tool_schemas=tool_schemas)
         prompt = (
             "You are the candidate builder for a local desktop assistant. "
             "Return only a JSON array with at most eight safe next-step candidates. "
@@ -91,8 +102,12 @@ class GnsisLocalBackend:
                     key=f"candidate-{index + 1}",
                     kind=kind,
                     description=description,
-                    tool=item.get("tool") if isinstance(item.get("tool"), str) else None,
-                    args=item.get("args") if isinstance(item.get("args"), dict) else None,
+                    tool=item.get("tool")
+                    if isinstance(item.get("tool"), str)
+                    else None,
+                    args=item.get("args")
+                    if isinstance(item.get("args"), dict)
+                    else None,
                     message=item.get("message")
                     if isinstance(item.get("message"), str)
                     else None,
