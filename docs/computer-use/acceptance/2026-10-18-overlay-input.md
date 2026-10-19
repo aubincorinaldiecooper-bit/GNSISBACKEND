@@ -1,8 +1,8 @@
-# Real-Mac acceptance record — overlay input fixes (#192, #193, this PR)
+# Real-Mac acceptance record — overlay input fixes (#192, #193, #194)
 
 | Field | Value |
 |---|---|
-| Commit/build identity | PR #192 `1be4545` (hit:rects before createWindow, hit-report self-heal, DRAG_SLOP 10), PR #193 `c33b61e` (all IPC before first network await), this PR (model-menu `data-hit`); local `npm start` build of `desktop/` |
+| Commit/build identity | PR #192 `1be4545` (hit:rects before createWindow, hit-report self-heal, DRAG_SLOP 10), PR #193 `c33b61e` (all IPC before first network await), PR #194 `45f3581` (model-menu `data-hit`; record extended in `c7ec18c`); local `npm start` build of `desktop/` |
 | Test environment | Real Mac (macOS 15 VM), Electron 39.8.10, floating overlay mode at 0.8 zoom, run directly via `node_modules/.bin/electron .` |
 | Capability manifest identity | `desktop-v5` (`actions offered: open,files,browser,input,window,clipboard`) |
 | Scenarios run | See table below |
@@ -16,7 +16,7 @@
 | Resampler ratio/drift evidence | n/a — no audio-capture change in scope |
 | Retries/fallbacks | `useHitRects` re-sends an unchanged report ~once per second so a dropped startup report self-heals |
 | Duplicate/replay count | 0 — `setRects` is idempotent; repeated reports replace, never append |
-| Failure layer | Startup IPC registration (main process) for #192/#193; renderer overlay markup (missing `data-hit`) for this PR |
+| Failure layer | Startup IPC registration (main process) for #192/#193; renderer overlay markup (missing `data-hit`) for #194 |
 
 ## Scenarios (real clicks via the OS into the floating window)
 
@@ -29,7 +29,7 @@
 | 5 | Jittery press on an empty part of the bar (< ~8 screen px) → stays a click, cluster does not move, `gnsis.place` unchanged | PASS (was a real defect at DRAG_SLOP 5; verified place unchanged after fix) |
 | 6 | `+` button → "What GNSIS can see" menu opens; "My screen" checks and the macOS screen picker appears; "Nothing" clears it | PASS (the VM's picker renders skeleton thumbnails — OS-side artifact, not app code) |
 | 7 | Model picker button → menu opens | PASS (DOM toggle verified; see #8) |
-| 8 | Click "GNSIS 0.5" in the open model menu | **FAIL on #193 build** — menu lacks `data-hit`, click fell through to the app beneath (Simulator took focus). **Fixed in this PR** by adding `data-hit` to `.model-menu` |
+| 8 | Click "GNSIS 0.5" in the open model menu | **FAIL on #193 build** — menu lacks `data-hit`, click fell through to the app beneath (Simulator took focus). **PASS on #194 build `45f3581`** — after adding `data-hit` to `.model-menu`, a real click selected GNSIS 0.5 (picker label updated, menu closed) |
 | 9 | Startup "No handler registered" errors for `link:state` / `media:permissions` / `model:preference` | PASS — zero after #193 (3+ per launch before) |
 | 10 | Vision menu closes via its `+` toggle (outside clicks fall through by design on a transparent overlay) | PASS |
 | 11 | `≡` menu (dock mode) opens via real click: Open chat, Settings, Hide to menu bar, Quit GNSIS | PASS |
