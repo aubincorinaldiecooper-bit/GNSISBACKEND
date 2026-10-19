@@ -22,6 +22,11 @@ def _key_label(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()[:12]
 
 
+def _safe_request_id(payload: dict[str, Any]) -> str:
+    raw = str(payload.get("requestId") or "")
+    return "".join(c for c in raw if c.isalnum() or c in "-_")[:64] or "-"
+
+
 def build_local_controller_app(
     engine: LocalDecisionEngine,
     host_token: str,
@@ -51,7 +56,7 @@ def build_local_controller_app(
         authorization: str | None = Header(default=None),
     ) -> Any:
         caller = authorize(authorization)
-        logger.info("decide requestId=%s caller=%s", payload.get("requestId"), caller)
+        logger.info("decide requestId=%s caller=%s", _safe_request_id(payload), caller)
         gone = asyncio.Event()
 
         async def watch_disconnect() -> None:

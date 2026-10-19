@@ -92,9 +92,13 @@ app = modal.App(APP_NAME, image=image, include_source=True)
 # allows a public URL or the site proxy fronts this path for beta developers.
 @modal.asgi_app(requires_proxy_auth=True)
 def decide_service():
+    import logging
     import sys
 
     os.environ["HF_HOME"] = "/hf"
+    # uvicorn's handlers filter at the handler level, but the library logger
+    # inherits WARNING; decide attribution lines are INFO.
+    logging.getLogger("gnsis_runtime.local_controller_api").setLevel(logging.INFO)
     # Stable reference path for beta — fla fast path rejoins after the
     # upstream IMA is fixed.
     os.environ["MSO_FLA"] = "0"
