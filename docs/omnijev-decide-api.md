@@ -29,18 +29,22 @@ the key identifies the caller to us). Missing or wrong key → `401`.
 }
 ```
 
-Response — the verdict:
+Response — the verdict (fields only appear where they apply):
 
 ```json
 {
-  "kind": "tool | done | fallback",
-  "tool": "name when kind=tool",
+  "kind": "tool",
+  "tool": "fs_open",
   "args": {},
-  "message": "final answer when kind=done",
-  "reason": "why it abstained when kind=fallback",
   "confidence": 0.93
 }
 ```
+
+`args` is `{}` when the request text does not map onto the tool schema
+unambiguously — the verdict says *which* candidate won; filling executable
+arguments is the caller's side of the contract. `confidence` is emitted only
+on `kind=tool` verdicts; `done` carries `message`, `fallback` carries
+`reason`, and neither reports a confidence.
 
 `kind=fallback` is the honest-abstain answer: the model judged no offered
 action safe enough. Treat it as "I don't know" — it exists so agents can stop
@@ -52,14 +56,13 @@ instead of guessing.
 
 ## Access note for the beta team
 
-The endpoint currently sits behind Modal proxy auth in addition to the Bearer
-key (the workspace blocks public URLs). For developer-facing access either:
-
-1. allow unauthenticated URLs on the `main` environment (workspace setting), or
-2. front this path through the site's existing proxy (same pattern as `/ws/*`).
-
-Until one is in place, direct external calls need the workspace's
-`Modal-Key`/`Modal-Secret` pair — keep those internal.
+The endpoint sits behind Modal proxy auth in addition to the Bearer key (the
+workspace blocks public URLs). Developer-facing access goes through the site's
+front door — `https://gnsis.studio/v1/decide` and `/v1/healthz` are
+reverse-proxied to this endpoint with `Modal-Key`/`Modal-Secret` stamped
+server-side (GNSISFRONTEND `Caddyfile`, same pattern as `/ws/*`), so external
+callers only ever need their Bearer key. Direct calls to the Modal URL still
+require the workspace proxy pair — keep those internal.
 
 ## Cost shape
 
