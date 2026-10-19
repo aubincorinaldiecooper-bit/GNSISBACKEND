@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import re
 import tempfile
+import threading
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 MAX_CANDIDATES = 12
 MAX_HISTORY = 12
@@ -66,6 +68,10 @@ class Selection:
     valid: bool = True
 
 
+class DecisionCancelled(Exception):
+    """The HTTP client went away mid-decide; any result would be discarded."""
+
+
 class LocalModelBackend(Protocol):
     def candidates(
         self,
@@ -87,12 +93,24 @@ class LocalModelBackend(Protocol):
 
 
 class LocalDecisionEngine:
-    """Keeps model output inside the exact actions offered by the desktop Host."""
+    """Keeps model output inside the exact actions offered by the desktop Host.
+
+    The model backend is not thread-safe, so model work is serialized under a
+    lock; requests queue instead of interleaving inside a single model call.
+    `cancelled` is a cooperative check between model stages so a client that
+    hung up does not keep the CPU grinding on a discarded answer.
+    """
 
     def __init__(self, backend: LocalModelBackend):
         self.backend = backend
+        self._lock = threading.Lock()
 
-    def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def decide(
+        self,
+        payload: dict[str, Any],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         text = payload.get("text")
         tools = payload.get("tools")
         history = payload.get("history", [])
@@ -115,30 +133,38 @@ class LocalDecisionEngine:
             for schema in tool_schemas
             if isinstance(schema, dict) and schema.get("name") in offered
         ]
-        proposed = self.backend.candidates(
-            text=text.strip(),
-            history=history,
-            tools=tools,
-            tool_schemas=schemas,
-        )
-        candidates = self._validated_candidates(proposed, offered)
-        if not candidates:
-            return {"kind": "fallback", "reason": "No safe local action was proposed."}
-
-        state_path = _state_image_path(payload)
-        try:
-            selection = self.backend.select(
+        with self._lock:
+            if cancelled is not None and cancelled():
+                raise DecisionCancelled()
+            proposed = self.backend.candidates(
                 text=text.strip(),
                 history=history,
-                candidates=candidates,
-                state_image=state_path,
+                tools=tools,
+                tool_schemas=schemas,
             )
-        finally:
-            if state_path is not None:
-                try:
-                    os.unlink(state_path)
-                except OSError:
-                    pass
+            candidates = self._validated_candidates(proposed, offered)
+            if not candidates:
+                return {
+                    "kind": "fallback",
+                    "reason": "No safe local action was proposed.",
+                }
+
+            if cancelled is not None and cancelled():
+                raise DecisionCancelled()
+            state_path = _state_image_path(payload)
+            try:
+                selection = self.backend.select(
+                    text=text.strip(),
+                    history=history,
+                    candidates=candidates,
+                    state_image=state_path,
+                )
+            finally:
+                if state_path is not None:
+                    try:
+                        os.unlink(state_path)
+                    except OSError:
+                        pass
         if (
             not selection.valid
             or selection.key is None
@@ -148,7 +174,10 @@ class LocalDecisionEngine:
         by_key = {candidate.key: candidate for candidate in candidates}
         chosen = by_key.get(selection.key)
         if chosen is None:
-            return {"kind": "fallback", "reason": "The local model chose no offered action."}
+            return {
+                "kind": "fallback",
+                "reason": "The local model chose no offered action.",
+            }
         if chosen.kind == "tool":
             return {
                 "kind": "tool",
@@ -157,7 +186,10 @@ class LocalDecisionEngine:
                 "confidence": selection.confidence,
             }
         if chosen.kind == "done":
-            return {"kind": "done", **({"message": chosen.message} if chosen.message else {})}
+            return {
+                "kind": "done",
+                **({"message": chosen.message} if chosen.message else {}),
+            }
         return {
             "kind": "fallback",
             "reason": chosen.reason or "The local model could not safely continue.",
@@ -178,7 +210,9 @@ class LocalDecisionEngine:
             ):
                 continue
             if candidate.kind == "tool":
-                if candidate.tool not in offered or not isinstance(candidate.args, dict):
+                if candidate.tool not in offered or not isinstance(
+                    candidate.args, dict
+                ):
                     continue
             elif candidate.kind == "done":
                 if candidate.message is not None and len(candidate.message) > 2_000:
@@ -191,3 +225,170 @@ class LocalDecisionEngine:
             keys.add(candidate.key)
             out.append(candidate)
         return out
+
+
+_OPEN_TARGET = re.compile(
+    r"^(?:please\s*,?\s+)?(?:open|launch|start)\s+(.+?)(?:\s*,?\s+please)?[.!?]*$",
+    re.IGNORECASE,
+)
+_CLICK_LABEL = re.compile(
+    r"^(?:click|tap|press\s+(?:the|on))\s+(?:the\s+)?(.+?)[.!?]*$", re.IGNORECASE
+)
+_TYPE_TEXT = re.compile(r"^type\s+(.+?)(?:\s+into\s+.+)?[.!?]*$", re.IGNORECASE)
+_KEYS = re.compile(r"^(?:press|hit)\s+(?!the\b|on\b)(.+?)[.!?]*$", re.IGNORECASE)
+_SCROLL = re.compile(r"\bscroll\s+(up|down|left|right)\b", re.IGNORECASE)
+_GO_URL = re.compile(
+    r"^(?:go\s+to|visit|navigate\s+to|browse\s+to)\s+(\S+?)[.!?]*$", re.IGNORECASE
+)
+_NEW_FOLDER = re.compile(
+    r"(?:create|make|new)\s+(?:a\s+)?(?:new\s+)?folder\s+(?:called|named\s+)?\s*(.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+_FIND = re.compile(
+    r"^(?:find|search\s+for|look\s+for|locate)\s+(?:the\s+|a\s+|an\s+)?(.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+_CLIPBOARD_READ = re.compile(
+    r"\bclipboard\b.*\b(?:what|show|read|see)\b|\b(?:what|show|read|see)\b.*\bclipboard\b",
+    re.IGNORECASE,
+)
+_COPY = re.compile(
+    r"^(?:copy|save\s+to\s+(?:my\s+)?clipboard)\s+(.+?)[.!?]*$", re.IGNORECASE
+)
+
+
+def _text_arg(pattern: re.Pattern[str], text: str) -> str | None:
+    match = pattern.search(text.strip())
+    if match is None:
+        return None
+    value = match.group(1).strip().rstrip(".,!?").strip()
+    return value or None
+
+
+def _tool_candidate(
+    name: str, text: str, description: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Ground a schema-offered tool in the trusted request words, when plain.
+
+    Returns (args, candidate description). Arguments are only extracted where
+    the words map onto the schema unambiguously; a None args means the words
+    did not plainly name this tool's action.
+    """
+    if name == "open":
+        target = _text_arg(_OPEN_TARGET, text)
+        if target and len(target) <= 512:
+            return {"target": target}, f"Open '{target}' on the person's Mac."
+        return None, description
+    elif name == "input":
+        label = _text_arg(_CLICK_LABEL, text)
+        if label and len(label) <= 128:
+            return {
+                "action": "click",
+                "label": label,
+            }, f"Click '{label}' on the screen."
+        typed = _text_arg(_TYPE_TEXT, text)
+        if typed and len(typed) <= 1000:
+            return {"action": "type", "text": typed}, f"Type the words '{typed[:80]}'."
+        keys = _text_arg(_KEYS, text)
+        if keys and len(keys) <= 64:
+            return {"action": "keys", "keys": keys}, f"Press {keys}."
+        scroll = _SCROLL.search(text)
+        if scroll:
+            direction = scroll.group(1).lower()
+            return {"action": "scroll", "direction": direction}, f"Scroll {direction}."
+    elif name == "browser":
+        url = _text_arg(_GO_URL, text)
+        if url and len(url) <= 2048:
+            return {"action": "go", "url": url}, f"Open {url} in the person's browser."
+    elif name == "files":
+        folder = _text_arg(_NEW_FOLDER, text)
+        if folder and len(folder) <= 255:
+            return {
+                "action": "new_folder",
+                "name": folder,
+            }, f"Create a folder named '{folder}'."
+        query = _text_arg(_FIND, text)
+        if query and len(query) <= 128:
+            return {
+                "action": "find",
+                "query": query,
+            }, f"Find '{query}' in the open Finder."
+    elif name == "clipboard":
+        if _CLIPBOARD_READ.search(text):
+            return {"action": "read"}, "Read what is on the person's clipboard."
+        copied = _text_arg(_COPY, text)
+        if copied and len(copied) <= 20_000:
+            return {
+                "action": "write",
+                "text": copied,
+            }, f"Copy '{copied[:80]}' to the clipboard."
+    return None, description
+
+
+def schema_candidates(
+    *,
+    text: str,
+    tools: list[str],
+    tool_schemas: list[dict[str, Any]],
+) -> list[Candidate]:
+    """Deterministic action candidates built from the offered tool schemas.
+
+    The judge (`system_one`) still makes the decision with the screen still;
+    this only avoids a minutes-long free-form generation to enumerate options
+    the Host already described exactly. Arguments are grounded in the trusted
+    request text where a plain pattern exists, matching the same intent the
+    desktop's deterministic `localCommand` matcher uses.
+
+    Only tools the words plainly name go on the ballot — a longer ballot
+    splits the judge's confidence so thin that even a committed pick falls
+    under the Host's confidence gate. When nothing matches, every offered
+    tool is on the ballot generic, which is the honest low-confidence case.
+    """
+    offered = set(tools)
+    grounded: list[Candidate] = []
+    generic: list[Candidate] = []
+    for schema in tool_schemas:
+        if not isinstance(schema, dict):
+            continue
+        name = schema.get("name")
+        if not isinstance(name, str) or name not in offered:
+            continue
+        description = schema.get("description")
+        blurb = description if isinstance(description, str) else name
+        args, blurb = _tool_candidate(name, text, blurb)
+        bucket = grounded if args is not None else generic
+        bucket.append(
+            Candidate(
+                key="",
+                kind="tool",
+                tool=name,
+                args=args if args is not None else {},
+                description=blurb[:1_000],
+            )
+        )
+    out = grounded if grounded else generic
+    for index, candidate in enumerate(out):
+        out[index] = Candidate(
+            key=f"candidate-{index + 1}",
+            kind=candidate.kind,
+            description=candidate.description,
+            tool=candidate.tool,
+            args=candidate.args,
+            message=candidate.message,
+            reason=candidate.reason,
+        )
+    out.append(
+        Candidate(
+            key=f"candidate-{len(out) + 1}",
+            kind="done",
+            description="The request is fully handled; finish in plain words.",
+        )
+    )
+    out.append(
+        Candidate(
+            key=f"candidate-{len(out) + 1}",
+            kind="fallback",
+            description="Decline: the request cannot be handled safely on this Mac.",
+        )
+    )
+    return out

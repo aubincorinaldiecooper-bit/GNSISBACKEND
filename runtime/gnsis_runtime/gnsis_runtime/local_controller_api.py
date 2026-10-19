@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
-from .local_controller import LocalDecisionEngine
+from .local_controller import DecisionCancelled, LocalDecisionEngine
 from .local_speech import LocalKittenSpeech
 from .local_whisper import LocalWhisper
 
@@ -32,15 +33,33 @@ def build_local_controller_app(
         return {"ok": True}
 
     @app.post("/v1/decide")
-    def decide(
+    async def decide(
         payload: dict[str, Any],
+        request: Request,
         authorization: str | None = Header(default=None),
-    ) -> dict[str, Any]:
+    ) -> Any:
         authorize(authorization)
+        gone = asyncio.Event()
+
+        async def watch_disconnect() -> None:
+            while not gone.is_set():
+                if await request.is_disconnected():
+                    gone.set()
+                    return
+                await asyncio.sleep(0.25)
+
+        watcher = asyncio.create_task(watch_disconnect())
         try:
-            return engine.decide(payload)
+            return await asyncio.to_thread(
+                engine.decide, payload, cancelled=gone.is_set
+            )
+        except DecisionCancelled:
+            return Response(status_code=499)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        finally:
+            gone.set()
+            watcher.cancel()
 
     @app.post("/v1/transcribe")
     async def transcribe(
@@ -65,7 +84,9 @@ def build_local_controller_app(
             raise HTTPException(status_code=503, detail="Local speech is unavailable")
         text = payload.get("text")
         voice = payload.get("voice")
-        if not isinstance(text, str) or (voice is not None and not isinstance(voice, str)):
+        if not isinstance(text, str) or (
+            voice is not None and not isinstance(voice, str)
+        ):
             raise HTTPException(status_code=400, detail="Invalid speech request")
         try:
             pcm = speech.speak(text, voice)

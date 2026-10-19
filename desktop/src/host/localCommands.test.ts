@@ -11,6 +11,14 @@ test("direct app launches use the local open tool", () => {
     tool: "open",
     args: { target: "FaceTime" },
   });
+  assert.deepEqual(localCommand("Open Notes, please."), {
+    tool: "open",
+    args: { target: "Notes" },
+  });
+  assert.deepEqual(localCommand("open Safari,"), {
+    tool: "open",
+    args: { target: "Safari" },
+  });
 });
 
 test("multi-step and ambiguous requests stay with the foreground model", () => {

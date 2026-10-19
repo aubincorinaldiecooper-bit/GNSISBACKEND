@@ -1015,8 +1015,10 @@ app.whenReady().then(async () => {
   if (utterances) setInterval(() => utterances.idle(Date.now()), 1_000);
   ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) => {
     const frame = Buffer.from(payload);
+    // The still belongs to the local controller too: keep it whenever the live
+    // share produced a frame, even while the cloud screen socket is down.
+    lastScreenStill = { data: frame, at: Date.now() };
     if (host.sendScreenFrame(metadata, frame)) {
-      lastScreenStill = { data: frame, at: Date.now() };
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
       desktopVisual?.observeFrame(metadata, frame);
     }
