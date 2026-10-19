@@ -259,7 +259,7 @@ function ModelPicker({ model }: { model: GnsisModel }) {
       </button>
       {open &&
         createPortal(
-          <div ref={menu} className="model-menu glass" role="menu" style={at}>
+          <div ref={menu} data-hit className="model-menu glass" role="menu" style={at}>
             <button type="button" role="menuitemradio" aria-checked={model === "gnsis-1.0"} onClick={() => select("gnsis-1.0")}>
               GNSIS 1.0 {model === "gnsis-1.0" && <span aria-hidden="true">✓</span>}
             </button>
