@@ -21,3 +21,18 @@ missed brand — badges aren't visible in the frames and it hedged at
 0.41 confidence instead of abstaining. Gemini read the whole mp4 and
 recognized the vehicles outright. Corrective lever: more frames or a
 multi-choice abstain threshold, not a bigger model.
+
+### Honesty + "look closer" pass (measured, same clip)
+
+First-pass brand answer landed at 0.41 confidence (below a sane commit
+threshold). Re-asking on full-res crops of the same timestamps:
+
+- t=15 crop (Semi + Cybertruck visible): corrected to **"Tesla"**
+  (conf 0.34 — right answer, still honestly hedged).
+- t=30 crop (gold concept car, no badge): still "Porsche" (conf 0.55) —
+  zoom cannot create evidence that isn't in the frame.
+
+Design consequence: gate commits on confidence (abstain beats a false
+answer), then run the zoom pass on the abstain path before deferring.
+The t=30 miss also shows top-confidence alone isn't enough — gating on
+the gap to the runner-up catches confident-but-unsupported picks.
