@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -12,6 +14,12 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from .local_controller import DecisionCancelled, LocalDecisionEngine
 from .local_speech import LocalKittenSpeech
 from .local_whisper import LocalWhisper
+
+logger = logging.getLogger(__name__)
+
+
+def _key_label(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
 
 
 def build_local_controller_app(
@@ -26,12 +34,11 @@ def build_local_controller_app(
         raise ValueError("GNSIS 0.5 needs a host token on every request.")
     app = FastAPI(title="GNSIS 0.5 Local Controller")
 
-    def authorize(authorization: str | None) -> None:
-        granted = False
+    def authorize(authorization: str | None) -> str:
         for token in tokens:
-            granted |= hmac.compare_digest(authorization or "", f"Bearer {token}")
-        if not granted:
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            if hmac.compare_digest(authorization or "", f"Bearer {token}"):
+                return _key_label(token)
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     @app.get("/healthz")
     def healthz() -> dict[str, bool]:
@@ -43,7 +50,8 @@ def build_local_controller_app(
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Any:
-        authorize(authorization)
+        caller = authorize(authorization)
+        logger.info("decide requestId=%s caller=%s", payload.get("requestId"), caller)
         gone = asyncio.Event()
 
         async def watch_disconnect() -> None:
