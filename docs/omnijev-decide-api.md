@@ -3,8 +3,14 @@
 Hosted visual-decision endpoint. Send a request plus offered candidates; get
 back a typed verdict — never prose to parse.
 
-**Endpoint**: `https://aubincorinaldiecooper--omnijev-decide-decide-service.us-east.modal.run`
-**App**: `omnijev-decide` (Modal, `modal/omnijev_decide.py`)
+**Endpoint**: `https://gnsis.studio/v1/decide` — the site front door proxies
+here (GNSISFRONTEND `Caddyfile`, same pattern as `/ws/*`), so a Bearer key is
+all an external caller needs.
+**Internal service**: `https://aubincorinaldiecooper--omnijev-decide-decide-service.us-east.modal.run`
+(Modal `omnijev-decide`, `modal/omnijev_decide.py`). Direct calls to this URL
+need the workspace `Modal-Key`/`Modal-Secret` pair — internal only.
+**Status**: the front door is wired in GNSISFRONTEND#82; it goes live once
+`GNSIS_OMNIJEV_UPSTREAM` is set on the frontend container and that deploy lands.
 **Latency (beta)**: ~2–4s per decide, first call on a cold container ~60–70s.
 Faster path (~0.26s measured) is disabled until an upstream GPU-kernel bug is
 resolved; the beta serves the verified-stable reference path.
