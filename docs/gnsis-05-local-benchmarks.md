@@ -28,17 +28,22 @@ Same task on every system: spoken request "click the Apple menu" + the
 
 | Runner | Time / decide | Cost / decide | Notes |
 |---|---|---|---|
-| **OmniJev 0.8B — Mac CPU (16 GB, no fast kernels)** | **~21 s** | ~free (local power) | one `system_one` pass; conf 0.94, grounded args |
+| **OmniJev 0.8B — GPU (NVIDIA L4, fla kernels active)** | **~0.26 s warm** | **~$0.00006** | same pick, conf 0.92–0.94; cold first call 61 s (Triton autotune) |
+| OmniJev 0.8B — Mac CPU (16 GB, no fast kernels) | ~21 s | ~free (local power) | one `system_one` pass; conf 0.94, grounded args |
+| OmniJev 0.8B — old generate path, GPU | ~36 s | ~$0.008 | abstained both reps — schema mode beats it on speed AND correctness |
 | OmniJev 0.8B — old generate path, Mac CPU | ~6.5 min | — | retired default; `GNSIS_LOCAL_CANDIDATE_MODE=generate` |
-| OmniJev 0.8B — GPU (L4) | _pending spend limit_ | _pending_ | bench staged: `~/local05/omnijev_gpu_bench.py` |
 | Gemini 2.5 Flash (hosted) | ~1.3 s | $0.00034 avg | picked correctly, conf 1.0 |
 | Gemini 2.5 Flash Lite (hosted) | ~1.9 s | $0.000145 | picked correctly |
 | Claude Haiku 4.5 (hosted) | ~2.2 s | $0.0012 | picked correctly, cited the menu visually |
 | GPT-5 mini (hosted) | ~4 s | $0.0002 | returned empty (no usable JSON) |
 
 Modal GPU rate used for cost math: L4 $0.80/hr → $0.00022/s;
-T4 $0.59/hr; A10G $1.10/hr; L40S $1.95/hr. A ~1 s GPU decide ≈ $0.0002 —
-same order as the cheapest hosted call.
+T4 $0.59/hr; A10G $1.10/hr; L40S $1.95/hr. A 0.26 s L4 decide ≈ $0.00006 —
+~2.4× cheaper than the cheapest hosted call (Flash Lite) and ~5× faster
+than the fastest hosted pick (Gemini Flash). GPU run: fla Triton kernels
+active (`fast_kernels: fla Triton kernels active for Qwen3.5 linear
+attention`), peak VRAM **2.39 GB**, backend load 24.4 s. The old generate
+path abstained on GPU too — its empty-args problem isn't a speed artifact.
 
 ## Per-stage timings, real Mac (16 GB)
 
@@ -46,7 +51,9 @@ same order as the cheapest hosted call.
 |---|---|---|---|
 | phonon-2 transcribe | 17.5 s (first call) | **1.8 s** | ~2 s utterance → text; accurate |
 | OmniJev decide (schema mode) | ~27 s incl. warmup | **~21 s** | conf 0.94 on grounded pick |
-| OmniJev decide (generate mode) | ~6.5 min | ~6.3 min | only kept for GPU hosts |
+| OmniJev decide (schema mode), L4 | 61.3 s cold (autotune) | **~0.26 s** | conf 0.92–0.94; peak VRAM 2.39 GB |
+| OmniJev decide (generate mode), L4 | ~36 s | ~36 s | abstains — kept only as opt-in |
+| OmniJev decide (generate mode), Mac | ~6.5 min | ~6.3 min | retired default |
 | Kitten speak (short reply) | 38.9 s (incl. 1.9 GB dl) | **~22 s** | playback confirmed in-call |
 | action dispatch | <4 s | — | policy check + lease + actuator |
 
@@ -97,4 +104,7 @@ Hosted-VLM side: `/tmp/vlm_bench2.py` — same still + same candidates through
 
 GPU side: `~/local05/omnijev_gpu_bench.py` —
 `modal run` on `gpu="L4"`, schema + generate modes, with/without frame.
-Currently blocked on the workspace spend limit.
+Run 2026-10-19 on the GNSIS workspace (results in the card table above).
+Image pins: torch 2.14.1+cu130, transformers 5.20.1, flash-linear-attention
+0.5.2; `causal_conv1d` still on its reference path — worth installing for a
+further speedup before quoting final numbers.
