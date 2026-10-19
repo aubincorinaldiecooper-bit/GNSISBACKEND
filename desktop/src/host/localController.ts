@@ -12,6 +12,8 @@ export interface LocalControllerContext {
   requestId: string;
   text: string;
   step: number;
+  /** Base64 screen still from the already-active screen share, when fresh. */
+  stateImage?: string;
   history: Array<{
     tool: string;
     args: Record<string, unknown>;
@@ -48,6 +50,8 @@ export interface LocalControllerOptions {
   now?: () => number;
   maxSteps?: number;
   minConfidence?: number;
+  /** Latest still from the live screen share as base64, when one is fresh. */
+  stateImage?(): string | undefined;
 }
 
 /**
@@ -88,6 +92,7 @@ export class LocalController {
           requestId,
           text,
           step,
+          stateImage: this.opts.stateImage?.(),
           history: [...history],
         });
       } catch (error) {

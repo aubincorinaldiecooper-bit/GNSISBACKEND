@@ -2,12 +2,49 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import os
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 MAX_CANDIDATES = 12
 MAX_HISTORY = 12
 MAX_PAYLOAD_TEXT = 16_000
+MAX_STATE_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _state_image_path(payload: dict[str, Any]) -> str | None:
+    """Decode an optional base64 screen still to a temp file for the backend.
+
+    The desktop attaches the latest still from its already-active screen share
+    (never a fresh screenshot). Bad or oversized input falls back to the
+    backend's default state image rather than failing the request.
+    """
+    encoded = payload.get("state_image")
+    if not isinstance(encoded, str) or not encoded.strip():
+        return None
+    try:
+        blob = base64.b64decode(encoded.strip(), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not blob or len(blob) > MAX_STATE_IMAGE_BYTES:
+        return None
+    if blob[:3] == b"\xff\xd8\xff":
+        suffix = ".jpg"
+    elif blob[:8] == b"\x89PNG\r\n\x1a\n":
+        suffix = ".png"
+    else:
+        return None
+    fd, path = tempfile.mkstemp(prefix="gnsis-state-", suffix=suffix)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(blob)
+    except OSError:
+        os.unlink(path)
+        return None
+    return path
 
 
 @dataclass(frozen=True)
@@ -45,6 +82,7 @@ class LocalModelBackend(Protocol):
         text: str,
         history: list[dict[str, Any]],
         candidates: list[Candidate],
+        state_image: str | None = None,
     ) -> Selection: ...
 
 
@@ -87,11 +125,20 @@ class LocalDecisionEngine:
         if not candidates:
             return {"kind": "fallback", "reason": "No safe local action was proposed."}
 
-        selection = self.backend.select(
-            text=text.strip(),
-            history=history,
-            candidates=candidates,
-        )
+        state_path = _state_image_path(payload)
+        try:
+            selection = self.backend.select(
+                text=text.strip(),
+                history=history,
+                candidates=candidates,
+                state_image=state_path,
+            )
+        finally:
+            if state_path is not None:
+                try:
+                    os.unlink(state_path)
+                except OSError:
+                    pass
         if (
             not selection.valid
             or selection.key is None

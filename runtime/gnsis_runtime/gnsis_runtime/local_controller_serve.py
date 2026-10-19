@@ -6,9 +6,17 @@ from collections.abc import Sequence
 
 from .local_controller import LocalDecisionEngine
 from .local_controller_api import build_local_controller_app
+from .local_phonon import LocalPhonon
 from .local_speech import LocalKittenSpeech
 from .local_whisper import LocalWhisper
 from .omnijev_local import backend_from_env
+
+
+def _local_transcriber():
+    """GNSIS_ASR=phonon (default, ~164 MB) or whisper (faster-whisper small.en)."""
+    if os.environ.get("GNSIS_ASR", "phonon").strip().lower() == "whisper":
+        return LocalWhisper(os.environ.get("GNSIS_WHISPER_MODEL", "small.en"))
+    return LocalPhonon(os.environ.get("GNSIS_PHONON_MODEL", "phonon-2"))
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -28,7 +36,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     app = build_local_controller_app(
         LocalDecisionEngine(backend_from_env()),
         token,
-        LocalWhisper(os.environ.get("GNSIS_WHISPER_MODEL", "small.en")),
+        _local_transcriber(),
         LocalKittenSpeech(
             os.environ.get("GNSIS_KITTEN_MODEL", "KittenML/kitten-tts-2"),
             voice=os.environ.get("GNSIS_KITTEN_VOICE", "Luna"),

@@ -109,10 +109,11 @@ class GnsisLocalBackend:
         text: str,
         history: list[dict[str, Any]],
         candidates: list[Candidate],
+        state_image: str | None = None,
     ) -> Selection:
         criteria = {candidate.key: candidate.description for candidate in candidates}
         answer = self.model.system_one(
-            {"images": [self.state_image]},
+            {"images": [state_image or self.state_image]},
             {
                 "next": {
                     "type": "choice",
