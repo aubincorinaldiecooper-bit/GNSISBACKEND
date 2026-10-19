@@ -23,8 +23,11 @@ def _key_label(token: str) -> str:
 
 
 def _safe_request_id(payload: dict[str, Any]) -> str:
+    # Hash, don't sanitize: a caller can put a secret in requestId, and any
+    # retained substring would land it in telemetry. The digest still lets an
+    # operator correlate a known requestId to its log lines.
     raw = str(payload.get("requestId") or "")
-    return "".join(c for c in raw if c.isalnum() or c in "-_")[:64] or "-"
+    return hashlib.sha256(raw.encode()).hexdigest()[:12] if raw else "-"
 
 
 def build_local_controller_app(
