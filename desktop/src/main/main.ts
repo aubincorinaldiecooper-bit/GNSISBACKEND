@@ -184,6 +184,9 @@ const OFFERED_ACTIONS = ACTIONS_TRUST.allowed
   : [];
 const turns = new TurnLog();
 const screenWatch = new ScreenWatch();
+/** Latest still the live screen share already sent (never a fresh screenshot). */
+let lastScreenStill: { data: Buffer; at: number } | null = null;
+const STILL_MAX_AGE_MS = 15_000;
 let desktopVisual: DesktopVisualConnector | null = null;
 const localControllerUrl = process.env.GNSIS_LOCAL_CONTROLLER_URL?.trim();
 // The model a live call started with, and which call it is: its words, audio
@@ -252,6 +255,10 @@ const localController: LocalController | undefined =
         runLocal: (callId, turnId, tool, args): Promise<Record<string, unknown>> =>
           broker.runLocal(callId, turnId, tool, args),
         log: hostLog,
+        stateImage: () =>
+          lastScreenStill && Date.now() - lastScreenStill.at < STILL_MAX_AGE_MS
+            ? lastScreenStill.data.toString("base64")
+            : undefined,
       })
     : undefined;
 const typedTurnRouter = new TypedTurnRouter({
@@ -1009,6 +1016,7 @@ app.whenReady().then(async () => {
   ipcMain.on("screen:frame", (_e, metadata: ScreenFrameMetadata, payload: Uint8Array) => {
     const frame = Buffer.from(payload);
     if (host.sendScreenFrame(metadata, frame)) {
+      lastScreenStill = { data: frame, at: Date.now() };
       screenWatch.noteFrame(metadata.captured_at_ms, metadata.video_source);
       desktopVisual?.observeFrame(metadata, frame);
     }

@@ -134,6 +134,7 @@ export class HttpLocalDecisionProvider implements LocalDecisionProvider {
       },
       body: JSON.stringify({
         ...context,
+        state_image: context.stateImage,
         tools: this.opts.tools,
         tool_schemas: this.opts.toolSchemas ?? [],
       }),
