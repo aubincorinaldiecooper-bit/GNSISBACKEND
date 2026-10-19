@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -18,14 +19,18 @@ def build_local_controller_app(
     host_token: str,
     whisper: LocalWhisper | None = None,
     speech: LocalKittenSpeech | None = None,
+    extra_tokens: Sequence[str] = (),
 ) -> FastAPI:
-    if not host_token:
+    tokens = tuple(t for t in (host_token, *extra_tokens) if t)
+    if not tokens:
         raise ValueError("GNSIS 0.5 needs a host token on every request.")
     app = FastAPI(title="GNSIS 0.5 Local Controller")
 
     def authorize(authorization: str | None) -> None:
-        expected = f"Bearer {host_token}"
-        if authorization is None or not hmac.compare_digest(authorization, expected):
+        granted = False
+        for token in tokens:
+            granted |= hmac.compare_digest(authorization or "", f"Bearer {token}")
+        if not granted:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     @app.get("/healthz")
