@@ -138,7 +138,9 @@ export class HttpLocalDecisionProvider implements LocalDecisionProvider {
         tools: this.opts.tools,
         tool_schemas: this.opts.toolSchemas ?? [],
       }),
-      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000),
+      // A CPU local decide is ~20-30 s (one judged call per request); 90 s
+      // covers a cold model load plus a little room without hanging forever.
+      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 90_000),
     });
     if (!response.ok) {
       throw new Error(`The local controller returned ${response.status}.`);

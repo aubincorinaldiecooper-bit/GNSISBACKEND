@@ -43,3 +43,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
     )
     uvicorn.run(app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

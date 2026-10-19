@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from gnsis_runtime.local_controller import Candidate, LocalDecisionEngine, Selection
+from gnsis_runtime.local_controller import (
+    Candidate,
+    DecisionCancelled,
+    LocalDecisionEngine,
+    Selection,
+    schema_candidates,
+)
 from gnsis_runtime.local_controller_api import build_local_controller_app
 from gnsis_runtime.local_speech import LocalKittenSpeech
 from gnsis_runtime.local_whisper import LocalWhisper
@@ -88,7 +94,11 @@ def test_abstention_fails_closed():
 def test_loopback_api_requires_its_host_token():
     engine = LocalDecisionEngine(
         FixedBackend(
-            [Candidate(key="done", kind="done", description="Finished.", message="Done.")],
+            [
+                Candidate(
+                    key="done", kind="done", description="Finished.", message="Done."
+                )
+            ],
             Selection(key="done", confidence=0.9),
         )
     )
@@ -171,4 +181,101 @@ def test_local_controller_refuses_to_run_without_a_token() -> None:
     import pytest
 
     with pytest.raises(ValueError):
-        build_local_controller_app(LocalDecisionEngine(FixedBackend([], Selection(key=None, confidence=0.0))), "")
+        build_local_controller_app(
+            LocalDecisionEngine(FixedBackend([], Selection(key=None, confidence=0.0))),
+            "",
+        )
+
+
+SCHEMAS = [
+    {
+        "name": "open",
+        "description": "Open an app, a web address, or a file or folder.",
+        "parameters": {
+            "type": "object",
+            "required": ["target"],
+            "properties": {"target": {"type": "string"}},
+        },
+    },
+    {
+        "name": "input",
+        "description": "Type, press keys, click, or scroll on the desktop.",
+        "parameters": {
+            "type": "object",
+            "required": ["action"],
+            "properties": {"action": {"type": "string"}},
+        },
+    },
+]
+
+
+def test_schema_candidates_ground_the_offered_tools_in_the_request():
+    candidates = schema_candidates(
+        text="open Notes",
+        tools=["open", "input"],
+        tool_schemas=SCHEMAS,
+    )
+    by_tool = {c.tool: c for c in candidates if c.kind == "tool"}
+    assert by_tool["open"].args == {"target": "Notes"}
+    # Tools the words did not plainly name stay off the ballot.
+    assert "input" not in by_tool
+    kinds = [c.kind for c in candidates]
+    assert kinds == ["tool", "done", "fallback"]
+
+
+def test_schema_candidates_offer_every_tool_when_nothing_is_named():
+    candidates = schema_candidates(
+        text="what can you do for me today",
+        tools=["open", "input"],
+        tool_schemas=SCHEMAS,
+    )
+    assert {c.tool for c in candidates if c.kind == "tool"} == {"open", "input"}
+
+
+def test_schema_candidates_extract_click_labels():
+    candidates = schema_candidates(
+        text="click the Apple menu",
+        tools=["input"],
+        tool_schemas=SCHEMAS,
+    )
+    tool = next(c for c in candidates if c.kind == "tool")
+    assert tool.args == {"action": "click", "label": "Apple menu"}
+
+
+def test_schema_candidates_only_cover_offered_tools():
+    candidates = schema_candidates(
+        text="open Notes",
+        tools=["input"],
+        tool_schemas=SCHEMAS,
+    )
+    assert all(c.tool != "open" for c in candidates)
+
+
+def test_decide_stops_when_the_client_is_gone():
+    reached = []
+
+    class Watching:
+        def candidates(self, **_kwargs):
+            reached.append("candidates")
+            return [
+                Candidate(
+                    key="one", kind="done", description="Finish.", message="Done."
+                )
+            ]
+
+        def select(self, **_kwargs):
+            reached.append("select")
+            return Selection(key="one", confidence=0.9)
+
+    engine = LocalDecisionEngine(Watching())
+    import pytest
+
+    with pytest.raises(DecisionCancelled):
+        engine.decide(request(), cancelled=lambda: True)
+    assert reached == []
+
+    calls = iter([False, True])
+
+    with pytest.raises(DecisionCancelled):
+        engine.decide(request(), cancelled=lambda: next(calls))
+    assert reached == ["candidates"]
