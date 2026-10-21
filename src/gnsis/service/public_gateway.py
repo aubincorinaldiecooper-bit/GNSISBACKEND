@@ -209,7 +209,7 @@ def _release_hold(settings, key, request_id: str) -> None:
 
 
 def _reserve_or_402(settings, key, request_id: str) -> None:
-    if settings.billing_enabled and key.workspace_id:
+    if settings.balance_blocking_enabled and key.workspace_id:
         from .billing import BillingStore
 
         ok = BillingStore().reserve(key.workspace_id, settings.balance_reserve_estimate_usd, request_id)

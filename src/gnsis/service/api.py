@@ -968,6 +968,21 @@ def get_balances(
     }
 
 
+class CheckoutRequest(BaseModel):
+    amount_usd: str
+
+
+@app.post("/v1/billing/checkout")
+def create_billing_checkout(
+    req: CheckoutRequest,
+    workspace: WorkspaceRecord = Depends(current_workspace),
+) -> dict:
+    """Start a Stripe-hosted top-up; the verified webhook credits the balance."""
+    from .stripe_checkout import create_checkout_session
+
+    return create_checkout_session(get_settings(), workspace.id, req.amount_usd)
+
+
 # -- GitHub installations -----------------------------------------------------
 
 

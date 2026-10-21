@@ -8,7 +8,6 @@ provider-failure handling, structured errors, and Genesis-request-id propagation
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import unittest
@@ -157,9 +156,18 @@ class BalanceAndFailureTests(GatewayTestBase):
         from gnsis.service.billing import BillingStore
 
         BillingStore().adjustment("ws-1", "-25.00", idempotency_key="drain")
+        self.settings.block_at_zero_balance = True
         r = self.call({"model": MODEL, "messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(r.status_code, 402)
         self.assertEqual(r.json()["error"]["code"], "insufficient_balance")
+
+    def test_zero_balance_keeps_working_by_default(self):
+        from gnsis.service.billing import BillingStore
+
+        BillingStore().adjustment("ws-1", "-25.00", idempotency_key="drain")
+        r = self.call({"model": MODEL, "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(r.status_code, 200)
+        self.assertLess(self.balance(), Decimal("0"))
 
     def test_provider_failure_502_records_failed_no_charge(self):
         def _boom(settings, provider, payload):

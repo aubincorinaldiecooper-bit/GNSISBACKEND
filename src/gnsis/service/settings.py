@@ -238,6 +238,13 @@ class Settings:
     rate_card_version: str = "beta-2026-07"
     default_currency: str = "USD"
     stripe_webhook_secret: Optional[str] = None  # whsec_... — verifies Stripe webhooks
+    stripe_secret_key: Optional[str] = None  # sk_/rk_... — creates Checkout Sessions for top-ups
+    topup_min_usd: str = "5.00"
+    topup_max_usd: str = "500.00"
+    # Reject requests (402) once available balance can't cover the reserve
+    # estimate. Off by default: usage is still charged and debited, but a
+    # workspace at or below $0 keeps working.
+    block_at_zero_balance: bool = False
     # Estimated dollar hold placed before a native model request when a balance
     # exists, released/settled by the usage callback. Keeps concurrent requests
     # from overspending before the actual cost is known.
@@ -278,8 +285,13 @@ class Settings:
 
     @property
     def billing_enabled(self) -> bool:
-        """Prepaid balance enforcement is active once a Stripe webhook secret is set."""
+        """Usage is charged against the prepaid balance once a Stripe webhook secret is set."""
         return bool(self.stripe_webhook_secret)
+
+    @property
+    def balance_blocking_enabled(self) -> bool:
+        """Requests are refused at zero balance only when billing is on *and* opted in."""
+        return self.billing_enabled and self.block_at_zero_balance
 
     # -- provider / executor configuration state -----------------------------
     @property
@@ -605,6 +617,10 @@ class Settings:
             rate_card_version=os.environ.get("GNSIS_RATE_CARD_VERSION", "beta-2026-07"),
             default_currency=os.environ.get("GNSIS_DEFAULT_CURRENCY", "USD"),
             stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
+            stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY"),
+            topup_min_usd=os.environ.get("GNSIS_TOPUP_MIN_USD", "5.00"),
+            topup_max_usd=os.environ.get("GNSIS_TOPUP_MAX_USD", "500.00"),
+            block_at_zero_balance=_bool("GNSIS_BLOCK_AT_ZERO_BALANCE", False),
             balance_reserve_estimate_usd=os.environ.get("GNSIS_BALANCE_RESERVE_ESTIMATE_USD", "0.05"),
             beta_credit_max_usd=os.environ.get("GNSIS_BETA_CREDIT_MAX_USD", "50.00"),
             welcome_credit_enabled=_bool("GNSIS_WELCOME_CREDIT_ENABLED", False),
