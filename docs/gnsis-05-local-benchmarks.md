@@ -10,7 +10,7 @@ re-implementation.
 ```
 spoken words
   → phonon-2 ASR            (/v1/transcribe, fermion-research, MLX on Mac)
-  → OmniJev 0.8B decide     (/v1/decide — schema-derived ballot + system_one
+  → GNSIS decide (0.8B)     (/v1/decide — schema-derived ballot + system_one
                              vision judgment on the live screen still)
   → host action dispatch    (open/files/browser/input/window/clipboard)
   → Kitten TTS              (/v1/speak)
@@ -28,10 +28,10 @@ Same task on every system: spoken request "click the Apple menu" + the
 
 | Runner | Time / decide | Cost / decide | Notes |
 |---|---|---|---|
-| **OmniJev 0.8B — GPU (NVIDIA L4, fla kernels active)** | **~0.26 s warm** | **~$0.00006** | same pick, conf 0.92–0.94; cold first call 61 s (Triton autotune) |
-| OmniJev 0.8B — Mac CPU (16 GB, no fast kernels) | ~21 s | ~free (local power) | one `system_one` pass; conf 0.94, grounded args |
-| OmniJev 0.8B — old generate path, GPU | ~36 s | ~$0.008 | abstained both reps — schema mode beats it on speed AND correctness |
-| OmniJev 0.8B — old generate path, Mac CPU | ~6.5 min | — | retired default; `GNSIS_LOCAL_CANDIDATE_MODE=generate` |
+| **GNSIS decide (0.8B) — GPU (NVIDIA L4, fla kernels active)** | **~0.26 s warm** | **~$0.00006** | same pick, conf 0.92–0.94; cold first call 61 s (Triton autotune) |
+| GNSIS decide (0.8B) — Mac CPU (16 GB, no fast kernels) | ~21 s | ~free (local power) | one `system_one` pass; conf 0.94, grounded args |
+| GNSIS decide (0.8B) — old generate path, GPU | ~36 s | ~$0.008 | abstained both reps — schema mode beats it on speed AND correctness |
+| GNSIS decide (0.8B) — old generate path, Mac CPU | ~6.5 min | — | retired default; `GNSIS_LOCAL_CANDIDATE_MODE=generate` |
 | Gemini 2.5 Flash (hosted) | ~1.3 s | $0.00034 avg | picked correctly, conf 1.0 |
 | Gemini 2.5 Flash Lite (hosted) | ~1.9 s | $0.000145 | picked correctly |
 | Claude Haiku 4.5 (hosted) | ~2.2 s | $0.0012 | picked correctly, cited the menu visually |
@@ -50,10 +50,10 @@ path abstained on GPU too — its empty-args problem isn't a speed artifact.
 | Stage | Cold | Warm | Detail |
 |---|---|---|---|
 | phonon-2 transcribe | 17.5 s (first call) | **1.8 s** | ~2 s utterance → text; accurate |
-| OmniJev decide (schema mode) | ~27 s incl. warmup | **~21 s** | conf 0.94 on grounded pick |
-| OmniJev decide (schema mode), L4 | 61.3 s cold (autotune) | **~0.26 s** | conf 0.92–0.94; peak VRAM 2.39 GB |
-| OmniJev decide (generate mode), L4 | ~36 s | ~36 s | abstains — kept only as opt-in |
-| OmniJev decide (generate mode), Mac | ~6.5 min | ~6.3 min | retired default |
+| GNSIS decide (schema mode) | ~27 s incl. warmup | **~21 s** | conf 0.94 on grounded pick |
+| GNSIS decide (schema mode), L4 | 61.3 s cold (autotune) | **~0.26 s** | conf 0.92–0.94; peak VRAM 2.39 GB |
+| GNSIS decide (generate mode), L4 | ~36 s | ~36 s | abstains — kept only as opt-in |
+| GNSIS decide (generate mode), Mac | ~6.5 min | ~6.3 min | retired default |
 | Kitten speak (short reply) | 38.9 s (incl. 1.9 GB dl) | **~22 s** | playback confirmed in-call |
 | action dispatch | <4 s | — | policy check + lease + actuator |
 
@@ -62,7 +62,7 @@ action dispatched → spoken reply chunk. Live call ran clean through.
 
 ## Resource footprint
 
-- Disk: Qwen3.5-0.8B 3.3 GB + OmniJev ckpt 238 MB + phonon-2 169 MB +
+- Disk: Qwen3.5-0.8B 3.3 GB + GNSIS decide ckpt 238 MB + phonon-2 169 MB +
   Kitten 1.9 GB ≈ **5.6 GB** total.
 - Service RAM: ~4.5 GB resident.
 - Decide CPU: 280–516 % while thinking (before the disconnect-cancel fix it
