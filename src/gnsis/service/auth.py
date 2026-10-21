@@ -76,7 +76,10 @@ class JwksCache:
 
     def _http_fetch(self) -> dict:
         assert self._url is not None
-        with urllib.request.urlopen(self._url, timeout=10) as resp:  # noqa: S310
+        # Cloudflare in front of the auth service refuses urllib's default
+        # "Python-urllib" User-Agent with a 403, so name ourselves.
+        req = urllib.request.Request(self._url, headers={"User-Agent": "gnsis-api/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             return json.loads(resp.read().decode("utf-8"))
 
     def _refresh(self) -> None:
