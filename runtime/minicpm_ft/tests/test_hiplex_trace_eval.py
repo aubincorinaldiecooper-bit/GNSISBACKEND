@@ -138,4 +138,5 @@ def test_speech_that_started_before_the_user_turn_is_not_its_response():
     ]
     report = evaluate_trace(events, [{"type": "turn", "anchor_ms": 2500, "start_ms": 1000}])
     turn = report["annotations"][0]
-    assert turn.get("latency_ms") is None
+    assert turn["metrics"]["response_onset_ms"] is None
+    assert turn["metrics"]["early_speech_ms"] == 0
