@@ -332,7 +332,7 @@ def handle_chat_completion(
     # cannot overspend before the actual cost is known. Requires LiteLLM (its
     # usage callback settles the hold into the real debit or releases it).
     billing_hold = bool(
-        settings.billing_enabled and settings.litellm_enabled and run.workspace_id
+        settings.balance_blocking_enabled and settings.litellm_enabled and run.workspace_id
     )
     if billing_hold:
         from ..billing import BillingStore
