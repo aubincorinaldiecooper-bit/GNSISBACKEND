@@ -9,7 +9,7 @@ from .local_controller_api import build_local_controller_app
 from .local_phonon import LocalPhonon
 from .local_speech import LocalKittenSpeech
 from .local_whisper import LocalWhisper
-from .omnijev_local import backend_from_env
+from .gnsis_decide_local import backend_from_env
 
 
 def _local_transcriber():
