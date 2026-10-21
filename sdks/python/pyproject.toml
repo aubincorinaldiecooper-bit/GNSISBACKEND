@@ -18,7 +18,6 @@ dependencies = [
 mcp = ["mcp==2.2.0"]
 
 [project.scripts]
-gnsis-visual-browser-host = "gnsis_visual_sdk.browser_host:main"
 panoptic-mcp = "gnsis_visual_sdk.mcp:main"
 smaller-gnsis-mcp = "gnsis_visual_sdk.mcp:main"
 

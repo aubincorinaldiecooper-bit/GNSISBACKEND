@@ -1,7 +1,7 @@
 """Modal definition for the Smaller GNSIS visual decision service.
 
 Serves `gnsis_runtime.visual.serve` — the authenticated frame-stream +
-bounded-decision API that host connectors (browser Hub, desktop Host) call.
+bounded-decision API that host connectors (desktop Host, SDK and MCP clients) call.
 The JEV engine runs on one GPU: a frozen MiniCPM-V 4.6 backbone (from the HF
 cache volume) plus the JEV decision head checkpoint on `gnsis-visual-data`.
 Florence-2 (focused target grounding/OCR) shares the same container and GPU; it
