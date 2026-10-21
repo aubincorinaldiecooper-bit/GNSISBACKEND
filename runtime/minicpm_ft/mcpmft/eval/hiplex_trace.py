@@ -72,6 +72,8 @@ class SpeechEpisode:
     start_ms: int
     end_ms: int
     playback_ids: tuple[str, ...]
+    # Onset of every playback merged into this episode, in order.
+    onsets: tuple[int, ...] = ()
 
     @property
     def duration_ms(self) -> int:
@@ -167,7 +169,10 @@ def extract_playback_spans(
             # The delivery gate records Host acknowledgements as one kind with
             # a phase; map them onto the same started/terminal facts.
             phase = fields.get("phase")
-            if fields.get("stale"):
+            # A stale start is output the user never heard. A stale terminal
+            # still closes a playback whose start was accepted (an interrupt
+            # bumps the epoch between the two).
+            if fields.get("stale") and (phase == "started" or playback_id not in starts):
                 continue
             kind = {
                 "started": "playback.started",
@@ -207,6 +212,7 @@ def merge_speech_episodes(
                     start_ms=span.start_ms,
                     end_ms=span.end_ms,
                     playback_ids=(span.playback_id,),
+                    onsets=(span.start_ms,),
                 )
             )
             continue
@@ -215,6 +221,7 @@ def merge_speech_episodes(
             start_ms=previous.start_ms,
             end_ms=max(previous.end_ms, span.end_ms),
             playback_ids=(*previous.playback_ids, span.playback_id),
+            onsets=(*previous.onsets, span.start_ms),
         )
     return episodes
 
@@ -269,23 +276,28 @@ def _score_turn(
     anchor = int(ann.get("anchor_ms", ann.get("end_ms")))
     window_start = int(ann.get("start_ms", anchor - 2000))
     window_end = int(ann.get("window_end_ms", anchor + 5000))
-    candidate = next(
-        (
-            ep
-            for ep in episodes
-            if ep.start_ms >= window_start and ep.start_ms <= window_end and ep.end_ms > anchor
-        ),
-        None,
-    )
+    # The response is the first playback that starts inside the window and is
+    # still playing past the anchor. Episodes merge nearby playbacks, so look
+    # at each merged onset rather than only the episode's first one.
+    onset: int | None = None
+    for ep in episodes:
+        if ep.end_ms <= anchor:
+            continue
+        onset = next(
+            (o for o in (ep.onsets or (ep.start_ms,)) if window_start <= o <= window_end),
+            None,
+        )
+        if onset is not None:
+            break
     targets: list[dict[str, Any]] = []
     latency = None
     early_ms = 0
-    if candidate is not None:
-        latency = candidate.start_ms - anchor
-        early_ms = max(0, anchor - candidate.start_ms)
+    if onset is not None:
+        latency = onset - anchor
+        early_ms = max(0, anchor - onset)
         onset_decision = _nearest_decision(
             decisions,
-            candidate.start_ms,
+            onset,
             actions=SPEECH_ACTIONS,
         )
         if onset_decision is not None:
@@ -298,7 +310,7 @@ def _score_turn(
             )
         if early_ms:
             for item in _decisions_between(
-                decisions, candidate.start_ms, anchor, actions=SPEECH_ACTIONS
+                decisions, onset, anchor, actions=SPEECH_ACTIONS
             ):
                 targets.append(_target(item, reason="turn_early_start", polarity="negative"))
     else:
@@ -309,7 +321,7 @@ def _score_turn(
     return {
         "trainable": bool(targets),
         "metrics": {
-            "response_onset_ms": None if candidate is None else candidate.start_ms,
+            "response_onset_ms": onset,
             "response_latency_ms": latency,
             "early_speech_ms": early_ms,
         },

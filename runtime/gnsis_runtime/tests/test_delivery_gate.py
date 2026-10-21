@@ -167,3 +167,12 @@ def test_gate_rejects_bad_config():
         DeliveryGate(SessionTimeline("s"), user_speech_window_sec=-1)
     with pytest.raises(ValueError):
         make_gate().note_playback_ack("x", "bogus-phase")
+
+
+def test_playback_ack_reads_the_host_source_timestamp():
+    from gnsis_runtime.task_tools_online import _ack_source_ts
+
+    assert _ack_source_ts({"source_ts_ms": 61000}) == 61000
+    assert _ack_source_ts({"at_ms": 5}) == 5
+    assert _ack_source_ts({"source_ts_ms": True}) is None
+    assert _ack_source_ts({}) is None
