@@ -15,10 +15,6 @@ It is deployed as a GPU service on Modal and lives in this repository under `run
 | `scripts/verify-modal-gnsis.py` | Deployment/address verification and optional health smoke test. |
 | `runtime/PROVENANCE.md` | Runtime source and licensing provenance. |
 
-The text-only `gnsis-live` app (`modal/gnsis.py`, one GPU, no voice) was retired
-on 2026-09-23, once the site was sending every session to `gnsis-voice`. If it is
-still deployed, stop it with `modal app stop gnsis-live`.
-
 ## MVP contract
 
 The runtime sees, hears and speaks, and intentionally has no external action worker:

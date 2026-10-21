@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 # The runtime this worker deploys, and the only one it manages. The Modal file
 # fixes its own app name (APP_NAME in modal/gnsis_voice.py), and the site sends
-# every live session to that app. The text-only gnsis-live app is retired.
+# every live session to that app.
 GNSIS_APP_NAME = "gnsis-voice"
 GNSIS_MODAL_DEFINITION = "modal/gnsis_voice.py"
 
