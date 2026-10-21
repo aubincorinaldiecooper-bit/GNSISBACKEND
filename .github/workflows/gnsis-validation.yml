@@ -87,8 +87,8 @@ jobs:
       - name: Compile the visual runtime
         run: python -m compileall -q runtime/gnsis_runtime/gnsis_runtime runtime/minicpm_ft/mcpmft
 
-      - name: Run the full Panoptic runtime test suite
-        run: pytest -q runtime/gnsis_runtime/tests
+      - name: Run the full Panoptic runtime test suite and the event-causal evaluator tests
+        run: pytest -q runtime/gnsis_runtime/tests runtime/minicpm_ft/tests/test_hiplex_trace_eval.py
 
       - name: Import and validate the Panoptic Modal definition
         env:
