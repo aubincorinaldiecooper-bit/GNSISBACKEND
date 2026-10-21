@@ -1119,7 +1119,7 @@ class TaskToolsRealtimeCoordinator:
             delivery_id,
             phase,
             epoch=epoch if isinstance(epoch, int) else None,
-            source_ts_ms=payload.get("at_ms"),
+            source_ts_ms=_ack_source_ts(payload),
         )
         if not fresh:
             return False
@@ -1570,6 +1570,16 @@ def _optional_int(payload: Mapping[str, Any], name: str) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"turn.final {name} must be an integer")
     return value
+
+
+def _ack_source_ts(payload: Mapping[str, Any]) -> int | None:
+    # The desktop Host sends ``source_ts_ms`` (its clock, like its host.event
+    # ts_ms); ``at_ms`` is the older name.
+    for name in ("source_ts_ms", "at_ms"):
+        value = payload.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
 
 
 def _media_context_kind(kind: str) -> str:

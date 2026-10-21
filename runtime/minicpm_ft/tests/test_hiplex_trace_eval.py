@@ -140,3 +140,35 @@ def test_speech_that_started_before_the_user_turn_is_not_its_response():
     turn = report["annotations"][0]
     assert turn["metrics"]["response_onset_ms"] is None
     assert turn["metrics"]["early_speech_ms"] == 0
+
+
+def test_stale_terminal_ack_closes_an_accepted_start():
+    from mcpmft.eval.hiplex_trace import extract_playback_spans
+
+    events = [
+        _event(1, "playback.ack", 1000, playback_id="p1", phase="started", stale=False),
+        _event(2, "playback.ack", 1250, playback_id="p1", phase="cancelled", stale=True),
+        _event(3, "playback.ack", 1300, playback_id="p2", phase="finished", stale=True),
+    ]
+    spans, incomplete = extract_playback_spans(events)
+    assert [(s.playback_id, s.start_ms, s.end_ms) for s in spans] == [("p1", 1000, 1250)]
+    assert incomplete == 0
+
+
+def test_response_merged_with_pre_turn_speech_is_still_found():
+    from mcpmft.eval.hiplex_trace import evaluate_trace
+
+    events = [
+        _event(1, "playback.started", 0, playback_id="old"),
+        _event(2, "playback.completed", 1500, playback_id="old"),
+        _event(3, "foreground.decision", 2050, action="speak"),
+        _event(4, "playback.started", 2100, playback_id="reply"),
+        _event(5, "playback.completed", 2500, playback_id="reply"),
+    ]
+    report = evaluate_trace(
+        events, [{"type": "turn", "anchor_ms": 2000, "start_ms": 1000}]
+    )
+    turn = report["annotations"][0]
+    assert turn["metrics"]["response_onset_ms"] == 2100
+    assert turn["metrics"]["response_latency_ms"] == 100
+    assert turn["metrics"]["early_speech_ms"] == 0
