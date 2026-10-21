@@ -15,7 +15,7 @@ answers aloud:
   checkpoint, its bundled Token2wav assets, and the reference WAV — all on
   the model volume.
 
-It replaced the text-only `gnsis-live` app, which is retired. The worker's
+The worker's
 deploy route (`POST /internal/compute/gnsis/deploy`) publishes this file.
 """
 

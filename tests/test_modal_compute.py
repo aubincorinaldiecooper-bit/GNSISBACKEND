@@ -299,14 +299,14 @@ class ModalComputeTests(unittest.TestCase):
         self.assertIn(compute.ornith_ref.function_name, published)
 
     def test_a_stale_app_name_is_refused_before_anything_runs(self):
-        """gnsis-live is retired. A worker still configured with its name must
-        not describe that app while a deploy rebuilds gnsis-voice: both would
-        report success about different apps."""
+        """A worker configured with any other app name must not describe that
+        app while a deploy rebuilds gnsis-voice: both would report success
+        about different apps."""
 
         compute = ModalCompute(
             token_id="id-test",
             token_secret="secret-test",
-            gnsis_app_name="gnsis-live",
+            gnsis_app_name="gnsis-voice-old",
             modal_module=_FakeModal,
         )
         with patch("gnsis.service.modal_compute.subprocess.run") as run:

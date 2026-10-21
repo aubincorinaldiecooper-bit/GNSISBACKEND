@@ -90,7 +90,7 @@ class SessionMemoryRecall:
                 "summary": summary,
                 "type": "visual_event",
                 "session_id": session_id,
-                "tags": ["gnsis-live", "perception", "auto"],
+                "tags": ["gnsis-voice", "perception", "auto"],
                 "provenance": {
                     "source_session_id": session_id,
                     "source_turn_id": turn_id,
