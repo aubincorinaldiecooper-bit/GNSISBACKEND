@@ -96,12 +96,16 @@ def handle_event(event: dict, store: Optional[BillingStore] = None) -> dict:
         _, created = store.top_up(
             workspace_id, _dollars(amount),
             idempotency_key=f"stripe:{event_id}", stripe_event_id=event_id,
-            stripe_payment_reference=obj.get("id"), currency=currency,
+            # Refund and dispute events carry the PaymentIntent but not the
+            # Checkout Session's metadata, so key the credit by the intent.
+            stripe_payment_reference=obj.get("payment_intent") or obj.get("id"),
+            currency=currency,
         )
         return {"handled": True, "type": etype, "created": created}
 
     if etype in ("charge.refunded", "refund.created", "charge.dispute.created"):
         refunded = obj.get("amount_refunded") or obj.get("amount")
+        workspace_id = workspace_id or store.workspace_for_payment(obj.get("payment_intent"))
         if not workspace_id or not refunded:
             return {"handled": False, "reason": "refund not attributable"}
         _, created = store.refund(

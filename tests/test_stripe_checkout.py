@@ -37,7 +37,7 @@ class CheckoutTests(unittest.TestCase):
         self.assertFalse(any(k.startswith("payment_intent_data") for k in f))
 
     def test_amount_bounds(self):
-        for bad in ("1", "501", "abc"):
+        for bad in ("1", "501", "abc", "4.999", "NaN"):
             with self.assertRaises(HTTPException) as cm:
                 create_checkout_session(_settings(), "ws-1", bad, post=lambda *a: {})
             self.assertEqual(cm.exception.status_code, 422)
