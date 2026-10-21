@@ -163,6 +163,17 @@ def extract_playback_spans(
         if not isinstance(playback_id, str) or not playback_id:
             continue
         ts_ms = _event_ts(event, clock)
+        if kind == "playback.ack":
+            # The delivery gate records Host acknowledgements as one kind with
+            # a phase; map them onto the same started/terminal facts.
+            phase = fields.get("phase")
+            if fields.get("stale"):
+                continue
+            kind = {
+                "started": "playback.started",
+                "finished": "playback.completed",
+                "cancelled": "playback.cancelled",
+            }.get(str(phase), kind)
         if kind == "playback.started":
             starts[playback_id] = ts_ms
             continue
@@ -262,7 +273,7 @@ def _score_turn(
         (
             ep
             for ep in episodes
-            if ep.end_ms > window_start and ep.start_ms <= window_end and ep.end_ms > anchor
+            if ep.start_ms >= window_start and ep.start_ms <= window_end and ep.end_ms > anchor
         ),
         None,
     )
@@ -532,7 +543,11 @@ def evaluate_trace(
         "annotations": scored,
         "training_readiness": {
             "ready_for_offline_credit_analysis": (
-                bool(decisions) and bool(spans) and bool(annotations) and trainable > 0
+                bool(decisions)
+                and bool(spans)
+                and bool(annotations)
+                and trainable > 0
+                and incomplete_spans == 0
             ),
             "trainable_annotations": trainable,
             "total_annotations": len(scored),

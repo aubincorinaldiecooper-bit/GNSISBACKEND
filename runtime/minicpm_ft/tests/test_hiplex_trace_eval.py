@@ -100,3 +100,42 @@ def test_pause_intrusion_and_backchannel_are_scored_separately():
         target["reason"] == "pause_intrusion" and target["polarity"] == "negative"
         for target in pause["causal_targets"]
     )
+
+
+def test_delivery_gate_playback_acks_become_spans_and_stale_acks_are_ignored():
+    from mcpmft.eval.hiplex_trace import extract_playback_spans
+
+    events = [
+        _event(1, "playback.ack", 1000, playback_id="p1", phase="started", stale=False),
+        _event(2, "playback.ack", 1800, playback_id="p1", phase="finished", stale=False),
+        _event(3, "playback.ack", 2000, playback_id="p2", phase="started", stale=True),
+    ]
+    spans, incomplete = extract_playback_spans(events)
+    assert [(s.playback_id, s.start_ms, s.end_ms) for s in spans] == [("p1", 1000, 1800)]
+    assert incomplete == 0
+
+
+def test_incomplete_playback_blocks_training_readiness():
+    from mcpmft.eval.hiplex_trace import evaluate_trace
+
+    events = [
+        _event(1, "foreground.decision", 900, action="speak"),
+        _event(2, "playback.started", 1000, playback_id="p1"),
+        _event(3, "playback.completed", 1800, playback_id="p1"),
+        _event(4, "playback.started", 3000, playback_id="p2"),
+    ]
+    report = evaluate_trace(events, [{"type": "turn", "anchor_ms": 950, "start_ms": 0}])
+    assert report["trace"]["incomplete_playback_spans"] == 1
+    assert report["training_readiness"]["ready_for_offline_credit_analysis"] is False
+
+
+def test_speech_that_started_before_the_user_turn_is_not_its_response():
+    from mcpmft.eval.hiplex_trace import evaluate_trace
+
+    events = [
+        _event(1, "playback.started", 0, playback_id="old"),
+        _event(2, "playback.completed", 3000, playback_id="old"),
+    ]
+    report = evaluate_trace(events, [{"type": "turn", "anchor_ms": 2500, "start_ms": 1000}])
+    turn = report["annotations"][0]
+    assert turn.get("latency_ms") is None
