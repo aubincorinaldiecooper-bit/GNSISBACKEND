@@ -59,29 +59,3 @@ pip install "gnsis-visual-sdk[mcp] @ git+https://github.com/aubincorinaldiecoope
 ```
 
 See `docs/smaller-gnsis-service.md` for the tool list and agent configuration.
-
-## GNSIS Browser host
-
-The SDK includes a connector for GNSIS Browser's existing Hub protocol. It
-reuses the extension's live tab capture, provenance checks, bounded actuator,
-permission prompt, replay protection, and action evidence instead of creating a
-second browser execution stack.
-
-```bash
-gnsis-visual-browser-host \
-  --base-url http://127.0.0.1:8765 \
-  --host-token "$GNSIS_VISUAL_HOST_TOKEN" \
-  "Open the requested page and complete the visible task"
-```
-
-The connector listens on `127.0.0.1:8766` by default. Open the GNSIS Browser
-Hub with `?ws=8766`; after the extension approves the connection, the connector:
-
-1. creates one visual session and starts the existing `capture.frame` stream;
-2. sends each live tab frame through `FrameStream`;
-3. requests one bounded Panoptic decision;
-4. sends it through the existing `browser.action` authority contract;
-5. records the correlated action attempt and repeats from a fresh frame.
-
-Capture is stopped before each action and restarted afterward, so a decision
-cannot be executed against a frame from a previous visual state.

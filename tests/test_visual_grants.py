@@ -383,7 +383,7 @@ class VisualGrantTests(unittest.TestCase):
                 inspections=2,
                 pixel_reads=1,
                 history_reads=3,
-                host_client="gnsis-visual-browser-host/0.1",
+                host_client="gnsis-desktop/0.1",
                 planner_client="claude-code/2.1",
             ),
             self._usage_report(
@@ -391,7 +391,7 @@ class VisualGrantTests(unittest.TestCase):
                 report_seq=2,
                 session_ms=5_000,
                 closed=True,
-                host_client="gnsis-visual-browser-host/0.1",
+                host_client="gnsis-desktop/0.1",
                 planner_client="claude-code/2.1",
             ),
             self._usage_report(
