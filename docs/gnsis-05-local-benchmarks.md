@@ -90,8 +90,8 @@ wall (kernels exist + memory bandwidth); MLX is the possible Mac-side lever.
 Local service (Mac):
 ```
 GNSIS_LOCAL_CONTROLLER_TOKEN=$(cat ~/local05/token.txt) \
-GNSIS_OMNIJEV_SOURCE=~/local05/models/omnijev-source \
-GNSIS_OMNIJEV_CHECKPOINT=<hf snapshot>/OmniJev-0.8B \
+GNSIS_DECIDE_SOURCE=~/local05/models/decide-source \
+GNSIS_DECIDE_CHECKPOINT=<hf snapshot>/OmniJev-0.8B \
 GNSIS_QWEN_BASE_MODEL=<hf snapshot>/Qwen3.5-0.8B \
 ~/local05/venv/bin/gnsis-local-controller    # loopback :8766
 ```
@@ -102,7 +102,7 @@ Decide curl: `POST /v1/decide` with
 Hosted-VLM side: `/tmp/vlm_bench2.py` — same still + same candidates through
 `openrouter.ai/api/v1/chat/completions`, 3 reps per model, temperature 0.
 
-GPU side: `~/local05/omnijev_gpu_bench.py` —
+GPU side: `~/local05/gnsis_decide_gpu_bench.py` —
 `modal run` on `gpu="L4"`, schema + generate modes, with/without frame.
 Run 2026-10-19 on the GNSIS workspace (results in the card table above).
 Image pins: torch 2.14.1+cu130, transformers 5.20.1, flash-linear-attention

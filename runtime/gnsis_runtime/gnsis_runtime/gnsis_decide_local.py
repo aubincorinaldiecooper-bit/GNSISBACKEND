@@ -44,7 +44,7 @@ class GnsisLocalBackend:
     ):
         source = Path(source_dir).resolve()
         if not (source / "mso" / "infer.py").is_file():
-            raise ValueError("OmniJev source_dir does not contain mso/infer.py")
+            raise ValueError("decide source_dir does not contain mso/infer.py")
         sys.path.insert(0, str(source))
         from mso.infer import MSO1
 
@@ -178,8 +178,8 @@ class GnsisLocalBackend:
 
 def backend_from_env() -> GnsisLocalBackend:
     required = {
-        "source_dir": os.environ.get("GNSIS_OMNIJEV_SOURCE"),
-        "checkpoint_dir": os.environ.get("GNSIS_OMNIJEV_CHECKPOINT"),
+        "source_dir": os.environ.get("GNSIS_DECIDE_SOURCE"),
+        "checkpoint_dir": os.environ.get("GNSIS_DECIDE_CHECKPOINT"),
         "base_model_dir": os.environ.get("GNSIS_QWEN_BASE_MODEL"),
     }
     missing = [name for name, value in required.items() if not value]
