@@ -263,9 +263,6 @@ function ModelPicker({ model }: { model: GnsisModel }) {
             <button type="button" role="menuitemradio" aria-checked={model === "gnsis-1.0"} onClick={() => select("gnsis-1.0")}>
               GNSIS 1.0 {model === "gnsis-1.0" && <span aria-hidden="true">✓</span>}
             </button>
-            <button type="button" role="menuitemradio" aria-checked={model === "gnsis-0.5"} onClick={() => select("gnsis-0.5")}>
-              GNSIS 0.5 {model === "gnsis-0.5" && <span aria-hidden="true">✓</span>}
-            </button>
           </div>,
           document.body,
         )}

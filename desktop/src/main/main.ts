@@ -94,8 +94,8 @@ function readSettings(): DesktopSettings {
 }
 const SETTINGS = readSettings();
 let wakeGestureEnabled = SETTINGS.wakeGesture === true;
-let selectedModel: GnsisModel =
-  SETTINGS.model === "gnsis-0.5" ? "gnsis-0.5" : "gnsis-1.0";
+// GNSIS 0.5 is set aside for now: a saved 0.5 choice opens on 1.0.
+let selectedModel: GnsisModel = "gnsis-1.0";
 
 function saveWakeGesture(enabled: boolean): boolean {
   try {
