@@ -62,6 +62,20 @@ class PodError(RuntimeError):
     pass
 
 
+def _unquote(value: str) -> str:
+    """Trim whitespace and one pair of surrounding quotes.
+
+    Coolify sometimes stores a value with the quotes included (e.g.
+    GNSIS_MODELS_VOLUME as 'gnsis-model-weights'), which then reaches the pod
+    verbatim and breaks commands like `modal volume get` that reject the quoted
+    name. The quotes are never part of the real value.
+    """
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1].strip()
+    return value
+
+
 def runpod(method: str, route: str, body: dict[str, Any] | None = None) -> Any:
     key = os.environ.get("RUNPOD_API_KEY", "").strip()
     if not key:
@@ -115,7 +129,7 @@ def worker_environment() -> dict[str, str]:
     ]
     worker = coolify.choose_unique(workers, "GNSIS worker")
     envs = coolify.app_envs(client, str(worker["uuid"]))
-    values = {k: coolify.env_value(envs, k).strip() for k in WORKER_ENV_KEYS}
+    values = {k: _unquote(coolify.env_value(envs, k)) for k in WORKER_ENV_KEYS}
     values = {k: v for k, v in values.items() if v}
     if not values.get("GNSIS_EDGE_SECRET"):
         raise PodError(
