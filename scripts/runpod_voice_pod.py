@@ -162,10 +162,28 @@ def create() -> None:
     env["GNSIS_IDLE_STOP_MINUTES"] = os.environ.get("GNSIS_IDLE_STOP_MINUTES", "").strip() or "10"
     if not (env.get("MODAL_TOKEN_ID") and env.get("MODAL_TOKEN_SECRET")):
         print("- WARNING: no Modal token on the worker; the first boot cannot copy the weights.")
-    body: dict[str, Any] = {
+    # Coolify does not expose secret values over its API, so the SimpleMem token
+    # usually does not copy even when its URL does. The runtime requires the
+    # token whenever the URL is set, so without it drop the URL and run this
+    # pod without durable memory rather than fail to boot. Full-duplex voice
+    # does not depend on memory; set GNSIS_SIMPLEMEM_TOKEN on the pod later to
+    # turn it on.
+    if env.get("GNSIS_SIMPLEMEM_URL") and not (
+        env.get("GNSIS_SIMPLEMEM_TOKEN") or env.get("GNSIS_SIMPLEMEM_INTERNAL_TOKEN")
+    ):
+        env.pop("GNSIS_SIMPLEMEM_URL", None)
+        print("- NOTE: SimpleMem token not readable from Coolify; this pod runs without durable memory.")
+
+    # Secure Cloud first, then Community, so a lack of 2x L40S on one does not
+    # block the test. Override with GNSIS_POD_CLOUD (comma-separated).
+    cloud_order = [
+        c.strip().upper()
+        for c in (os.environ.get("GNSIS_POD_CLOUD", "SECURE,COMMUNITY")).split(",")
+        if c.strip()
+    ]
+    base: dict[str, Any] = {
         "name": POD_NAME,
         "imageName": image,
-        "cloudType": "SECURE",
         "computeType": "GPU",
         "gpuTypeIds": GPU_TYPES,
         "gpuCount": GPU_COUNT,
@@ -179,8 +197,27 @@ def create() -> None:
     }
     auth = registry_auth_id()
     if auth:
-        body["containerRegistryAuthId"] = auth
-    pod = runpod("POST", "/pods", body)
+        base["containerRegistryAuthId"] = auth
+
+    pod = None
+    last_capacity_error = ""
+    for cloud in cloud_order:
+        try:
+            pod = runpod("POST", "/pods", {**base, "cloudType": cloud})
+            print(f"- Got capacity on {cloud} Cloud.")
+            break
+        except PodError as exc:
+            if "no instances currently available" in str(exc).lower():
+                last_capacity_error = str(exc)
+                print(f"- No {GPU_COUNT}x {GPU_TYPES[0]} available on {cloud} Cloud; trying the next option.")
+                continue
+            raise
+    if pod is None:
+        raise PodError(
+            f"No {GPU_COUNT}x {GPU_TYPES[0]} capacity on {' or '.join(cloud_order)} Cloud right now. "
+            "RunPod capacity fluctuates: re-run create in a few minutes, or set GNSIS_POD_CLOUD / "
+            f"widen the GPU choice. Last response: {last_capacity_error}"
+        )
     pod_id = pod.get("id")
     print(f"- Created pod {POD_NAME} ({pod_id}) from {image} on {GPU_COUNT}x {GPU_TYPES[0]}.")
     print(f"- Runtime address once booted: {pod_url(pod_id)}")
