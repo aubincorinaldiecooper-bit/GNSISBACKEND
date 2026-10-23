@@ -8,12 +8,9 @@ on:
       - 'scripts/coolify_simplemem_setup.py'
       - 'Dockerfile.simplemem'
       - 'tools/simplemem/**'
-      - 'modal/gnsis_voice.py'
-      - 'runtime/configs/gnsis-voice.yaml'
-      - 'runtime/gnsis_runtime/gnsis_runtime/cli.py'
-      - 'runtime/gnsis_runtime/gnsis_runtime/session_memory.py'
-      - 'runtime/gnsis_runtime/gnsis_runtime/task_tools_online.py'
-      - 'runtime/gnsis_runtime/gnsis_runtime/online_duplex.py'
+      # Runtime and modal/ changes no longer trigger this: its last step
+      # redeploys the voice runtime to Modal, which is retired. The voice
+      # runtime now runs on RunPod (runpod-voice-image / runpod-voice-pod).
   workflow_dispatch:
 
 permissions:
