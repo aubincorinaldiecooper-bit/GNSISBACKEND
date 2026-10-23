@@ -253,7 +253,16 @@ def main() -> int:
     # Reuse an existing endpoint only when a SimpleMem app already exists or
     # the worker explicitly points at the dedicated hostname. Do not accidentally
     # claim an unrelated external URL as the domain for a newly created app.
-    existing_url = env_value(worker_envs, "GNSIS_SIMPLEMEM_URL").strip().rstrip("/")
+    # Reduce any configured value to its scheme://host[:port] origin. A stray
+    # path/query/fragment on the worker's GNSIS_SIMPLEMEM_URL (e.g. a trailing
+    # /health or /api) is sloppiness, not a different service, and must not
+    # block reuse of an existing SimpleMem app. A non-https scheme is a real
+    # misconfiguration and still fails the guard below.
+    def origin(url: str) -> str:
+        parts = urllib.parse.urlsplit(url.strip())
+        return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+
+    existing_url = origin(env_value(worker_envs, "GNSIS_SIMPLEMEM_URL"))
     if simplemem_matches:
         simplemem_url = existing_url or SIMPLEMEM_URL_DEFAULT
     else:
@@ -265,7 +274,7 @@ def main() -> int:
         )
     parsed = urllib.parse.urlsplit(simplemem_url)
     if parsed.scheme != "https" or not parsed.netloc or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
-        raise SetupError("GNSIS_SIMPLEMEM_URL must be a base HTTPS URL with no path, query, or fragment.")
+        raise SetupError("GNSIS_SIMPLEMEM_URL must resolve to a base HTTPS origin (https://host). Set it to the SimpleMem app's base URL.")
 
     if len(simplemem_matches) > 1:
         raise SetupError("Multiple Coolify apps contain SimpleMem in the name; refusing to guess.")
