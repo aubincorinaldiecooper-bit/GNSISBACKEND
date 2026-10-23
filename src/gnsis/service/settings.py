@@ -468,6 +468,20 @@ class Settings:
     def celery_result_backend(self) -> str:
         return os.environ.get("CELERY_RESULT_BACKEND", self.redis_url)
 
+    def simplemem_provider(self):
+        """The Omni-SimpleMem client, authenticated with the configured token.
+
+        The single place the service builds this client, so the API, the worker
+        and the CodeMemory mirror all honor ``GNSIS_SIMPLEMEM_TOKEN_ENV``.
+        Raises ``ValueError`` when the URL or token is missing or invalid.
+        """
+        from ..memory.simplemem import SimpleMemProvider
+
+        return SimpleMemProvider(
+            self.simplemem_url,
+            token=os.environ.get(self.simplemem_token_env, ""),
+        )
+
     @classmethod
     def from_env(cls) -> "Settings":
         database_url = os.environ.get("DATABASE_URL")

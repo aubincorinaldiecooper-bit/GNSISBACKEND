@@ -39,6 +39,25 @@ class MemoryBackendSelectionTests(unittest.TestCase):
         self.assertEqual(s.simplemem_url, "https://simplemem.example.com")
 
 
+class SimpleMemTokenTests(unittest.TestCase):
+    def test_api_and_worker_honor_custom_token_env(self):
+        # GNSIS_SIMPLEMEM_TOKEN_ENV names the secret; the default variable is unset.
+        env = {
+            **BASE_ENV,
+            "GNSIS_SIMPLEMEM_URL": "https://simplemem.example.com",
+            "GNSIS_SIMPLEMEM_TOKEN_ENV": "CUSTOM_SIMPLEMEM_SECRET",
+            "CUSTOM_SIMPLEMEM_SECRET": "c" * 40,
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            settings = Settings.from_env()
+            from gnsis.service import api
+
+            with mock.patch.object(api, "get_settings", return_value=settings):
+                provider = api._memory()
+        self.assertEqual(provider.token, "c" * 40)
+        self.assertEqual(provider.url, "https://simplemem.example.com")
+
+
 class HealthReportsSimpleMemTests(unittest.TestCase):
     def _health(self, settings):
         from gnsis.service import api

@@ -90,10 +90,8 @@ def _memory() -> MemoryProvider:
     if settings.memory_backend == "postgres":
         return PostgresMemoryProvider()
     if settings.memory_backend == "simplemem":
-        from ..memory.simplemem import SimpleMemProvider
-
         # Configured-but-missing memory fails loudly instead of degrading to none.
-        return SimpleMemProvider(settings.simplemem_url)
+        return settings.simplemem_provider()
     if settings.memory_backend == "none":
         return NullMemoryProvider()
     raise RuntimeError(f"unknown memory backend: {settings.memory_backend!r}")

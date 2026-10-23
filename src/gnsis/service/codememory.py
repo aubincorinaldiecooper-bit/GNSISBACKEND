@@ -174,14 +174,7 @@ class CodeMemory:
             settings = get_settings()
             if not settings.simplemem_url:
                 return None
-            import os
-
-            from ..memory.simplemem import SimpleMemProvider
-
-            self._mirror = SimpleMemProvider(
-                settings.simplemem_url,
-                token=os.environ.get(settings.simplemem_token_env, ""),
-            )
+            self._mirror = settings.simplemem_provider()
         except Exception:
             logger.exception("simplemem mirror is configured but unavailable")
             self._mirror = None

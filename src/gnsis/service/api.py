@@ -202,10 +202,8 @@ def _memory():
 
         return PostgresMemoryProvider()
     if backend == "simplemem":
-        from ..memory.simplemem import SimpleMemProvider
-
         # Misconfigured required memory must not degrade silently to no memory.
-        return SimpleMemProvider(get_settings().simplemem_url)
+        return get_settings().simplemem_provider()
     if backend == "none":
         return NullMemoryProvider()
     raise RuntimeError(f"unknown memory backend: {backend!r}")
