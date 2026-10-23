@@ -1,8 +1,7 @@
 # Python dependencies of the GNSIS voice runtime image on RunPod.
 #
-# The same pins as the Modal image in modal/gnsis_voice.py (uv_pip_install).
-# tests/test_runpod_voice_image.py fails when the two lists differ, so a pin
-# changed on one host cannot silently drift on the other.
+# Carried over unchanged from the retired Modal image (modal/gnsis_voice.py),
+# whose versions were validated together on the same 2x L40S setup.
 torch==2.6.0
 transformers==4.51.0
 accelerate>=1.10,<2
