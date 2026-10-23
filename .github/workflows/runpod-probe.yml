@@ -57,6 +57,36 @@ jobs:
             echo "GET /v1/${route} -> HTTP ${code} (items: ${count})"
           done
 
+      - name: Print the REST API contract the setup will call
+        run: |
+          code=$(curl -sS -m 30 -o probe/openapi.json -w '%{http_code}' https://rest.runpod.io/v1/openapi.json || echo 000)
+          echo "openapi.json -> HTTP ${code}"
+          python3 - <<'PY'
+          import json
+          spec = json.load(open("probe/openapi.json"))
+          paths = spec.get("paths", {})
+          print("== paths ==")
+          for p, ops in sorted(paths.items()):
+              print(p, sorted(k.upper() for k in ops if k in {"get","post","patch","put","delete"}))
+          schemas = spec.get("components", {}).get("schemas", {})
+          def show(name, depth=0):
+              s = schemas.get(name)
+              if not s:
+                  return
+              print(f"\n== schema {name} ==")
+              print(json.dumps(s, indent=1)[:12000])
+          wanted = [n for n in schemas if any(k in n.lower() for k in
+                    ("podcreate", "networkvolumecreate", "containerregistryauth", "podupdate"))]
+          for n in wanted:
+              show(n)
+          # Request bodies inline on the create routes, in case they are not named schemas.
+          for route in ("/pods", "/networkvolumes", "/containerregistryauth"):
+              op = paths.get(route, {}).get("post")
+              if op:
+                  print(f"\n== POST {route} requestBody ==")
+                  print(json.dumps(op.get("requestBody", {}), indent=1)[:6000])
+          PY
+
       - name: List GPU types (looking for L40S)
         run: |
           curl -sS -m 30 -H "Content-Type: application/json" \
