@@ -52,14 +52,13 @@ if [ ! -e /models/GNSIS/thinker ] || [ ! -e /models/MiniCPM-o-4_5 ] || [ ! -e /m
   echo "start-voice: weights copied." >&2
 fi
 
-# The talker's Step-Audio2 voice synthesizer loads several files from this
-# folder. A copy of the whole Gander/talker tree has dropped two of them
-# (config.yaml, hift_original.pt), so make the token2wav folder complete with a
-# dedicated copy, then verify. If a file is still missing, it is not on the
-# Modal volume at that path — fail loudly with the folder's contents rather
-# than boot into a talker that cannot synthesize speech.
+# The talker's Step-Audio2 voice synthesizer (minicpmo-utils 1.0.6 Token2wav)
+# loads these files from this folder. If one is missing, re-copy just that
+# folder from Modal, then verify, rather than boot into a talker that cannot
+# synthesize speech. (minicpmo-utils 1.0.7 also wants config.yaml and
+# hift_original.pt, which the volume does not have; it is pinned to 1.0.6.)
 T2W=/models/Gander/talker/assets/token2wav
-T2W_REQUIRED="config.yaml hift_original.pt"
+T2W_REQUIRED="speech_tokenizer_v2_25hz.onnx campplus.onnx flow.yaml flow.pt hift.pt"
 t2w_incomplete=0
 for f in $T2W_REQUIRED; do
   [ -e "$T2W/$f" ] || t2w_incomplete=1
@@ -71,7 +70,7 @@ if [ "$t2w_incomplete" = 1 ] && [ -n "${MODAL_TOKEN_ID:-}" ] && [ -n "${MODAL_TO
   stage=/models/.t2w-staging
   rm -rf "$stage" && mkdir -p "$stage"
   if modal volume get --env "${MODAL_ENVIRONMENT:-main}" "$volume" Gander/talker/assets/token2wav "$stage"; then
-    src="$(find "$stage" -type f -name config.yaml -printf '%h\n' 2>/dev/null | head -1)"
+    src="$(find "$stage" -type f -name flow.yaml -printf '%h\n' 2>/dev/null | head -1)"
     [ -n "$src" ] || src="$(find "$stage" -type d -name token2wav | head -1)"
     [ -n "$src" ] || src="$stage"
     mkdir -p "$T2W"

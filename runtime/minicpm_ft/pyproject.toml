@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-talker = ["minicpmo-utils[tts]>=1.0.6,<2"]
+talker = ["minicpmo-utils[tts]==1.0.6"]
 asr = [
   "fastapi>=0.110",
   "faster-whisper>=1.2,<2",
