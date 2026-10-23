@@ -1,0 +1,42 @@
+name: RunPod voice pod
+
+# Run by hand: Actions -> "RunPod voice pod" -> Run workflow -> pick an action.
+# create builds nothing; it starts the gnsis-voice pod from the image that
+# "RunPod voice image" pushed. A running pod bills by the hour: stop it when
+# you are not testing (stop keeps the copied weights; terminate deletes them).
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do with the gnsis-voice pod
+        type: choice
+        options: [status, create, stop, start, terminate]
+        default: status
+      image_tag:
+        description: Image tag to run (create only)
+        default: latest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runpod-voice-pod
+  cancel-in-progress: false
+
+jobs:
+  pod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ${{ inputs.action }}
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: python scripts/runpod_voice_pod.py "${{ inputs.action }}"
