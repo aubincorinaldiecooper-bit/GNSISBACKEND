@@ -86,5 +86,9 @@ else
 fi
 export GNSIS_DESKTOP_GRANT_ISSUER="${GNSIS_DESKTOP_GRANT_ISSUER:-gnsis-control-plane}"
 
+# Stop the pod after GNSIS_IDLE_STOP_MINUTES (default 10) with no live
+# session, as Modal scaled to zero; it outlives the exec below.
+python /usr/local/bin/idle_stop.py &
+
 cd /workspace
 exec gnsis-serve --config "$CONFIG"
