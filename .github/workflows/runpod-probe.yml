@@ -1,0 +1,74 @@
+name: RunPod probe (read-only)
+
+# Reads, never creates. Fetches RunPod's agent setup guide so the pod setup
+# follows it rather than guesses, confirms RUNPOD_API_KEY authenticates, and
+# lists GPU types so the voice runtime's 2x L40S choice can be checked against
+# what RunPod offers. The API key is only ever sent as a header, never printed.
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/loving-planck-jjaqn8]
+    paths: [.github/workflows/runpod-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+    steps:
+      - name: Fetch the RunPod agent guide
+        run: |
+          mkdir -p probe
+          for path in "" "llms.txt" "llms-full.txt"; do
+            url="https://agents.runpod.io/${path}"
+            code=$(curl -sSL -m 30 -o "probe/guide-${path:-index}.txt" -w '%{http_code}' "$url" || echo 000)
+            echo "== ${url} -> HTTP ${code}"
+          done
+          # Print readable text of every page that answered.
+          python3 - <<'PY'
+          import html, pathlib, re
+          for f in sorted(pathlib.Path("probe").glob("guide-*.txt")):
+              raw = f.read_text(errors="replace")
+              if not raw.strip():
+                  continue
+              text = raw
+              if "<html" in raw.lower():
+                  text = re.sub(r"(?is)<(script|style).*?</\1>", "", raw)
+                  text = re.sub(r"(?s)<[^>]+>", "\n", text)
+                  text = html.unescape(text)
+              text = re.sub(r"\n\s*\n+", "\n\n", text)
+              print(f"\n######## {f.name} ########\n{text[:60000]}")
+          PY
+
+      - name: Check the API key authenticates (no secret printed)
+        run: |
+          if [ -z "$RUNPOD_API_KEY" ]; then
+            echo "RUNPOD_API_KEY is not set as a repository Actions secret." >&2
+            exit 1
+          fi
+          for route in pods networkvolumes templates; do
+            code=$(curl -sS -m 30 -o "probe/${route}.json" -w '%{http_code}' \
+              -H "Authorization: Bearer ${RUNPOD_API_KEY}" "https://rest.runpod.io/v1/${route}" || echo 000)
+            count=$(python3 -c "import json,sys;d=json.load(open('probe/${route}.json'));print(len(d) if isinstance(d,list) else 'n/a')" 2>/dev/null || echo "n/a")
+            echo "GET /v1/${route} -> HTTP ${code} (items: ${count})"
+          done
+
+      - name: List GPU types (looking for L40S)
+        run: |
+          curl -sS -m 30 -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+            -d '{"query":"query { gpuTypes { id displayName memoryInGb secureCloud communityCloud } }"}' \
+            https://api.runpod.io/graphql -o probe/gpus.json -w 'graphql -> HTTP %{http_code}\n'
+          python3 - <<'PY'
+          import json
+          data = json.load(open("probe/gpus.json"))
+          if "errors" in data:
+              print("GraphQL errors:", json.dumps(data["errors"])[:1000])
+          for g in (data.get("data") or {}).get("gpuTypes") or []:
+              print(f"{g.get('id'):<40} {g.get('displayName'):<28} {g.get('memoryInGb')}GB "
+                    f"secure={g.get('secureCloud')} community={g.get('communityCloud')}")
+          PY
