@@ -22,6 +22,22 @@ _PROCESS_STARTED_AT = time.time()
 _LOG_TAIL_MAX_LINES = 5000
 
 
+_SECRET_NAME_PARTS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "GRANT", "CREDENTIAL")
+
+
+def _redact_secrets(text: str) -> str:
+    """Blank the values of secret-looking environment variables in ``text``."""
+
+    values = {
+        value
+        for name, value in os.environ.items()
+        if len(value) >= 8 and any(part in name.upper() for part in _SECRET_NAME_PARTS)
+    }
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(value, "[redacted]")
+    return text
+
+
 def _log_tail(path: Path, lines: int) -> str:
     """The last ``lines`` lines of ``path``, read from the end of the file."""
 
@@ -206,7 +222,7 @@ class DeferredRuntimeApp:
                 raise HTTPException(status_code=404, detail="no log file yet")
             count = max(1, min(lines, _LOG_TAIL_MAX_LINES))
             return PlainTextResponse(
-                _log_tail(path, count), headers={"Cache-Control": "no-store"}
+                _redact_secrets(_log_tail(path, count)), headers={"Cache-Control": "no-store"}
             )
 
         @app.api_route(

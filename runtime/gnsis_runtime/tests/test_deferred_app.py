@@ -292,6 +292,20 @@ def test_logs_need_the_edge_secret_and_serve_the_tail(monkeypatch, tmp_path):
         assert previous.text == "previous boot\n"
 
 
+def test_logs_blank_secret_values_a_dependency_printed(monkeypatch, tmp_path):
+    log = tmp_path / "runtime.log"
+    log.write_text("hf token hf_abcdefgh123 loaded; edge edge-secret-value\n")
+    monkeypatch.setenv("GNSIS_LOG_FILE", str(log))
+    monkeypatch.setenv("GNSIS_EDGE_SECRET", "edge-secret-value")
+    monkeypatch.setenv("HF_TOKEN", "hf_abcdefgh123")
+
+    app = create_deferred_app(_inner_app, heartbeat_interval_s=0.05)
+    with TestClient(app) as client:
+        _wait_for_state(client, "ready")
+        tail = client.get("/logs", headers={"x-gnsis-edge": "edge-secret-value"})
+        assert tail.text == "hf token [redacted] loaded; edge [redacted]\n"
+
+
 def test_logs_stay_closed_without_an_edge_secret(monkeypatch, tmp_path):
     log = tmp_path / "runtime.log"
     log.write_text("secret-free but private\n")
