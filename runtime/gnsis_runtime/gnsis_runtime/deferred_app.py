@@ -12,13 +12,30 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from mcpmft.infer import startup_timing
 
 LOGGER = logging.getLogger(__name__)
 _PROCESS_STARTED_AT = time.time()
+_LOG_TAIL_MAX_LINES = 5000
+
+
+def _log_tail(path: Path, lines: int) -> str:
+    """The last ``lines`` lines of ``path``, read from the end of the file."""
+
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        end = handle.tell()
+        block = 64 * 1024
+        data = b""
+        while end > 0 and data.count(b"\n") <= lines:
+            start = max(0, end - block)
+            handle.seek(start)
+            data = handle.read(end - start) + data
+            end = start
+    return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace") + "\n"
 
 
 def _session_timing(
@@ -173,6 +190,24 @@ class DeferredRuntimeApp:
             if not path.is_file():
                 raise HTTPException(status_code=404, detail="not found")
             return FileResponse(path, headers={"Cache-Control": "no-store"})
+
+        @app.get("/logs")
+        async def logs(request: Request, lines: int = 500, previous: bool = False):
+            # The pod's own output, for whoever holds the edge secret. With no
+            # secret configured this stays closed rather than public.
+            secret_set = bool(os.environ.get("GNSIS_EDGE_SECRET"))
+            if not secret_set or not _came_through_the_front_door(request.scope):
+                raise HTTPException(status_code=403, detail="forbidden")
+            configured = os.environ.get("GNSIS_LOG_FILE", "")
+            if not configured:
+                raise HTTPException(status_code=404, detail="no log file configured")
+            path = Path(configured + (".1" if previous else ""))
+            if not path.is_file():
+                raise HTTPException(status_code=404, detail="no log file yet")
+            count = max(1, min(lines, _LOG_TAIL_MAX_LINES))
+            return PlainTextResponse(
+                _log_tail(path, count), headers={"Cache-Control": "no-store"}
+            )
 
         @app.api_route(
             "/{path:path}",
@@ -533,7 +568,7 @@ class DeferredRuntimeApp:
             await self._lifespan(receive, send)
             return
 
-        if scope_type == "http" and scope.get("path") == "/health":
+        if scope_type == "http" and scope.get("path") in {"/health", "/logs"}:
             await self._bootstrap(scope, receive, send)
             return
 

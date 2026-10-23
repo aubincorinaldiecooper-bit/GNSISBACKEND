@@ -8,6 +8,15 @@ set -euo pipefail
 
 CONFIG="${GNSIS_CONFIG:-/workspace/runtime/configs/gnsis-voice.yaml}"
 
+# Everything this pod prints also goes to a file the runtime serves at /logs,
+# behind the edge secret, since RunPod's API does not expose a pod's logs. The
+# previous boot's file is kept beside it.
+LOG_FILE="${GNSIS_LOG_FILE:-/var/gnsis/logs/runtime.log}"
+export GNSIS_LOG_FILE="$LOG_FILE"
+mkdir -p "$(dirname "$LOG_FILE")"
+[ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 fail() {
   echo "start-voice: $*" >&2
   exit 1

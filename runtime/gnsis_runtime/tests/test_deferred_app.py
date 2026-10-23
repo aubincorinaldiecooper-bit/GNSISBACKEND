@@ -269,3 +269,35 @@ def test_a_lifespan_context_manager_on_the_inner_app_runs():
         _wait_for_state(client, "ready")
         assert calls == ["enter"]
     assert calls == ["enter", "exit"]
+
+
+def test_logs_need_the_edge_secret_and_serve_the_tail(monkeypatch, tmp_path):
+    log = tmp_path / "runtime.log"
+    log.write_text("".join(f"line {i}\n" for i in range(20)))
+    (tmp_path / "runtime.log.1").write_text("previous boot\n")
+    monkeypatch.setenv("GNSIS_LOG_FILE", str(log))
+    monkeypatch.setenv("GNSIS_EDGE_SECRET", "edge-secret")
+
+    app = create_deferred_app(_inner_app, heartbeat_interval_s=0.05)
+    with TestClient(app) as client:
+        _wait_for_state(client, "ready")
+        assert client.get("/logs").status_code == 403
+        assert client.get("/logs", headers={"x-gnsis-edge": "wrong"}).status_code == 403
+        tail = client.get("/logs?lines=3", headers={"x-gnsis-edge": "edge-secret"})
+        assert tail.status_code == 200
+        assert tail.text == "line 17\nline 18\nline 19\n"
+        previous = client.get(
+            "/logs?previous=true", headers={"x-gnsis-edge": "edge-secret"}
+        )
+        assert previous.text == "previous boot\n"
+
+
+def test_logs_stay_closed_without_an_edge_secret(monkeypatch, tmp_path):
+    log = tmp_path / "runtime.log"
+    log.write_text("secret-free but private\n")
+    monkeypatch.setenv("GNSIS_LOG_FILE", str(log))
+    monkeypatch.delenv("GNSIS_EDGE_SECRET", raising=False)
+
+    app = create_deferred_app(_inner_app, heartbeat_interval_s=0.05)
+    with TestClient(app) as client:
+        assert client.get("/logs").status_code == 403
