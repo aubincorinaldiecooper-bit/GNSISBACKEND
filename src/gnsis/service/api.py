@@ -400,6 +400,9 @@ def health() -> dict:
             payload["status"] = "degraded"
     else:
         payload["memory"] = settings.memory_backend
+    # Omni-SimpleMem is the required GNSIS recall surface; make its absence
+    # visible instead of letting a Postgres-only deployment look complete.
+    payload["simplemem"] = "configured" if settings.simplemem_url else "not_configured"
     return payload
 
 
