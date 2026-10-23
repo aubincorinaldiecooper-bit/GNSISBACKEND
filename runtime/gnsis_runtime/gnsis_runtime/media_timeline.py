@@ -63,7 +63,10 @@ class AudioCaptureTimeline:
         self.reset()
 
     def reset(self) -> None:
-        self._next_sequence = 1
+        # The first frame after a reset sets the baseline, the way an RTP
+        # receiver syncs to the first packet: a client's counters may keep
+        # running across calls and reconnects. Gaps after that still fail.
+        self._next_sequence: int | None = None
         self._next_sample = 0
         self._next_unit_start_sample = 0
         self._next_unit_end_sample = self.unit_samples
@@ -84,6 +87,11 @@ class AudioCaptureTimeline:
     ) -> tuple[TimedPcm16Part, ...]:
         if len(pcm16) != header.sample_count * 2:
             raise ValueError("audio frame sample_count does not match its PCM16 payload")
+        if self._next_sequence is None:
+            self._next_sequence = header.sequence
+            self._next_sample = header.start_sample
+            self._next_unit_start_sample = header.start_sample
+            self._next_unit_end_sample = header.start_sample + self.unit_samples
         if header.sequence != self._next_sequence:
             raise ValueError(
                 f"audio frame sequence must be {self._next_sequence}, got {header.sequence}"

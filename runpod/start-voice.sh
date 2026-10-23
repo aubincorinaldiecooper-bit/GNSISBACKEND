@@ -15,12 +15,15 @@ LOG_FILE="${GNSIS_LOG_FILE:-/var/gnsis/logs/runtime.log}"
 export GNSIS_LOG_FILE="$LOG_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
 [ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
-exec > >(tee -a "$LOG_FILE") 2>&1
+# fd 3 keeps the real stderr, so a refusal reaches both places before exit.
+exec 3>&2
+exec > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&3)
 
 fail() {
-  echo "start-voice: $*" >&2
+  echo "start-voice: $*" | tee -a "$LOG_FILE" >&3
   exit 1
 }
+
 
 # A pod's address is public. Without the secret every route would be open, so
 # do not start at all; EdgeGuard enforces it on every route but GET /health.
