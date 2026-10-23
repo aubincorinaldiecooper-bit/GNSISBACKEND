@@ -32,6 +32,7 @@ RUN python -m pip install --no-deps /workspace/runtime/minicpm_ft /workspace/run
     && python -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small.en', local_dir='/opt/gnsis-asr/faster-whisper-small.en')"
 
 COPY runpod/start-voice.sh /usr/local/bin/start-voice
+COPY runpod/idle_stop.py /usr/local/bin/idle_stop.py
 RUN chmod 0755 /usr/local/bin/start-voice
 
 WORKDIR /workspace

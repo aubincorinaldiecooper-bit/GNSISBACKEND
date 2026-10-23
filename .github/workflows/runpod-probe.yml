@@ -57,6 +57,19 @@ jobs:
             echo "GET /v1/${route} -> HTTP ${code} (items: ${count})"
           done
 
+      - name: Docs on scale-to-zero and WebSockets (wake-on-demand design)
+        run: |
+          curl -sSL -m 30 https://docs.runpod.io/llms.txt -o probe/llms.txt || true
+          echo "== pages mentioning load balancing / websockets / idle / scale =="
+          grep -iE "load.?balanc|websocket|idle|scale|cold start|stop" probe/llms.txt | head -40 || true
+          for page in serverless/load-balancing/overview serverless/load-balancing/build-a-worker \
+                      serverless/endpoints/endpoint-configurations pods/manage-pods; do
+            code=$(curl -sSL -m 30 -o "probe/page.md" -w '%{http_code}' "https://docs.runpod.io/${page}.md" || echo 000)
+            echo
+            echo "######## /${page} -> HTTP ${code}"
+            [ "$code" = "200" ] && grep -iE -B1 -A3 "websocket|idle timeout|scale to zero|scale-to-zero|cold start|stop.*pod|timeout" probe/page.md | head -80
+          done
+
       - name: Print the REST API contract the setup will call
         run: |
           code=$(curl -sS -m 30 -o probe/openapi.json -w '%{http_code}' https://rest.runpod.io/v1/openapi.json || echo 000)

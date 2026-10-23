@@ -153,6 +153,8 @@ def create() -> None:
     image = f"ghcr.io/{owner}/gnsis-voice:{tag}"
     env = worker_environment()
     print("- Copied from the Coolify worker: " + ", ".join(sorted(env)))
+    # The pod stops itself after this many minutes without a live session.
+    env["GNSIS_IDLE_STOP_MINUTES"] = os.environ.get("GNSIS_IDLE_STOP_MINUTES", "").strip() or "10"
     if not (env.get("MODAL_TOKEN_ID") and env.get("MODAL_TOKEN_SECRET")):
         print("- WARNING: no Modal token on the worker; the first boot cannot copy the weights.")
     body: dict[str, Any] = {
