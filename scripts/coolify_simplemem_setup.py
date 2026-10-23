@@ -20,6 +20,7 @@ TARGET_REPO = "aubincorinaldiecooper-bit/gnsisbackend"
 SIMPLEMEM_URL_DEFAULT = "https://simplemem.gnsis.studio"
 API_URL = "https://api.gnsis.studio"
 POLL_INTERVAL = 10
+USER_AGENT = "Mozilla/5.0 (compatible; gnsis-simplemem-rollout/1.0; +https://github.com/aubincorinaldiecooper-bit/GNSISBACKEND)"
 HEALTH_TIMEOUT = 600
 
 
@@ -131,7 +132,14 @@ def get_identity(
 
 def request_json(url: str, *, method: str = "GET", token: str | None = None, body: dict[str, Any] | None = None, timeout: float = 10) -> tuple[int, Any]:
     data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    # Python's default User-Agent (Python-urllib/x.y) is rejected with a 403 by
+    # Cloudflare's Browser Integrity Check, which fronts the public GNSIS
+    # hostnames; browsers reach the same /health fine. Identify the client.
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -140,7 +148,9 @@ def request_json(url: str, *, method: str = "GET", token: str | None = None, bod
             payload = response.read(1_000_000)
             return response.status, json.loads(payload) if payload else {}
     except urllib.error.HTTPError as exc:
-        return exc.code, {}
+        # Keep who refused the request, so an edge block is distinguishable
+        # from an application error in the rollout report.
+        return exc.code, {"_server": exc.headers.get("server") or "", "_cf_ray": exc.headers.get("cf-ray") or ""}
     except urllib.error.URLError:
         return 0, {}
 
@@ -148,15 +158,18 @@ def request_json(url: str, *, method: str = "GET", token: str | None = None, bod
 def wait_for_simplemem(url: str) -> dict[str, Any]:
     deadline = time.monotonic() + HEALTH_TIMEOUT
     last_status = 0
+    refused_by = ""
     while time.monotonic() < deadline:
         status, payload = request_json(url.rstrip("/") + "/health", timeout=10)
         last_status = status
         if status == 200 and isinstance(payload, dict) and payload.get("ok") is True and payload.get("authConfigured") is True:
             return payload
+        if isinstance(payload, dict) and payload.get("_cf_ray"):
+            refused_by = " by Cloudflare (check WAF / Bot Fight / Access rules for this hostname)"
         time.sleep(POLL_INTERVAL)
     raise SetupError(
         f"SimpleMem health did not become ready at {url}/health within {HEALTH_TIMEOUT}s "
-        f"(last HTTP status {last_status}). The worker was not changed."
+        f"(last HTTP status {last_status}{refused_by}). The worker was not changed."
     )
 
 
