@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import coolify_simplemem_setup as coolify  # noqa: E402
 
 API = "https://rest.runpod.io/v1"
+USER_AGENT = "Mozilla/5.0 (compatible; gnsis-runpod-pod/1.0; +https://github.com/aubincorinaldiecooper-bit/GNSISBACKEND)"
 POD_NAME = "gnsis-voice"
 PORT = 7975
 REGISTRY_AUTH_NAME = "ghcr-gnsis-voice"
@@ -74,6 +75,10 @@ def runpod(method: str, route: str, body: dict[str, Any] | None = None) -> Any:
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # rest.runpod.io sits behind Cloudflare, which bans Python's default
+            # Python-urllib User-Agent (Error 1010, browser_signature_banned).
+            # Identify a normal client, as the SimpleMem rollout does.
+            "User-Agent": USER_AGENT,
         },
     )
     try:
