@@ -249,11 +249,6 @@ def main() -> int:
     destination_uuid = str(worker_detail.get("destination_uuid") or worker_detail.get("destination_id") or "")
     if not destination_uuid:
         destination_uuid = get_identity(worker_detail, "destination_uuid", "destination")
-    if not all((project_uuid, server_uuid, environment_uuid or environment_name, github_app_uuid or private_key_uuid, git_repository)):
-        raise SetupError(
-            "The GNSIS worker does not expose the project/server/environment/GitHub-App identifiers "
-            "needed to create a private-repository app safely. No service or worker settings were changed."
-        )
 
     # Reuse an existing endpoint only when a SimpleMem app already exists or
     # the worker explicitly points at the dedicated hostname. Do not accidentally
@@ -283,6 +278,14 @@ def main() -> int:
         if len(old_token) >= 32:
             token = old_token
     else:
+        # Creating a new app needs the worker's project/server/environment and a
+        # source credential; reuse (above) does not, so only require them here.
+        if not all((project_uuid, server_uuid, environment_uuid or environment_name, github_app_uuid or private_key_uuid, git_repository)):
+            raise SetupError(
+                "No SimpleMem app exists and the GNSIS worker does not expose the "
+                "project/server/environment/GitHub-App identifiers needed to create a "
+                "private-repository app safely. No service or worker settings were changed."
+            )
         create_body: dict[str, Any] = {
             "project_uuid": project_uuid,
             "server_uuid": server_uuid,
