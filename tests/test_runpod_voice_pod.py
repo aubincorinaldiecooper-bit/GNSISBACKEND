@@ -49,7 +49,10 @@ class CreatePodTests(unittest.TestCase):
         self.assertEqual(len(posts), 1)
         body = posts[0]
         self.assertEqual(body["imageName"], "ghcr.io/owner/gnsis-voice:abc123")
-        self.assertEqual((body["gpuTypeIds"], body["gpuCount"]), (["NVIDIA L40S"], 2))
+        # L40S stays the first choice, but any of several 48 GB cards is accepted.
+        self.assertEqual(body["gpuTypeIds"][0], "NVIDIA L40S")
+        self.assertIn("NVIDIA A40", body["gpuTypeIds"])
+        self.assertEqual(body["gpuCount"], 2)
         self.assertEqual(body["volumeMountPath"], "/models")
         self.assertEqual(body["ports"], ["7975/http"])
         self.assertEqual(body["env"]["GNSIS_EDGE_SECRET"], SECRET)

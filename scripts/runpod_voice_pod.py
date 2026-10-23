@@ -38,7 +38,11 @@ USER_AGENT = "Mozilla/5.0 (compatible; gnsis-runpod-pod/1.0; +https://github.com
 POD_NAME = "gnsis-voice"
 PORT = 7975
 REGISTRY_AUTH_NAME = "ghcr-gnsis-voice"
-GPU_TYPES = ["NVIDIA L40S"]
+# A priority list of interchangeable 48 GB cards, not L40S alone: the runtime
+# only needs two 48 GB GPUs (Thinker on GPU 0, detached Talker on GPU 1), and
+# RunPod treats gpuTypeIds as "any of these, in order". Accepting L40/A40/A6000
+# as well as L40S means a shortage of one card no longer blocks the pod.
+GPU_TYPES = ["NVIDIA L40S", "NVIDIA L40", "NVIDIA A40", "NVIDIA RTX A6000"]
 GPU_COUNT = 2
 VOLUME_GB = 150  # MiniCPM-o-4_5 + Thinker + Talker, with headroom
 CONTAINER_DISK_GB = 60
@@ -213,6 +217,7 @@ def create() -> None:
     if auth:
         base["containerRegistryAuthId"] = auth
 
+    gpus = " / ".join(GPU_TYPES)
     pod = None
     last_capacity_error = ""
     for cloud in cloud_order:
@@ -223,17 +228,17 @@ def create() -> None:
         except PodError as exc:
             if "no instances currently available" in str(exc).lower():
                 last_capacity_error = str(exc)
-                print(f"- No {GPU_COUNT}x {GPU_TYPES[0]} available on {cloud} Cloud; trying the next option.")
+                print(f"- No {GPU_COUNT}x [{gpus}] available on {cloud} Cloud; trying the next option.")
                 continue
             raise
     if pod is None:
         raise PodError(
-            f"No {GPU_COUNT}x {GPU_TYPES[0]} capacity on {' or '.join(cloud_order)} Cloud right now. "
+            f"No {GPU_COUNT}x [{gpus}] capacity on {' or '.join(cloud_order)} Cloud right now. "
             "RunPod capacity fluctuates: re-run create in a few minutes, or set GNSIS_POD_CLOUD / "
             f"widen the GPU choice. Last response: {last_capacity_error}"
         )
     pod_id = pod.get("id")
-    print(f"- Created pod {POD_NAME} ({pod_id}) from {image} on {GPU_COUNT}x {GPU_TYPES[0]}.")
+    print(f"- Created pod {POD_NAME} ({pod_id}) from {image} on {GPU_COUNT}x one of [{gpus}].")
     print(f"- Runtime address once booted: {pod_url(pod_id)}")
     print("- First boot copies the weights before the model loads; that takes a while.")
 
