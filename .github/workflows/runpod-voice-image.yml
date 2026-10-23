@@ -38,11 +38,20 @@ jobs:
           docker system prune -af >/dev/null
           df -h /
 
+      - name: Log in to the image registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Build
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           echo "IMAGE=ghcr.io/${owner}/gnsis-voice" >> "$GITHUB_ENV"
-          docker build -f runpod/Dockerfile.voice -t gnsis-voice:ci .
+          # Reuse the layers of the last image main published (inline cache), so
+          # a change to the runtime or start script skips the multi-GB CUDA and
+          # pip layers instead of rebuilding them on a fresh runner.
+          DOCKER_BUILDKIT=1 docker build -f runpod/Dockerfile.voice \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from "ghcr.io/${owner}/gnsis-voice:latest" \
+            -t gnsis-voice:ci .
 
       - name: Smoke-test the image without a GPU or weights
         run: |
@@ -56,13 +65,23 @@ jobs:
           fi
           grep -q "GNSIS_EDGE_SECRET is not set" err.txt
 
+      # Only main publishes: a branch run (pull request or manual) builds and
+      # smoke-tests but can never replace the image the pod runs.
       - name: Push
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           sha="${GITHUB_SHA::12}"
           docker tag gnsis-voice:ci "${IMAGE}:${sha}"
           docker tag gnsis-voice:ci "${IMAGE}:latest"
           docker push "${IMAGE}:${sha}"
           docker push "${IMAGE}:latest"
           echo "Pushed ${IMAGE}:${sha} and :latest" >> "$GITHUB_STEP_SUMMARY"
+
+      # Like a Modal deploy: the running pod switches to this exact build
+      # (RunPod re-pulls and restarts it). No pod, nothing to do.
+      - name: Move the pod to this build
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::12}" python3 scripts/runpod_voice_pod.py deploy

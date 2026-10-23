@@ -10,10 +10,10 @@ on:
       action:
         description: What to do with the gnsis-voice pod
         type: choice
-        options: [status, create, stop, start, terminate]
+        options: [status, create, deploy, stop, start, terminate]
         default: status
       image_tag:
-        description: Image tag to run (create only)
+        description: Image tag to run (create and deploy)
         default: latest
 
 permissions:

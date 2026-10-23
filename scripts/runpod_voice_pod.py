@@ -3,7 +3,7 @@
 
 Usage (normally from .github/workflows/runpod-voice-pod.yml):
 
-    python scripts/runpod_voice_pod.py create|status|stop|start|terminate
+    python scripts/runpod_voice_pod.py create|status|deploy|stop|start|terminate
 
 The pod mirrors the former Modal app (modal/gnsis_voice.py): 2x L40S, the
 gnsis-voice image from GitHub's container registry, port 7975 over HTTPS, a
@@ -17,7 +17,7 @@ Environment:
   GHCR_PULL_TOKEN     optional; a GitHub token with read:packages. When set,
                       it is registered with RunPod so the pod can pull the
                       private image. Without it the image must be public.
-  IMAGE_TAG           optional; defaults to "latest".
+  IMAGE_TAG           optional; defaults to "latest". deploy sets the pod to it.
 """
 
 from __future__ import annotations
@@ -161,15 +161,34 @@ def registry_auth_id() -> str | None:
     return str(created["id"])
 
 
+def image_name() -> str:
+    owner = (os.environ.get("GITHUB_REPOSITORY_OWNER") or "").lower()
+    tag = os.environ.get("IMAGE_TAG", "").strip() or "latest"
+    return f"ghcr.io/{owner}/gnsis-voice:{tag}"
+
+
+def deploy() -> None:
+    """Point the existing pod at IMAGE_TAG; RunPod re-pulls it and restarts the
+    container. The pod volume (and its copied weights) is kept."""
+    pod = find_pod()
+    if not pod:
+        print(f"- No pod named {POD_NAME}; nothing to deploy to (run create).")
+        return
+    image = image_name()
+    if pod.get("imageName") == image:
+        print(f"- {POD_NAME} ({pod['id']}) already runs {image}.")
+        return
+    runpod("PATCH", f"/pods/{pod['id']}", {"imageName": image})
+    print(f"- {POD_NAME} ({pod['id']}) now runs {image}; RunPod is pulling it and restarting the pod.")
+
+
 def create() -> None:
     existing = find_pod()
     if existing:
         print(f"- Pod {POD_NAME} already exists ({existing['id']}); not creating another.")
         status()
         return
-    owner = (os.environ.get("GITHUB_REPOSITORY_OWNER") or "").lower()
-    tag = os.environ.get("IMAGE_TAG", "").strip() or "latest"
-    image = f"ghcr.io/{owner}/gnsis-voice:{tag}"
+    image = image_name()
     env = worker_environment()
     print("- Copied from the Coolify worker: " + ", ".join(sorted(env)))
     # The pod stops itself after this many minutes without a live session.
@@ -273,10 +292,12 @@ def main(argv: list[str]) -> int:
             create()
         elif action == "status":
             status()
+        elif action == "deploy":
+            deploy()
         elif action in {"stop", "start", "terminate"}:
             lifecycle(action)
         else:
-            raise PodError(f"Unknown action {action!r}; use create, status, stop, start or terminate.")
+            raise PodError(f"Unknown action {action!r}; use create, status, deploy, stop, start or terminate.")
     except (PodError, coolify.SetupError) as exc:
         print("POD ACTION FAILED: " + str(exc), file=sys.stderr)
         return 1
