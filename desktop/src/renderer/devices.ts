@@ -131,9 +131,6 @@ export class Mic {
 
   /** Open the microphone and start streaming frames. Does not start a call. */
   async start(): Promise<void> {
-    // Each call's frames count from 1, matching the runtime's reset timeline.
-    this.seq = 0;
-    this.startSample = 0;
     const stream = await this.open();
     this.stream = stream;
     const label = stream.getAudioTracks()[0]?.label ?? "default";
