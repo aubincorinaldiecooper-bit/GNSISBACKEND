@@ -237,7 +237,9 @@ def main() -> int:
         ]
     api_app = choose_unique(api_matches, "GNSIS API")
     api_envs = app_envs(client, str(api_app["uuid"]))
-    api_key = env_value(api_envs, "GNSIS_API_KEY")
+    # The API compares the bearer token byte-for-byte, so stray whitespace or
+    # wrapping quotes on the stored value would turn a correct key into a 401.
+    api_key = env_value(api_envs, "GNSIS_API_KEY").strip().strip("'\"").strip()
     if len(api_key) < 32:
         raise SetupError(
             "The GNSIS API application does not expose GNSIS_API_KEY to the Coolify automation token. "
@@ -384,6 +386,13 @@ def main() -> int:
         body={"confirm": "gnsis-voice", "smoke": True},
         timeout=30,
     )
+    if status == 401:
+        raise SetupError(
+            "The GNSIS worker was updated, but the live API at " + API_URL + " rejected the GNSIS_API_KEY "
+            "stored on the Coolify API application (HTTP 401). The running API container holds a different "
+            "key: Coolify applies environment changes only on redeploy, so redeploy the GNSIS API application "
+            "and re-run this workflow."
+        )
     if status != 202 or not isinstance(queued, dict) or not queued.get("task_id"):
         raise SetupError(
             f"The GNSIS worker was updated, but Modal deployment could not be queued through the internal API (HTTP {status})."
