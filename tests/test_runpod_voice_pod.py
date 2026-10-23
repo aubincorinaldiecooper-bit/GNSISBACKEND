@@ -106,5 +106,34 @@ class CreatePodTests(unittest.TestCase):
                 pod.find_pod()
 
 
+class DeployTests(unittest.TestCase):
+    def run_deploy(self, existing):
+        calls = []
+
+        def call(method, route, body=None):
+            calls.append((method, route, body))
+            if (method, route) == ("GET", "/pods"):
+                return existing
+            if method == "PATCH":
+                return {}
+            raise AssertionError(f"unexpected call {method} {route}")
+
+        env = {"GITHUB_REPOSITORY_OWNER": "Owner", "IMAGE_TAG": "abc123def456"}
+        with mock.patch.dict("os.environ", env), mock.patch.object(pod, "runpod", call), redirect_stdout(io.StringIO()):
+            pod.deploy()
+        return [c for c in calls if c[0] == "PATCH"]
+
+    def test_moves_the_pod_to_the_exact_build(self):
+        patches = self.run_deploy([{"id": "p1", "name": "gnsis-voice", "imageName": "ghcr.io/owner/gnsis-voice:latest"}])
+        self.assertEqual(patches, [("PATCH", "/pods/p1", {"imageName": "ghcr.io/owner/gnsis-voice:abc123def456"})])
+
+    def test_no_restart_when_already_on_that_build(self):
+        same = [{"id": "p1", "name": "gnsis-voice", "imageName": "ghcr.io/owner/gnsis-voice:abc123def456"}]
+        self.assertEqual(self.run_deploy(same), [])
+
+    def test_no_pod_is_not_an_error(self):
+        self.assertEqual(self.run_deploy([]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
