@@ -52,6 +52,41 @@ if [ ! -e /models/GNSIS/thinker ] || [ ! -e /models/MiniCPM-o-4_5 ] || [ ! -e /m
   echo "start-voice: weights copied." >&2
 fi
 
+# The talker's Step-Audio2 voice synthesizer loads several files from this
+# folder. A copy of the whole Gander/talker tree has dropped two of them
+# (config.yaml, hift_original.pt), so make the token2wav folder complete with a
+# dedicated copy, then verify. If a file is still missing, it is not on the
+# Modal volume at that path — fail loudly with the folder's contents rather
+# than boot into a talker that cannot synthesize speech.
+T2W=/models/Gander/talker/assets/token2wav
+T2W_REQUIRED="config.yaml hift_original.pt"
+t2w_incomplete=0
+for f in $T2W_REQUIRED; do
+  [ -e "$T2W/$f" ] || t2w_incomplete=1
+done
+if [ "$t2w_incomplete" = 1 ] && [ -n "${MODAL_TOKEN_ID:-}" ] && [ -n "${MODAL_TOKEN_SECRET:-}" ]; then
+  volume="${GNSIS_MODELS_VOLUME:-gnsis-model-weights}"
+  echo "start-voice: token2wav is incomplete; re-copying just that folder from Modal..." >&2
+  python -m pip install --quiet "modal==1.5.0" >/dev/null 2>&1 || true
+  stage=/models/.t2w-staging
+  rm -rf "$stage" && mkdir -p "$stage"
+  if modal volume get --env "${MODAL_ENVIRONMENT:-main}" "$volume" Gander/talker/assets/token2wav "$stage"; then
+    src="$(find "$stage" -type f -name config.yaml -printf '%h\n' 2>/dev/null | head -1)"
+    [ -n "$src" ] || src="$(find "$stage" -type d -name token2wav | head -1)"
+    [ -n "$src" ] || src="$stage"
+    mkdir -p "$T2W"
+    cp -rn "$src/." "$T2W/" 2>/dev/null || true
+  fi
+  rm -rf "$stage"
+fi
+for f in $T2W_REQUIRED; do
+  if [ ! -e "$T2W/$f" ]; then
+    echo "start-voice: token2wav folder contains:" >&2
+    ls -la "$T2W" >&2 2>/dev/null || echo "  (folder missing)" >&2
+    fail "token2wav is missing $f even after a dedicated copy. It is not on the Modal volume under Gander/talker/assets/token2wav; that file has to be added to the volume (or the image)."
+  fi
+done
+
 # The same assets modal/gnsis_voice.py checks in cache_gnsis_models.
 for path in \
   /models/MiniCPM-o-4_5 \
