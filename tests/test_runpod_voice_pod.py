@@ -61,6 +61,45 @@ class CreatePodTests(unittest.TestCase):
             self.run_create(existing=[{"id": "old", "name": "gnsis-voice"}])
         self.assertFalse([c for c in self.calls if c[:2] == ("POST", "/pods")])
 
+    def test_falls_back_to_community_when_secure_has_no_capacity(self):
+        tried = []
+
+        def call(method, route, body=None):
+            if (method, route) == ("GET", "/pods"):
+                return []
+            if (method, route) == ("POST", "/pods"):
+                tried.append(body["cloudType"])
+                if body["cloudType"] == "SECURE":
+                    raise pod.PodError("RunPod POST /pods -> HTTP 500: no instances currently available")
+                return {"id": "pod-community"}
+            raise AssertionError(route)
+
+        out = io.StringIO()
+        with mock.patch.object(pod, "runpod", call), mock.patch.object(
+            pod, "worker_environment", return_value={"GNSIS_EDGE_SECRET": SECRET}
+        ), mock.patch.object(pod, "registry_auth_id", return_value=None), redirect_stdout(out):
+            pod.create()
+        self.assertEqual(tried, ["SECURE", "COMMUNITY"])
+        self.assertIn("pod-community", out.getvalue())
+
+    def test_drops_simplemem_url_when_its_token_did_not_copy(self):
+        captured = {}
+
+        def call(method, route, body=None):
+            if (method, route) == ("GET", "/pods"):
+                return []
+            if (method, route) == ("POST", "/pods"):
+                captured["env"] = body["env"]
+                return {"id": "p"}
+            raise AssertionError(route)
+
+        env = {"GNSIS_EDGE_SECRET": SECRET, "GNSIS_SIMPLEMEM_URL": "https://simplemem.example.com"}
+        with mock.patch.object(pod, "runpod", call), mock.patch.object(
+            pod, "worker_environment", return_value=env
+        ), mock.patch.object(pod, "registry_auth_id", return_value=None), redirect_stdout(io.StringIO()):
+            pod.create()
+        self.assertNotIn("GNSIS_SIMPLEMEM_URL", captured["env"])
+
     def test_two_pods_with_the_name_refuse_to_guess(self):
         with mock.patch.object(pod, "runpod", return_value=[{"name": "gnsis-voice"}] * 2):
             with self.assertRaises(pod.PodError):
