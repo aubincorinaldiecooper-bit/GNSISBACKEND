@@ -111,8 +111,13 @@ def _resolve_policy_for_run():
 
 
 def _retrieve_memory_for_job(job: JobRecord):
-    """A bounded, tenant-scoped memory slice to pin on a run (best-effort)."""
-    if settings.memory_backend != "postgres":
+    """A bounded, tenant-scoped memory slice to pin on a run (best-effort).
+
+    Reviewed intelligence is always written to Postgres CodeMemory (the audit
+    store) and only mirrored into Omni-SimpleMem, so runs keep their memory
+    slice under both the "postgres" and "simplemem" backends.
+    """
+    if settings.memory_backend == "none":
         return None
     try:
         from .codememory import CodeMemory

@@ -22,6 +22,16 @@ EXECUTION_PROVIDER_GITHUB_ACTIONS = "github_actions"
 DEFAULT_ALLOWED_MODELS: List[str] = ["moonshotai/kimi-k3", "anthropic/claude-opus-4.8"]
 
 
+def _memory_backend() -> str:
+    """Resolve the memory backend: explicit GNSIS_MEMORY, else SimpleMem when configured."""
+    explicit = (os.environ.get("GNSIS_MEMORY") or "").strip().lower()
+    if explicit:
+        return explicit
+    if (os.environ.get("GNSIS_SIMPLEMEM_URL") or "").strip():
+        return "simplemem"
+    return "postgres"
+
+
 def _parse_json_env(name: str) -> dict:
     """Parse an optional JSON-object env var; return {} when unset/invalid."""
     raw = os.environ.get(name)
@@ -121,10 +131,13 @@ class Settings:
     # CORS origins allowed to call the API from a browser. Default "*".
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 
-    # Long-term memory backend: "postgres" (default), "none", or "simplemem".
-    # "simplemem" selects the Omni-SimpleMem sidecar as the general recall
-    # surface; it requires simplemem_url + GNSIS_SIMPLEMEM_INTERNAL_TOKEN and
-    # fails loudly rather than silently running memoryless.
+    # Long-term memory backend: "simplemem", "postgres", or "none".
+    # Omni-SimpleMem is the required GNSIS recall surface, so it is selected
+    # automatically whenever GNSIS_SIMPLEMEM_URL is set; GNSIS_MEMORY only
+    # overrides that choice explicitly. "simplemem" requires simplemem_url +
+    # GNSIS_SIMPLEMEM_INTERNAL_TOKEN and fails loudly rather than silently
+    # running memoryless. Without a URL the Postgres-only fallback is used and
+    # /health reports simplemem as "not_configured".
     memory_backend: str = "postgres"
     simplemem_url: Optional[str] = None
     # Postgres remains the CodeMemory audit store. When a sidecar is
@@ -527,8 +540,8 @@ class Settings:
             api_key=os.environ.get("GNSIS_API_KEY"),
             allowed_repos=repos,
             cors_origins=cors,
-            memory_backend=os.environ.get("GNSIS_MEMORY", "postgres"),
-            simplemem_url=os.environ.get("GNSIS_SIMPLEMEM_URL"),
+            memory_backend=_memory_backend(),
+            simplemem_url=(os.environ.get("GNSIS_SIMPLEMEM_URL") or "").strip() or None,
             simplemem_token_env=os.environ.get(
                 "GNSIS_SIMPLEMEM_TOKEN_ENV", "GNSIS_SIMPLEMEM_INTERNAL_TOKEN"
             ),
