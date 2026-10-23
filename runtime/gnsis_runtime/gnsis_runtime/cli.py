@@ -998,7 +998,11 @@ def main(argv: list[str] | None = None) -> None:
         # and hands already-open duplex sockets to the real app once ready.
         from .deferred_app import create_deferred_app
 
-        app = create_deferred_app(lambda: build_app(config))
+        from .edge_guard import guard_if_enabled
+
+        # Off on Modal, whose proxy auth already fronts every route; on for a
+        # host with a public address (RunPod), where it fails closed.
+        app = guard_if_enabled(create_deferred_app(lambda: build_app(config)))
 
         import uvicorn
 
