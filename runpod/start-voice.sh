@@ -53,13 +53,13 @@ if [ ! -e /models/GNSIS/thinker ] || [ ! -e /models/MiniCPM-o-4_5 ] || [ ! -e /m
 fi
 
 # The talker's Step-Audio2 voice synthesizer loads several files from this
-# folder. A copy of the whole Gander/talker tree has dropped two of them
-# (config.yaml, hift_original.pt), so make the token2wav folder complete with a
+# folder. A copy of the whole Gander/talker tree has dropped some of them
+# (config.yaml, hift_original.pt, talker.wav), so make the token2wav folder complete with a
 # dedicated copy, then verify. If a file is still missing, it is not on the
 # Modal volume at that path — fail loudly with the folder's contents rather
 # than boot into a talker that cannot synthesize speech.
 T2W=/models/Gander/talker/assets/token2wav
-T2W_REQUIRED="config.yaml hift_original.pt"
+T2W_REQUIRED="config.yaml hift_original.pt talker.wav"
 t2w_incomplete=0
 for f in $T2W_REQUIRED; do
   [ -e "$T2W/$f" ] || t2w_incomplete=1
