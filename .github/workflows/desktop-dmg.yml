@@ -119,10 +119,11 @@ jobs:
             --title "GNSIS for Mac (build ${{ github.run_number }})" \
             --notes "Built from ${{ github.sha }}. Unsigned development build."
       # Each build's DMG is ~240 MB and the repo's artifact storage is capped,
-      # so main keeps only the three newest "GNSIS for Mac" artifacts:
-      # the two newest earlier ones plus the one uploaded below.
+      # so every build keeps only the three newest "GNSIS for Mac" artifacts:
+      # the two newest earlier ones plus the one uploaded below. Fork PRs get a
+      # read-only token, so they skip this.
       - name: Prune old Mac build artifacts
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
