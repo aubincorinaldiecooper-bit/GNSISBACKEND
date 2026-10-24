@@ -79,7 +79,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 interface DesktopSettings {
   runtimeUrl?: unknown;
   actions?: unknown;
-  wakeGesture?: unknown;
   model?: unknown;
 }
 
@@ -93,25 +92,8 @@ function readSettings(): DesktopSettings {
   }
 }
 const SETTINGS = readSettings();
-let wakeGestureEnabled = SETTINGS.wakeGesture === true;
 // GNSIS 0.5 is set aside for now: a saved 0.5 choice opens on 1.0.
 let selectedModel: GnsisModel = "gnsis-1.0";
-
-function saveWakeGesture(enabled: boolean): boolean {
-  try {
-    writeFileSync(
-      path.join(app.getPath("userData"), "gnsis.json"),
-      JSON.stringify({ ...SETTINGS, wakeGesture: enabled }, null, 2) + "\n",
-      "utf8",
-    );
-    SETTINGS.wakeGesture = enabled;
-    wakeGestureEnabled = enabled;
-    return true;
-  } catch (error) {
-    hostLog("host", `tap gesture: could not save preference (${String(error)})`);
-    return false;
-  }
-}
 
 function saveModel(model: GnsisModel): GnsisModel {
   writeFileSync(
@@ -908,14 +890,8 @@ app.whenReady().then(async () => {
     hostLog("host", `floating window: the page reported ${cards} card(s) that take clicks`);
   });
   createWindow();
-  if (wakeGestureEnabled) tapGesture.start();
-  ipcMain.handle("wake:enabled", () => wakeGestureEnabled);
-  ipcMain.handle("wake:enabled:set", (_event, enabled: unknown) => {
-    if (typeof enabled !== "boolean" || !saveWakeGesture(enabled)) return wakeGestureEnabled;
-    if (enabled) tapGesture.start();
-    else tapGesture.stop();
-    return wakeGestureEnabled;
-  });
+  // fn always wakes GNSIS; there is no setting for it.
+  tapGesture.start();
   // Every renderer-facing channel is registered before the first network
   // wait below. The page can call or send to any of them within about 120 ms
   // of loading; a listener that attaches late either fails the call or loses

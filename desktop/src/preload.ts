@@ -50,9 +50,6 @@ contextBridge.exposeInMainWorld("gnsis", {
     ipcRenderer.invoke("voice:profile:upload", name, transcript, audioWavB64),
   deleteVoiceProfile: (profileId: string) =>
     ipcRenderer.invoke("voice:profile:delete", profileId),
-  wakeGestureEnabled: () => ipcRenderer.invoke("wake:enabled"),
-  setWakeGestureEnabled: (enabled: boolean) =>
-    ipcRenderer.invoke("wake:enabled:set", enabled),
   startCall: () => ipcRenderer.send("call:start"),
   endCall: (reason: string) => ipcRenderer.send("call:end", reason),
   sendAudioFrame: (header: unknown, pcm: Uint8Array) =>

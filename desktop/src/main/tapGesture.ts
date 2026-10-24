@@ -121,10 +121,10 @@ export class TapGesture {
     if (!message || typeof message !== "object") return;
     const value = message as { status?: unknown; gesture?: unknown; message?: unknown };
     if (value.status === "ready") {
-      this.options.log("tap gesture: listening for a deliberate double tap");
+      this.options.log("tap gesture: listening for the fn key");
     } else if (value.status === "unsupported") {
       this.unsupported = true;
-      this.options.log("tap gesture: this Mac has no supported motion sensor");
+      this.options.log("tap gesture: the fn key listener is unavailable on this Mac");
     } else if (value.status === "error") {
       this.unsupported = true;
       this.options.log(

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Face } from "../lib/face";
 import { shareLink } from "../lib/identity";
 import { copyText } from "../lib/platform";
-import { loadMicrophone, loadSpeakReplies, saveMicrophone, saveSpeakReplies } from "../lib/audioPrefs";
+import { loadMicrophone, saveMicrophone } from "../lib/audioPrefs";
 import { applyLook, loadLook, saveLook, type Look } from "../lib/look";
 import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore } from "../store/store";
 import type { VoicePreferences } from "../../../src/renderer/bridge";
@@ -10,7 +10,7 @@ import * as I from "./Icons";
 import { VoiceUpload } from "./VoiceUpload";
 
 type Section = "profile" | "voice" | "agents" | "notif" | "appear" | "privacy";
-const SECTIONS: { id: Section; label: string }[] = [
+const ALL_SECTIONS: { id: Section; label: string }[] = [
   { id: "profile", label: "Profile & sharing" },
   { id: "voice", label: "Settings" },
   { id: "agents", label: "Agents" },
@@ -18,6 +18,8 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "appear", label: "Appearance" },
   { id: "privacy", label: "Privacy & security" },
 ];
+// Sections whose switches nothing reads yet are left out of the real app.
+const BUILT_SECTIONS = new Set<Section>(["voice", "appear", "privacy"]);
 
 export function Settings() {
   const identity = useStore((s) => s.identity);
@@ -28,9 +30,12 @@ export function Settings() {
   // them yet. In the real app they are shown but switched off, so none of them
   // looks like it controls what GNSIS does. Demo mode keeps them live for review.
   const inert = !demo;
+  const SECTIONS = demo
+    ? ALL_SECTIONS
+    : ALL_SECTIONS.filter((x) => BUILT_SECTIONS.has(x.id));
   const notYet = inert ? NOT_YET : undefined;
   const [eraseNote, setEraseNote] = useState("");
-  const [section, setSection] = useState<Section>("profile");
+  const [section, setSection] = useState<Section>(demo ? "profile" : "voice");
   const [tg, setTg] = useState({ findable: true, autosend: true, approve: true, browser: true, nFinish: true, nNeeds: true, nSound: false, motion: false });
   const [copied, setCopied] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -43,8 +48,6 @@ export function Settings() {
   const [personaSaving, setPersonaSaving] = useState(false);
   const [mics, setMics] = useState<Array<{ id: string; label: string }>>([]);
   const [mic, setMic] = useState(loadMicrophone);
-  const [speak, setSpeak] = useState(loadSpeakReplies);
-  const [wakeGesture, setWakeGesture] = useState(false);
   const host = getHost();
   // Esc closes Settings, as it would any panel: floating, it sits over other apps.
   useEffect(() => {
@@ -61,10 +64,6 @@ export function Settings() {
       .then(setVoicePreferences)
       .catch(() => setVoiceNote("Voice settings are unavailable."));
   }, [identity]);
-  useEffect(() => {
-    if (!window.gnsis.wakeGestureEnabled) return;
-    void window.gnsis.wakeGestureEnabled().then(setWakeGesture).catch(() => {});
-  }, []);
   useEffect(() => {
     if (section !== "voice" || !host?.microphones) return;
     void host.microphones().then(setMics).catch(() => setMics([]));
@@ -140,7 +139,7 @@ export function Settings() {
             {section === "profile" && (
               <>
                 <div className="card row-card"><Face name={identity.publicId} gnsis size={84} /><div><h2>Your GNSIS</h2><p className="muted">Created on this computer. Your private key never leaves it.</p></div></div>
-                <Group title="Sharing" note={inert ? NOT_YET_NOTE : undefined}>
+                {!inert && <Group title="Sharing">
                   <div className="field-block">
                     <Label title="Public ID" desc="Safe to share. People can use it to find and message your GNSIS. It never reveals your private key." />
                     <div className="field-row">
@@ -158,28 +157,11 @@ export function Settings() {
                     <div className="muted small" aria-live="polite">{note}</div>
                   </div>
                   <Row title="Let people find me by my public ID" desc="Turn off to stay private. Your link stops working until you turn it back on.">{toggle("findable", "Let people find me by my public ID")}</Row>
-                </Group>
+                </Group>}
               </>
             )}
             {section === "voice" && (
               <Group>
-                <Row title="Wake gesture" desc="Double tap a supported MacBook to bring GNSIS forward and start listening. Tap once to finish the voice prompt.">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-label="Wake gesture"
-                    aria-checked={wakeGesture}
-                    className={"switch" + (wakeGesture ? " on" : "")}
-                    disabled={!window.gnsis.setWakeGestureEnabled}
-                    onClick={() => {
-                      const enabled = !wakeGesture;
-                      setWakeGesture(enabled);
-                      void window.gnsis.setWakeGestureEnabled?.(enabled)
-                        .then(setWakeGesture)
-                        .catch(() => setWakeGesture(!enabled));
-                    }}
-                  ><span /></button>
-                </Row>
                 <Row title="Microphone">
                   <select
                     aria-label="Microphone"
@@ -197,22 +179,7 @@ export function Settings() {
                   </select>
                 </Row>
                 {caps.transcript && <Row title="Send when I stop talking" desc="For dictation. Sends after a short pause.">{toggle("autosend", "Send when I stop talking")}</Row>}
-                <Row title="Read replies out loud">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-label="Read replies out loud"
-                    aria-checked={speak}
-                    className={"switch" + (speak ? " on" : "")}
-                    disabled={!host?.setSpeakReplies}
-                    onClick={() => {
-                      setSpeak(!speak);
-                      saveSpeakReplies(!speak);
-                      host?.setSpeakReplies?.(!speak);
-                    }}
-                  ><span /></button>
-                </Row>
-                <Row title="Voice">
+                {(voicePreferences?.available_voice_profiles.length ?? 0) > 1 && <Row title="Voice">
                   <select
                     aria-label="Voice"
                     className="select"
@@ -230,38 +197,11 @@ export function Settings() {
                       ),
                     )}
                   </select>
-                </Row>
-                <Row title="Speaking pace">
-                  <div className="pace-control">
-                    <input
-                      type="range"
-                      aria-label="Speaking pace"
-                      min={0}
-                      max={2}
-                      step={1}
-                      value={
-                        ["relaxed", "normal", "quick"].indexOf(
-                          voicePreferences?.voice_pace ?? "relaxed",
-                        )
-                      }
-                      disabled={!voicePreferences}
-                      onChange={(event) =>
-                        void updateVoice({
-                          voice_pace: (
-                            ["relaxed", "normal", "quick"] as const
-                          )[Number(event.target.value)],
-                        })
-                      }
-                    />
-                    <div className="pace-labels">
-                      <span>Relaxed</span><span>Normal</span><span>Quick</span>
-                    </div>
-                  </div>
-                </Row>
+                </Row>}
                 {voicePreferences?.can_upload_voice && window.gnsis.uploadVoiceProfile && (
                   <VoiceUpload onUploaded={setVoicePreferences} />
                 )}
-                <div className="field-block">
+                {!inert && <div className="field-block">
                   <Label title="Persona" />
                   <textarea
                     className="persona-field"
@@ -282,7 +222,7 @@ export function Settings() {
                       Save
                     </button>
                   </div>
-                </div>
+                </div>}
                 {voiceNote && <div className="muted small voice-note">{voiceNote}</div>}
               </Group>
             )}
@@ -301,26 +241,25 @@ export function Settings() {
               </Group>
             )}
             {section === "appear" && (
-              <Group note={inert ? NOT_YET_NOTE : undefined}>
+              <Group>
                 <Row title="Glass">
                   <div className="segmented" role="radiogroup" aria-label="Glass">
                     {(["clear", "dark"] as const).map((l) => <button key={l} type="button" role="radio" aria-checked={look === l} className={look === l ? "on" : ""} onClick={() => { setLook(l); saveLook(l); applyLook(l); }}>{l === "clear" ? "Clear" : "Dark"}</button>)}
                   </div>
                 </Row>
-                <Row title="Dock position">
+                {!inert && <Row title="Dock position">
                   <div className="segmented" role="radiogroup" aria-label="Dock position">
                     {(["bottom", "top"] as const).map((d) => <button key={d} type="button" role="radio" aria-checked={dock === d} className={dock === d ? "on" : ""} disabled={inert} title={notYet} onClick={() => setDock(d)}>{d === "bottom" ? "Bottom" : "Top"}</button>)}
                   </div>
-                </Row>
-                <Row title="Reduce motion" desc="Turns off breathing faces and sliding windows.">{toggle("motion", "Reduce motion")}</Row>
+                </Row>}
+                {!inert && <Row title="Reduce motion" desc="Turns off breathing faces and sliding windows.">{toggle("motion", "Reduce motion")}</Row>}
               </Group>
             )}
             {section === "privacy" && (
               <>
-                <Group note={NOT_YET_NOTE}>
+                <Group>
                   <Row title="Private key" desc={keyNote}><span className="chip green">{identity.storage === "keychain" ? "In this Mac’s Keychain" : "On this device"}</span></Row>
-                  <Row title="Back up your key" desc="If this computer is lost, a backup is the only way to get your GNSIS back."><button type="button" className="btn-secondary" disabled title="Not in this build yet">Back up…</button></Row>
-                  <Row title="Conversation history" desc="This app doesn’t keep the chat: it clears when GNSIS closes.">{null}</Row>
+                  {!inert && <Row title="Conversation history" desc="This app doesn’t keep the chat: it clears when GNSIS closes.">{null}</Row>}
                 </Group>
                 {demo && (
                   <Group title="Developer">

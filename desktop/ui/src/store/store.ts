@@ -1,4 +1,4 @@
-import { loadMicrophone, loadSpeakReplies } from "../lib/audioPrefs";
+import { loadMicrophone } from "../lib/audioPrefs";
 import { useSyncExternalStore } from "react";
 import {
   AGENT_ANSWER, AGENT_TOTAL, APPROVAL, COMMANDS, FOLLOW_PHRASE, QUESTION, ROOF_DRAFT, TYPING_NOT_CONNECTED,
@@ -142,7 +142,8 @@ export function configure(h: LiveHost, ids: IdentityStore) {
   identityStore = ids;
   setState({ caps: h.capabilities() });
   h.setMicrophone?.(loadMicrophone());
-  h.setSpeakReplies?.(loadSpeakReplies());
+  // GNSIS is voice-first: replies are always spoken.
+  h.setSpeakReplies?.(true);
   void h.modelPreference?.().then((model) => setState({ model })).catch(() => {});
   unsubscribeHost = h.subscribe(onLiveEvent);
 }

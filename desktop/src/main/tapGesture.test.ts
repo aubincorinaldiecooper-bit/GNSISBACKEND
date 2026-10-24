@@ -32,7 +32,7 @@ test("helper tap events reach the existing gesture callback", () => {
   child.stdout.emit("data", '{"status":"ready"}\n{"gesture":"double"}\n{"gesture":"single"}\n');
   assert.deepEqual(taps, ["double", "single"]);
   assert.deepEqual(lines, [
-    "tap gesture: listening for a deliberate double tap",
+    "tap gesture: listening for the fn key",
     "tap gesture: double tap detected",
     "tap gesture: single tap detected",
   ]);

@@ -63,7 +63,7 @@ export function dispatchWakeGesture(
   else if (kind === "single") onSingleTap();
 }
 
-/** A MacBook tap gesture, or the focused-window ⌥Space development fallback. */
+/** A tap of the fn key, or the focused-window ⌥Space development fallback. */
 export function useGesture(onDoubleTap: () => void, onSingleTap: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
