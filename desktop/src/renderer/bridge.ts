@@ -99,8 +99,6 @@ export interface GnsisBridge {
     audioWavB64: string,
   ): Promise<VoicePreferences>;
   deleteVoiceProfile?(profileId: string): Promise<VoicePreferences>;
-  wakeGestureEnabled?(): Promise<boolean>;
-  setWakeGestureEnabled?(enabled: boolean): Promise<boolean>;
   startCall(): void;
   /** Close the call on the timeline; the daemon session stays alive. */
   endCall(reason: string): void;

@@ -23,7 +23,7 @@ const compile = (arch, target) => {
     "-target",
     `${arch}-apple-macos14`,
     "-framework",
-    "IOKit",
+    "ApplicationServices",
     source,
     "-o",
     target,
