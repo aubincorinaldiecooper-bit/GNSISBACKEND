@@ -20,6 +20,7 @@ jobs:
     runs-on: macos-14
     permissions:
       contents: write
+      actions: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -105,13 +106,6 @@ jobs:
             --include='*.js' --include='*.json' 2>/dev/null | grep -v icon; then
             echo "possible secret material in packaged app" && exit 1
           fi
-      - uses: actions/upload-artifact@v4
-        with:
-          # What the owner downloads from the build page (30 September:
-          # "GNSIS for Mac"); GitHub serves it as "GNSIS for Mac.zip".
-          name: GNSIS for Mac
-          path: desktop/release/*.dmg
-          if-no-files-found: error
       # Each main build becomes the public "latest" release that gnsis.studio's
       # Download for Mac button links to (releases/latest/download/GNSIS-for-Mac.dmg).
       - name: Publish public release
@@ -124,3 +118,25 @@ jobs:
             --target "${{ github.sha }}" --latest \
             --title "GNSIS for Mac (build ${{ github.run_number }})" \
             --notes "Built from ${{ github.sha }}. Unsigned development build."
+      # Each build's DMG is ~240 MB and the repo's artifact storage is capped,
+      # so every build keeps only the three newest "GNSIS for Mac" artifacts:
+      # the two newest earlier ones plus the one uploaded below. Fork PRs get a
+      # read-only token, so they skip this.
+      - name: Prune old Mac build artifacts
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+            -q '.artifacts[] | select(.name == "GNSIS for Mac" and (.expired | not)) | "\(.created_at) \(.id)"' \
+            | sort -r | tail -n +3 | while read -r _ id; do
+              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
+            done
+      - uses: actions/upload-artifact@v4
+        with:
+          # What the owner downloads from the build page (30 September:
+          # "GNSIS for Mac"); GitHub serves it as "GNSIS for Mac.zip".
+          name: GNSIS for Mac
+          path: desktop/release/*.dmg
+          if-no-files-found: error
+          retention-days: 7
