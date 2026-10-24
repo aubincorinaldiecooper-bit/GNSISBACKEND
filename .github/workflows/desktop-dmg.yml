@@ -20,6 +20,7 @@ jobs:
     runs-on: macos-14
     permissions:
       contents: write
+      actions: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -105,6 +106,20 @@ jobs:
             --include='*.js' --include='*.json' 2>/dev/null | grep -v icon; then
             echo "possible secret material in packaged app" && exit 1
           fi
+      # Each main build becomes the public "latest" release that gnsis.studio's
+      # Download for Mac button links to (releases/latest/download/GNSIS-for-Mac.dmg).
+      # Each build's DMG is ~240 MB and the repo's artifact storage is capped,
+      # so main keeps only the three newest "GNSIS for Mac" artifacts.
+      - name: Prune old Mac build artifacts
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+            -q '.artifacts[] | select(.name == "GNSIS for Mac" and (.expired | not)) | "\(.created_at) \(.id)"' \
+            | sort -r | tail -n +4 | while read -r _ id; do
+              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
+            done
       - uses: actions/upload-artifact@v4
         with:
           # What the owner downloads from the build page (30 September:
@@ -112,8 +127,7 @@ jobs:
           name: GNSIS for Mac
           path: desktop/release/*.dmg
           if-no-files-found: error
-      # Each main build becomes the public "latest" release that gnsis.studio's
-      # Download for Mac button links to (releases/latest/download/GNSIS-for-Mac.dmg).
+          retention-days: 7
       - name: Publish public release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
