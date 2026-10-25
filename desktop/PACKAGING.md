@@ -86,17 +86,22 @@ To update, quit GNSIS first, then drag the new GNSIS into Applications and choos
 
 ## Signing / notarization
 
-- Development DMG (default): run with `CSC_IDENTITY_AUTO_DISCOVERY=false` —
-  produces an **unsigned** artifact. Install requires the usual
-  unsigned-app ritual (right-click → Open, or `xattr -dr com.apple.quarantine`).
+- Development DMG (default): every build is **ad-hoc signed** (`mac.identity:
+  "-"` in `electron-builder.yml`), which needs no Apple Developer account. The
+  signature is what gives macOS a code identity to bind a permission to, so
+  the app appears in the privacy panes (see macOS permissions below). It also
+  means no unsigned-app ritual: the DMG installs and opens normally.
 - Distribution: set `CSC_LINK` / `CSC_KEY_PASSWORD` (Developer ID
   Application certificate) and `APPLE_API_KEY` / `APPLE_API_KEY_ID` /
   `APPLE_API_ISSUER` (App Store Connect API key) in the environment —
   electron-builder signs with hardened runtime and notarizes automatically.
 - Never commit `.p12` files, private keys, Apple passwords, or API keys.
+- Do **not** set `CSC_IDENTITY_AUTO_DISCOVERY=false`. It suppresses signing
+  altogether; the resulting unsigned bundle never shows up in the privacy
+  panes, so nobody can grant it anything.
 
-Current status: `signed: no` / `notarized: no` unless the above credentials
-are configured.
+Current status: `signed: ad-hoc` by default; Developer ID once the
+credentials above are configured.
 
 ## Entitlements (hardened runtime)
 
@@ -129,6 +134,26 @@ run time: the page's content policy allows only its own files. See
 On first use the installed app requests microphone, camera (when used), and
 screen recording through the usual macOS prompts. Denied permission surfaces
 as a state, not a crash — other functionality remains usable.
+
+**If live voice is silent with a flat microphone meter, the setting to check
+is not Microphone.** On macOS 26 (Tahoe) the switch that actually unblocks
+GNSIS audio is:
+
+> **System Settings → Privacy & Security → Screen & System Audio Recording**
+> (or **System Audio Recording Only**, depending on the macOS build)
+
+Switch **GNSIS** on there, then run the app again. Without it the capture track
+is delivered muted: the frames still arrive at the runtime, correctly sized,
+containing silence, so the model hears nothing and only ever answers
+"listen". That looks exactly like a broken model and is not one.
+
+An app only appears in those panes if it is code-signed — which is why builds
+are ad-hoc signed by default (see Signing above). An unsigned build is
+invisible there and can never be granted anything.
+
+Granting a copy of the app signs nothing else: a copy at `~/Desktop/…` is a
+separate identity from the one in `/Applications`, and each needs its own
+switch.
 
 ## Actions on the Mac
 

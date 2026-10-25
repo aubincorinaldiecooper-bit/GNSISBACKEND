@@ -21,6 +21,14 @@ asarUnpack:
   - "node_modules/@ubjs/**"
 
 mac:
+  # Ad-hoc code signature ("codesign --sign -"). No Apple Developer account is
+  # needed, and it is what gives macOS TCC a signing identity to bind a
+  # permission to. An unsigned bundle never appears in the privacy panes, so
+  # the person cannot switch GNSIS on under Screen & System Audio Recording —
+  # and without that the microphone meter stays flat and voice is silent.
+  # Confirmed on macOS 26 (Tahoe): the ad-hoc signed copy appeared in the pane
+  # and voice worked, while the unsigned build never did.
+  identity: "-"
   category: public.app-category.productivity
   # GNSIS's app icon, generated from blobatar by `npm run icon`
   # (scripts/app-icon.mjs); electron-builder converts the PNG to .icns at
@@ -71,8 +79,13 @@ dmg:
 # packages. They are deliberately kept as single-arch resources while the
 # Electron executable/framework remain universal.
 #
-# Signing/notarization: enabled automatically when credentials exist.
+# Signing: every build gets an ad-hoc signature (mac.identity: "-" above), so
+# the app is a TCC-recognisable identity without any Apple account.
+#
+# Distribution signing replaces it automatically when credentials exist:
 #   CSC_LINK / CSC_KEY_PASSWORD            — Developer ID certificate
 #   APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER — notarization API key
-# For an unsigned development DMG run with CSC_IDENTITY_AUTO_DISCOVERY=false.
+# Do NOT set CSC_IDENTITY_AUTO_DISCOVERY=false in the build environment: it
+# suppresses signtool altogether and produces the unsigned artifact that macOS
+# refuses to show in the privacy panes.
 # NEVER commit certificates, keys, or Apple credentials to this repo.

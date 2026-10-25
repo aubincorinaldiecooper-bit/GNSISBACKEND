@@ -21,8 +21,11 @@ jobs:
     permissions:
       contents: write
       actions: write
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    # No CSC_IDENTITY_AUTO_DISCOVERY here on purpose. Setting it to "false"
+    # suppressed signing entirely, and an unsigned bundle never appears in
+    # macOS's privacy panes — so the person could not switch GNSIS on under
+    # Screen & System Audio Recording and got no microphone audio at all.
+    # mac.identity: "-" in electron-builder.yml ad-hoc signs the app instead.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,9 +64,24 @@ jobs:
             @trycua/cua-driver-darwin-x64@0.34.0 \
             @ubjs/node-darwin-arm64@0.31.0-3 \
             @ubjs/node-darwin-x64@0.31.0-3
-      - name: Package unsigned development DMG (universal)
+      - name: Package ad-hoc signed development DMG (universal)
         working-directory: desktop
         run: npm run package:mac
+      - name: Check the app really is signed
+        working-directory: desktop
+        run: |
+          # A green electron-builder exit is not proof of signing: assert it,
+          # because an unsigned bundle is invisible to macOS permissions and
+          # the failure (silent microphone) looks like a product bug.
+          APP="release/mac-universal/GNSIS.app"
+          codesign -dv --verbose=2 "$APP" 2>&1 | tee /tmp/sig.txt
+          grep -q "Signature=adhoc" /tmp/sig.txt || grep -q "Authority=Developer ID" /tmp/sig.txt || {
+            echo "the packaged app is not signed; macOS will not offer it any permissions"; exit 1;
+          }
+          codesign -d --entitlements - "$APP" 2>&1 | grep -q "audio-input" || {
+            echo "the signed app does not carry the audio-input entitlement"; exit 1;
+          }
+          codesign --verify --deep --strict "$APP"
       - name: Verify packaged app is a real universal binary
         working-directory: desktop
         run: |
@@ -117,7 +135,7 @@ jobs:
           gh release create "desktop-${{ github.run_number }}" GNSIS-for-Mac.dmg \
             --target "${{ github.sha }}" --latest \
             --title "GNSIS for Mac (build ${{ github.run_number }})" \
-            --notes "Built from ${{ github.sha }}. Unsigned development build."
+            --notes "Built from ${{ github.sha }}. Ad-hoc signed development build: it installs without the unsigned-app ritual, and macOS offers it permissions normally."
       # Each build's DMG is ~240 MB and artifact storage on this plan is 500 MB,
       # so every build may leave at most two live artifacts: the newest earlier
       # one plus the one uploaded below.
