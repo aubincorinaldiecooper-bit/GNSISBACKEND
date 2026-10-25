@@ -53,12 +53,16 @@ test("a screen picked late, after the person switched to the camera, never repla
   }
 });
 
-// ---- microphone frames across calls -----------------------------------------
-// A call ends with `stop: false`, so the next call arrives on the same daemon
-// session. The daemon's audio timeline refuses frames that do not continue
-// its own count, and it was left holding `1` after the previous call, so every
-// call has to reopen at sequence 1 / start_sample 0. This is the regression
-// guard for "audio frame sequence must be 1, got 1079".
+// ---- microphone frames ------------------------------------------------------
+// These follow what a real session in gnsis-host.log showed, not what the code
+// looked like it should do:
+//
+//   a fresh socket       -> the daemon wants sequence 1, and accepts it
+//   mute then unmute     -> the daemon keeps counting; "must be 929, got 1" was
+//                           a session-ending failure while the mic was muted
+//   reusing an old count -> refused ("must be 831, got 1")
+//
+// So the counter restarts on the connection boundary, and only there.
 
 type AudioHarness = {
   mic: Mic;
@@ -124,7 +128,7 @@ function audioHarness(): AudioHarness {
   };
 }
 
-test("a second call on the same session reopens the microphone's frame count at 1", async () => {
+test("a fresh connection opens the microphone at sequence 1", async () => {
   const h = audioHarness();
   try {
     await h.mic.start();
@@ -133,37 +137,76 @@ test("a second call on the same session reopens the microphone's frame count at 
     assert.deepEqual(
       h.frames.map((f) => [f.sequence, f.start_sample]),
       [[1, 0], [2, 320]],
-      "the first call counts from 1 and keeps its sample clock",
-    );
-    // The call ends (live_ended, stop: false); the next call opens the mic again.
-    h.mic.stop();
-    await h.mic.start();
-    h.emit();
-    assert.deepEqual(
-      [h.frames.at(-1)?.sequence, h.frames.at(-1)?.start_sample],
-      [1, 0],
-      "the next call must not continue the previous call's count",
+      "the first frames of a connection count from 1 and keep the sample clock",
     );
   } finally {
     h.restored();
   }
 });
 
-test("mute then unmute keeps counting, because it is the same call", async () => {
+test("mute then unmute keeps counting: the daemon is still on the same timeline", async () => {
   const h = audioHarness();
   try {
     await h.mic.start();
     h.emit();
     h.emit();
-    // Mute releases capture only; unmute reopens it inside the same call, and
-    // the daemon is still expecting the very next number.
+    // Mute releases capture; unmute reopens it. This is the case that ended a
+    // real session with "audio frame sequence must be 929, got 1".
     h.mic.stop();
     await h.mic.start();
     h.emit();
+    h.emit();
     assert.deepEqual(
       h.frames.map((f) => f.sequence),
-      [1, 2, 1],
-      "an unmute inside a call restarts at 1, matching the daemon's per-call baseline",
+      [1, 2, 3, 4],
+      "an unmute inside a call continues the count instead of restarting it",
+    );
+    assert.deepEqual(
+      h.frames.map((f) => f.start_sample),
+      [0, 320, 640, 960],
+      "and the sample clock keeps rising across the mute",
+    );
+  } finally {
+    h.restored();
+  }
+});
+
+test("a new connection restarts the count, so a reopened socket is accepted", async () => {
+  const h = audioHarness();
+  try {
+    await h.mic.start();
+    h.emit();
+    h.emit();
+    // The socket drops and comes back: the daemon builds a new timeline and
+    // expects 1 again. Reusing the old count was refused ("must be 831, got 1").
+    h.mic.stop();
+    h.mic.resendFromStart();
+    await h.mic.start();
+    h.emit();
+    assert.deepEqual(
+      h.frames.map((f) => [f.sequence, f.start_sample]),
+      [[1, 0], [2, 320], [1, 0]],
+      "the first frame after a reconnect starts a new stream",
+    );
+  } finally {
+    h.restored();
+  }
+});
+
+test("a new connection while the microphone is open takes effect on the next frame", async () => {
+  const h = audioHarness();
+  try {
+    await h.mic.start();
+    h.emit();
+    h.emit();
+    // A reconnect can land without anyone touching the microphone; resetting
+    // must not need a reopen, or frames keep the stale count.
+    h.mic.resendFromStart();
+    h.emit();
+    assert.deepEqual(
+      h.frames.map((f) => [f.sequence, f.start_sample]),
+      [[1, 0], [2, 320], [1, 0]],
+      "the next frame after the reset starts the new stream",
     );
   } finally {
     h.restored();

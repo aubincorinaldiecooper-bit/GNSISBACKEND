@@ -140,16 +140,11 @@ export class Mic {
     }
     const ctx = new AudioContext();
     await this.session.start(async () => ({ stream, ctx }));
-    // Every call opens a new capture, but the daemon session outlives it: the
-    // renderer ends a call with `stop: false`, so the next call arrives on the
-    // same conversation. The daemon's audio timeline keeps its own baseline
-    // from the call before, so this call's frames have to start counting
-    // again from 1 or the daemon refuses them ("audio frame sequence must be
-    // 1, got 1079") and ends the session. Reset here, once the previous
-    // capture has been released, so mute/unmute (same counters, same session)
-    // is untouched.
-    this.seq = 0;
-    this.startSample = 0;
+    // The frame counters are deliberately NOT reset here. Mute and unmute both
+    // call start(): they release and reopen capture while the daemon timeline
+    // keeps counting, so a reset here made the next frame "must be 929, got 1"
+    // and the daemon ended the session. The reset belongs on the connection,
+    // where the daemon builds a new timeline — see resendFromStart().
     await ctx.audioWorklet.addModule("./pcm-worklet.js");
     const src = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, "pcm-resampler");
@@ -178,6 +173,23 @@ export class Mic {
 
   setDevice(deviceId: string): void {
     this.deviceId = deviceId;
+  }
+
+  /**
+   * The duplex socket opened, so the daemon has built a fresh audio timeline
+   * and expects the stream to begin at sequence 1 / start_sample 0.
+   *
+   * Observed on a real session (gnsis-host.log): every call that followed a
+   * fresh connect opened at 1 and was accepted, including one that ran 8741
+   * frames. Calls that carried a count from the previous socket were refused
+   * ("must be 831, got 1"). Mute/unmute is the opposite case and must keep
+   * counting, which is why this lives on the connection and not in start().
+   *
+   * Safe while capture is already open: the next frame simply carries 1.
+   */
+  resendFromStart(): void {
+    this.seq = 0;
+    this.startSample = 0;
   }
 
   /** The chosen input, or the system default when it is gone. */

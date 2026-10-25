@@ -28,6 +28,8 @@ export interface MicLike {
   stop(): void;
   /** The input to open next time; "" is the system default. */
   setDevice?(deviceId: string): void;
+  /** A new duplex socket opened: the daemon expects frames from sequence 1 again. */
+  resendFromStart?(): void;
 }
 
 export interface PlaybackLike {
@@ -494,6 +496,14 @@ export class ElectronLiveHost implements LiveHost {
         if (c?.status === "loading") this.setLink("connecting", "GNSIS is loading itself onto a machine.");
         break;
       case "ready":
+        // Every `ready` means the daemon opened a fresh duplex socket, and with
+        // it a fresh audio timeline that accepts the stream only from
+        // sequence 1. Observed on a real session: a call carrying a count from
+        // the previous socket was refused ("must be 831, got 1"), while every
+        // call after a fresh `ready` opened at 1 and ran (one sent 8741 frames).
+        // Start the microphone's count again here — at the connection boundary
+        // — and never in Mic.start(), which mute and unmute also go through.
+        this.devices.mic.resendFromStart?.();
         this.typedTurns = answersTypedTurns(c);
         this.setLink("ready");
         break;
