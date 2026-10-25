@@ -118,18 +118,29 @@ jobs:
             --target "${{ github.sha }}" --latest \
             --title "GNSIS for Mac (build ${{ github.run_number }})" \
             --notes "Built from ${{ github.sha }}. Unsigned development build."
-      # Each build's DMG is ~240 MB and the repo's artifact storage is capped,
-      # so every build keeps only the three newest "GNSIS for Mac" artifacts:
-      # the two newest earlier ones plus the one uploaded below. Fork PRs get a
-      # read-only token, so they skip this.
+      # Each build's DMG is ~240 MB and artifact storage on this plan is 500 MB,
+      # so every build may leave at most two live artifacts: the newest earlier
+      # one plus the one uploaded below.
+      #
+      # This matches on the name prefix, not one exact name. Pinning the exact
+      # string "GNSIS for Mac" (the 30 September rename) left the 48
+      # GNSIS-dmg-universal and 11 GNSIS-dmg-arm64 artifacts from before the
+      # rename unpruned forever; together with the two live builds they grew to
+      # 18.25 GB and the quota stopped every upload. A prefix survives the next
+      # rename too. It also only ever deletes artifacts whose name starts with
+      # "GNSIS", so nothing else in the repository is at risk.
+      #
+      # Fork PRs get a read-only token, so they skip this.
       - name: Prune old Mac build artifacts
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-            -q '.artifacts[] | select(.name == "GNSIS for Mac" and (.expired | not)) | "\(.created_at) \(.id)"' \
-            | sort -r | tail -n +3 | while read -r _ id; do
+            -q '.artifacts[]
+                | select((.name | startswith("GNSIS")) and (.expired | not))
+                | "\(.created_at) \(.id)"' \
+            | sort -r | tail -n +2 | while read -r _ id; do
               gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
             done
       - uses: actions/upload-artifact@v4
