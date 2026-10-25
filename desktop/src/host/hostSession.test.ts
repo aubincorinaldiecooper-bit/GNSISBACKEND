@@ -12,6 +12,25 @@ import type { ScreenChannelConfig } from "../shared/protocol.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Waits until `found` answers with a value, instead of sleeping a fixed time.
+ *
+ * The two transport-error tests used to wait 200 ms and then look. The suite
+ * runs in parallel, and on a loaded machine the socket error sometimes landed
+ * late: the test then failed with the link still "connecting" even though the
+ * behaviour was correct. Polling until it arrives, with a generous ceiling,
+ * tests the behaviour rather than the speed of the machine.
+ */
+const until = async <T>(found: () => T | null | undefined, what: string, timeoutMs = 5_000): Promise<T> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = found();
+    if (value !== null && value !== undefined) return value;
+    if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}`);
+    await sleep(10);
+  }
+};
+
 const capabilities = {
   mic: true,
   camera: true,
@@ -46,12 +65,14 @@ test("duplex socket errors surface as transport.error, not uncaught exceptions",
     onControl: (c) => controls.push(c),
   });
   session.connect("s1");
-  await sleep(200);
-  const err = controls.find(
-    (c) => (c as { type?: string; channel?: string }).type === "transport.error" &&
-      (c as { channel?: string }).channel === "duplex",
+  await until(
+    () =>
+      controls.find(
+        (c) => (c as { type?: string; channel?: string }).type === "transport.error" &&
+          (c as { channel?: string }).channel === "duplex",
+      ),
+    "a duplex transport.error control event",
   );
-  assert.ok(err, "expected a duplex transport.error control event");
   session.disconnect("test_done");
 });
 
@@ -68,12 +89,14 @@ test("screen socket errors surface via onScreen, not uncaught exceptions", async
   session.connect("s1");
   // Screen transport only opens once the daemon-issued token arrives.
   session["screen"]?.applyChannel(channel);
-  await sleep(200);
-  const err = updates.find((u) => {
-    const c = (u as { control?: { type?: string; channel?: string } }).control;
-    return c?.type === "transport.error" && c?.channel === "screen";
-  });
-  assert.ok(err, "expected a screen transport.error update");
+  await until(
+    () =>
+      updates.find((u) => {
+        const c = (u as { control?: { type?: string; channel?: string } }).control;
+        return c?.type === "transport.error" && c?.channel === "screen";
+      }),
+    "a screen transport.error update",
+  );
   session.disconnect("test_done");
 });
 

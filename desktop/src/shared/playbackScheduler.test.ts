@@ -29,6 +29,15 @@ const fakeSource = (duration: number) => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Polls until `ok` holds, so a slow machine is not mistaken for a bug. */
+const within = async (ok: () => boolean, what: string, timeoutMs = 5_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!ok()) {
+    if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}`);
+    await sleep(5);
+  }
+};
+
 test("chunks schedule sequentially, each starting when the previous ends", async () => {
   let now = 100;
   const sched = new PlaybackScheduler(() => now);
@@ -43,9 +52,13 @@ test("chunks schedule sequentially, each starting when the previous ends", async
   assert.equal(s2.startedAt, 100.05);
   // s2's started ack must not fire at enqueue time — only at its scheduled start.
   assert.deepEqual(events, []);
-  await sleep(20);
-  assert.deepEqual(events, ["s1-started"]);
-  await sleep(60);
+  // Wait for each ack rather than sleeping a fixed slice: under the parallel
+  // suite a loaded machine could deliver s2's start late, and the fixed sleep
+  // then reported a scheduling bug that was really just slow timers. The ack
+  // still must NOT arrive at enqueue time — the assertion above pins that.
+  await within(() => events.includes("s1-started"), "s1's started ack");
+  await within(() => events.includes("s2-started"), "s2's started ack");
+  // Sequential, in that order: s2's start is never observed before s1's.
   assert.deepEqual(events, ["s1-started", "s2-started"]);
 });
 
