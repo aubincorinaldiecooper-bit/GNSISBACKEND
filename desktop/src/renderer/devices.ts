@@ -140,6 +140,16 @@ export class Mic {
     }
     const ctx = new AudioContext();
     await this.session.start(async () => ({ stream, ctx }));
+    // Every call opens a new capture, but the daemon session outlives it: the
+    // renderer ends a call with `stop: false`, so the next call arrives on the
+    // same conversation. The daemon's audio timeline keeps its own baseline
+    // from the call before, so this call's frames have to start counting
+    // again from 1 or the daemon refuses them ("audio frame sequence must be
+    // 1, got 1079") and ends the session. Reset here, once the previous
+    // capture has been released, so mute/unmute (same counters, same session)
+    // is untouched.
+    this.seq = 0;
+    this.startSample = 0;
     await ctx.audioWorklet.addModule("./pcm-worklet.js");
     const src = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, "pcm-resampler");
@@ -159,7 +169,10 @@ export class Mic {
       this.onLevel?.(pcmLevel(pcm));
     };
     src.connect(node);
-    node.connect(ctx.destination);
+    // Deliberately not connected to ctx.destination: the worklet hands its
+    // 16 kHz frames back through port.postMessage, and connecting the node to
+    // the speaker would only ever put the microphone in the person's ears.
+    // Staying unconnected to the output keeps process() running.
     this.log("mic on");
   }
 
