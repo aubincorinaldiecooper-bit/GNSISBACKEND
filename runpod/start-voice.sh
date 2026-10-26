@@ -16,6 +16,7 @@ LOG_FILE="${GNSIS_LOG_FILE:-/models/gnsis-logs/runtime.log}"
 LOG_BOOTS="${GNSIS_LOG_BOOTS:-30}"
 # /logs?boot=N serves up to 30 earlier boots; keep no more than it can serve.
 case "$LOG_BOOTS" in ''|*[!0-9]*) LOG_BOOTS=30 ;; esac
+LOG_BOOTS=$((10#$LOG_BOOTS)) # "08" is not octal here
 [ "$LOG_BOOTS" -ge 1 ] || LOG_BOOTS=1
 [ "$LOG_BOOTS" -le 30 ] || LOG_BOOTS=30
 export GNSIS_LOG_FILE="$LOG_FILE"

@@ -611,6 +611,11 @@ test("a failed call's raw text keeps its shape in the log but never the words ty
   assert.equal(redactRawCall('{"name": "input", "arguments": {"action": "type", "text": "my secret words"}}'), '{"name": "input", "arguments": {"action": "type", "text": "<15 chars>"}}');
   assert.equal(redactRawCall('{"name":"input","arguments":{"text":"cut off mid'), '{"name":"input","arguments":{"text":"<11 chars>"');
   assert.equal(redactRawCall('{"api_token": "abc\\"def", "target": "Notes"}'), '{"api_token": "<8 chars>", "target": "Notes"}');
+  assert.equal(redactRawCall('{"name": "open", "arguments": {"target": "Notes"}}'), '{"name": "open", "arguments": {"target": "Notes"}}');
+  assert.equal(redactRawCall('{"name":"input","arguments":{"tex'), '{"name":"input","arguments":{"<3 chars>"');
+  assert.equal(redactRawCall('{"name":"input","arguments":{"text": hello there}}'), '{"name":"input","arguments":{"text": <5 chars> <5 chars>}}');
+  assert.equal(redactRawCall('{"keys":["my","pass"],"count":2,"ok":true}'), '{"keys":["<2 chars>","<4 chars>"],"count":2,"ok":true}');
+  assert.equal(redactRawCall('{"target": "my private diary entry, cut'), '{"target": "<27 chars>"');
   const line = forLog({ type: "tool.error", raw_tool_text: '<tool_call>{"name": "input", "arguments": {"text": "hello there"}}</tool_call>' });
   assert.ok(!line.includes("hello there") && line.includes("input"), line);
 });

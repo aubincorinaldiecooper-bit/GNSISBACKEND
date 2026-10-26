@@ -687,15 +687,34 @@ const isDenied = (e: unknown) => (e as { name?: string } | null)?.name === "NotA
 /** Fields that carry what someone said, typed or asked for: logged as their length only. */
 const WORDS = new Set(["text", "content", "transcript", "final_asr"]);
 
-const RAW_WORDS = /("(?:text|content|transcript|final_asr|[^"]*(?:token|secret|password)[^"]*)"\s*:\s*)"((?:[^"\\]|\\.)*)(?:"|$)/gi;
+/** Keys whose short, plain value a raw call keeps: the tool and what it was asked to do. */
+const RAW_KEEP = new Set(["name", "action", "tool", "target", "app"]);
+const RAW_PARTS = /(<\/?tool_call>)|"((?:[^"\\]|\\.)*)("?)|([^\s"{}[\],:<>]+)/g;
 
 /**
- * The model's raw call text, which may not parse: its shape stays, and the
- * value of any words or credential field becomes its length, even when the
- * call broke off mid-string.
+ * The model's raw call text, which may not parse. Anything not known to be
+ * safe becomes its length: every string value except the tool, action and
+ * target, any string cut off before its closing quote, and any bare word
+ * outside quotes. Key names, punctuation, numbers and true/false/null stay.
  */
 export function redactRawCall(raw: string): string {
-  return raw.replace(RAW_WORDS, (_m, head: string, body: string) => `${head}"<${body.length} chars>"`);
+  let lastKey: string | null = null;
+  return raw.replace(RAW_PARTS, (m: string, tag?: string, str?: string, close?: string, bare?: string, offset = 0) => {
+    if (tag) return tag;
+    if (str !== undefined) {
+      const isKey = close === '"' && /^\s*:/.test(raw.slice(offset + m.length));
+      if (isKey && /^[\w.-]{1,40}$/.test(str)) {
+        lastKey = str;
+        return m;
+      }
+      const keep = !isKey && close === '"' && lastKey !== null && RAW_KEEP.has(lastKey) && /^[\w.\- ]{1,60}$/.test(str);
+      lastKey = null;
+      return keep ? m : `"<${str.length} chars>"`;
+    }
+    lastKey = null;
+    const word = bare ?? m;
+    return /^(-?\d[\d.eE+-]*|true|false|null)$/.test(word) ? m : `<${word.length} chars>`;
+  });
 }
 
 /** What a `tool.error` leaves in the chat: which tool, and why it did not run. */

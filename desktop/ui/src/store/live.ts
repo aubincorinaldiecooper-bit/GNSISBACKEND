@@ -186,7 +186,8 @@ export function applyLiveEvent(live: LiveState, ev: LiveEvent, now: number): Liv
       // line; the moment it starts does not, only what came of it.
       const line = actionLine(ev.state, ev.text);
       if (line) commit.push({ role: "system", text: line, step: { state: ev.state as StepState, endedAt: now } });
-      const stepOpen = ev.state === "working" || ev.state === "waiting";
+      // A notice (a refused call) is not the running step's outcome.
+      const stepOpen = ev.notice ? live.stepOpen : ev.state === "working" || ev.state === "waiting";
       next = { ...live, agent: closeWords ? null : live.agent, stepOpen, thinkingSince: null };
       break;
     }
