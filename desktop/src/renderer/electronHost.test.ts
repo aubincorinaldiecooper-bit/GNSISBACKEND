@@ -476,7 +476,7 @@ test("the host log keeps a control's shape, never its credentials or its words",
   assert.ok(!log.includes(token) && !log.includes("scr_secret"), "no credential reaches the log");
   assert.ok(!log.includes("Andrew Tate"), "no words reach the log");
   assert.ok(log.includes('"session_id":"host-42"') && log.includes('"resume_token":"<redacted>"'));
-  assert.ok(log.includes('"name":"input"') && log.includes('"arguments":"<'), "the tool's name stays; its arguments become a length");
+  assert.ok(log.includes('"name":"input"') && log.includes('"action":"type"') && log.includes('"text":"<11 chars>"'), "the tool's name and arguments stay; typed words become a length");
   assert.ok(log.includes('"text":"<38 chars>"') && log.includes('"generation":3'));
 });
 
@@ -588,4 +588,21 @@ test("a typed GNSIS 0.5 reply plays outside a call; a call's reply does not play
   bridge.localAudio(new Uint8Array(200), { call: true });
   assert.ok(!devices.calls.includes("play:200"), "ended call stays silent");
   assert.ok(bridge.logs.some((l) => l.includes("reason=call_ended")));
+});
+
+test("a tool.error is logged in full and tells the person which tool did not run and why", async () => {
+  const { bridge, events } = harness();
+  await tick();
+  const raw = '<tool_call>{"name": "open_app", "arguments": {"target": "Notes"}}</tool_call>';
+  const failed = { type: "tool.error", index: 4, is_listen: false, text: "", end_of_turn: false, current_time: 4, audio: false, generated_token_ids: [1, 2, 3], generation_id: 2, unit_id: 4, interrupted: false, decision: null, tool_calls: [], tool_error: "tool 'open_app' is not available", raw_tool_text: raw, tool_generation_complete: true, tool_parse_valid: true, tool_schema_valid: false, tool_response_expected: true, metrics: {} };
+  bridge.control(failed);
+  bridge.control(failed);
+  bridge.control({ type: "tool.error", call_id: "call_1", tool: "files", message: "the files result was not readable: tool response has 1450 tokens; maximum is 256" });
+  const line = bridge.logs.find((l) => l.startsWith("<- tool.error ") && l.includes("open_app"));
+  assert.ok(line && line.includes("tool 'open_app' is not available") && line.includes('"generated_token_ids":"<3 ids>"'), "the reason and raw call survive in the log");
+  const notes = events.filter((e) => e.type === "action");
+  assert.deepEqual(notes, [
+    { type: "action", state: "failed", text: "Couldn't do that: tool 'open_app' is not available" },
+    { type: "action", state: "failed", text: "Couldn't do that (files): the files result was not readable: tool response has 1450 tokens; maximum is 256" },
+  ]);
 });

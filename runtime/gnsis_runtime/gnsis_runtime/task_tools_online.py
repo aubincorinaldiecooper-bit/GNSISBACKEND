@@ -682,8 +682,16 @@ class TaskToolsRealtimeCoordinator:
             if response_expected:
                 self._spawn(self._deliver_tool_error(detail), "tool-error")
             else:
+                with self._state_lock:
+                    pending = self._external_tool_pending
                 self._emit_control(
-                    {"type": "tool.error", "message": detail[:512]}
+                    {
+                        "type": "tool.error",
+                        "message": detail[:512],
+                        "tools": [str(call.get("name") or "") for call in calls],
+                        "pending_tool": pending,
+                        "raw_tool_text": str(getattr(event, "raw_tool_text", "") or "")[:2000],
+                    }
                 )
             return
 
@@ -892,10 +900,42 @@ class TaskToolsRealtimeCoordinator:
             fields={"tool": name, "correlated": call_id is not None},
         )
         try:
-            event = await asyncio.to_thread(self.session.feed_tool_response, response)
+            try:
+                event = await asyncio.to_thread(self.session.feed_tool_response, response)
+            except ValueError as exc:
+                # The model cannot take this answer in (too long, malformed).
+                # Left waiting, every call after it would be refused until the
+                # timeout; the model is told what happened instead.
+                reason = str(exc)[:300]
+                LOGGER.warning("tool response for %s unreadable: %s", name, reason)
+                self.timeline.emit(
+                    "tool.response.unreadable",
+                    component="tools",
+                    correlation_id=correlation,
+                    fields={"tool": name, "reason": reason},
+                )
+                self._emit_control(
+                    {
+                        "type": "tool.error",
+                        "call_id": correlation,
+                        "tool": name,
+                        "message": f"the {name} result was not readable: {reason}",
+                    }
+                )
+                event = await asyncio.to_thread(
+                    self.session.feed_tool_response,
+                    {
+                        "status": "failed",
+                        "tool": name,
+                        "message": (
+                            "The computer answered, but the result was too long "
+                            "or malformed to read. Ask for less, or try another way."
+                        ),
+                    },
+                )
         except BaseException:
-            # The model did not take it (too long, malformed): the call is
-            # still waiting, and the client may answer it again.
+            # The model took neither: the call is still waiting, and the
+            # client may answer it again.
             with self._state_lock:
                 if record is not None:
                     record.resolving = False

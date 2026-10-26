@@ -120,6 +120,8 @@ export class ElectronLiveHost implements LiveHost {
   private readonly levelIntervalMs: number;
   private readonly readyTimeoutMs: number;
   private readonly now: () => number;
+  /** The same failure arrives as the model's event and the runtime's note. */
+  private lastToolError: { line: string; at: number } | null = null;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
 
@@ -490,7 +492,7 @@ export class ElectronLiveHost implements LiveHost {
     const c = control as { type?: string; [k: string]: unknown } | null;
     const type = c?.type;
     if (type === "playback.ack.done" || type === "host.event.done") return;
-    this.log(`<- ${type ?? "?"} ${forLog(control).slice(0, 160)}`);
+    this.log(`<- ${type ?? "?"} ${forLog(control)}`);
     switch (type) {
       case "runtime.status":
         if (c?.status === "loading") this.setLink("connecting", "GNSIS is loading itself onto a machine.");
@@ -539,6 +541,16 @@ export class ElectronLiveHost implements LiveHost {
         // The person's own recognized words, from main's speech-to-text.
         const text = typeof c?.text === "string" ? c.text.trim() : "";
         if (text) this.emit({ type: "user.words", text, final: true });
+        break;
+      }
+      case "tool.error": {
+        // A call the model made that never reached this computer, or whose
+        // answer it could not read. Say so instead of doing nothing.
+        const line = toolErrorLine(c ?? {});
+        const at = this.now();
+        if (line === this.lastToolError?.line && at - this.lastToolError.at < 2_000) break;
+        this.lastToolError = { line, at };
+        this.emit({ type: "action", state: "failed", text: line });
         break;
       }
       case "chunk": {
@@ -673,7 +685,20 @@ const isDenied = (e: unknown) => (e as { name?: string } | null)?.name === "NotA
  * never replies to it, so typing stays off rather than seem to do nothing.
  */
 /** Fields that carry what someone said, typed or asked for: logged as their length only. */
-const WORDS = new Set(["text", "arguments", "content", "transcript", "final_asr"]);
+const WORDS = new Set(["text", "content", "transcript", "final_asr"]);
+
+/** What a `tool.error` leaves in the chat: which tool, and why it did not run. */
+export function toolErrorLine(c: Record<string, unknown>): string {
+  const names = new Set<string>();
+  if (typeof c.tool === "string" && c.tool) names.add(c.tool);
+  for (const name of Array.isArray(c.tools) ? c.tools : []) if (typeof name === "string" && name) names.add(name);
+  for (const call of Array.isArray(c.tool_calls) ? c.tool_calls : []) {
+    const name = (call as { name?: unknown } | null)?.name;
+    if (typeof name === "string" && name) names.add(name);
+  }
+  const reason = typeof c.tool_error === "string" && c.tool_error ? c.tool_error : typeof c.message === "string" && c.message ? c.message : "the request was not valid";
+  return `Couldn't do that${names.size ? ` (${[...names].join(", ")})` : ""}: ${reason}`;
+}
 
 /**
  * A runtime control as the host log keeps it: its shape, ids and flags, with
@@ -683,6 +708,7 @@ const WORDS = new Set(["text", "arguments", "content", "transcript", "final_asr"
  */
 export function forLog(control: unknown): string {
   return JSON.stringify(control, (key, value) => {
+    if (key === "generated_token_ids" && Array.isArray(value)) return `<${value.length} ids>`;
     if (/token|secret|password/i.test(key)) return "<redacted>";
     if (WORDS.has(key) && value !== null && value !== undefined) {
       const size = typeof value === "string" ? value.length : JSON.stringify(value).length;
