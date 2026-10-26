@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 import secrets
 import wave
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ DEFAULT_VOICE_PROFILE_ID = "gnsis-default"
 DEFAULT_VOICE_PACE = "relaxed"
 MAX_REFERENCE_AUDIO_BYTES = 5 * 1024 * 1024
 VOICE_PACES = ("relaxed", "normal", "quick")
+# An OpenRouter model id ("deepseek/deepseek-v4-flash"); empty uses the pod default.
+WORKER_MODEL_PATTERN = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+")
 PRESET_VOICE_PROFILES = (
     {
         "id": DEFAULT_VOICE_PROFILE_ID,
@@ -38,6 +41,7 @@ class DesktopPreferences:
     persona_description: str
     voice_profile_id: str
     voice_pace: str
+    worker_model: str
     voice_profiles: tuple[dict[str, Any], ...]
     can_upload_voice: bool
 
@@ -47,6 +51,7 @@ class DesktopPreferences:
             "persona_description": self.persona_description,
             "voice_profile_id": self.voice_profile_id,
             "voice_pace": self.voice_pace,
+            "worker_model": self.worker_model,
             "available_voice_profiles": list(self.voice_profiles),
             "available_voice_paces": list(VOICE_PACES),
             "can_upload_voice": self.can_upload_voice,
@@ -81,6 +86,7 @@ def _view(
         persona_description=person.persona_description or "",
         voice_profile_id=person.voice_profile_id or DEFAULT_VOICE_PROFILE_ID,
         voice_pace=person.voice_pace or DEFAULT_VOICE_PACE,
+        worker_model=person.worker_model or "",
         voice_profiles=_voice_profiles(session, person.id),
         can_upload_voice=can_upload_voice,
     )
@@ -104,10 +110,13 @@ def update_preferences(
     persona_description: str | None = None,
     voice_profile_id: str | None = None,
     voice_pace: str | None = None,
+    worker_model: str | None = None,
     can_upload_voice: bool = False,
 ) -> DesktopPreferences:
     if voice_pace is not None and voice_pace not in VOICE_PACES:
         raise DesktopPreferenceError("voice pace is invalid")
+    if worker_model and not WORKER_MODEL_PATTERN.fullmatch(worker_model):
+        raise DesktopPreferenceError("background job model is not an OpenRouter model id")
     with session_scope() as session:
         person = session.get(orm.DesktopPerson, person_id)
         if person is None:
@@ -129,6 +138,8 @@ def update_preferences(
             person.voice_profile_id = voice_profile_id
         if voice_pace is not None:
             person.voice_pace = voice_pace
+        if worker_model is not None:
+            person.worker_model = worker_model
         session.flush()
         return _view(session, person, can_upload_voice=can_upload_voice)
 

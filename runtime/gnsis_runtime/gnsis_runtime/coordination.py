@@ -1258,6 +1258,8 @@ class WorkerRequest:
     parent_backend_session_id: str = ""
     # Original user utterance, stored separately from the mutable task instruction.
     original_turn: str = ""
+    # The person's chosen worker model; empty uses the provider's configured model.
+    model: str = ""
 
     def __post_init__(self) -> None:
         if not self.lineage_id:

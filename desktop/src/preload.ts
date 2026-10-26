@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("gnsis", {
     ),
   eraseDesktopIdentity: () => ipcRenderer.invoke("identity:erase"),
   voicePreferences: () => ipcRenderer.invoke("voice:preferences"),
+  workerModels: () => ipcRenderer.invoke("worker:models"),
   updateVoicePreferences: (values: unknown) =>
     ipcRenderer.invoke("voice:preferences:update", values),
   uploadVoiceProfile: (name: string, transcript: string, audioWavB64: string) =>

@@ -284,6 +284,7 @@ class DesktopPreferencesUpdateRequest(BaseModel):
         default=None, min_length=1, max_length=64
     )
     voice_pace: Optional[str] = Field(default=None, min_length=1, max_length=16)
+    worker_model: Optional[str] = Field(default=None, max_length=128)
 
 
 class DesktopVoiceProfileCreateRequest(BaseModel):
@@ -497,6 +498,7 @@ def update_desktop_preferences(
             persona_description=req.persona_description,
             voice_profile_id=req.voice_profile_id,
             voice_pace=req.voice_pace,
+            worker_model=req.worker_model,
             can_upload_voice=can_upload,
         ).to_dict()
     except DesktopPreferenceError as exc:

@@ -72,6 +72,7 @@ export type ClientControl =
       type: "voice.preferences";
       voice_profile_id: string;
       voice_pace: "relaxed" | "normal" | "quick";
+      worker_model?: string;
       prompt_audio_wav_b64?: string | null;
       prompt_text?: string | null;
     }

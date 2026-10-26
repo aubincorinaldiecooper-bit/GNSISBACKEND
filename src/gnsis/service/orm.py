@@ -72,6 +72,7 @@ class DesktopPerson(Base):
         String(64), default="gnsis-default"
     )
     voice_pace: Mapped[str] = mapped_column(String(16), default="relaxed")
+    worker_model: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )

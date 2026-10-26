@@ -95,6 +95,23 @@ class DesktopPreferencesTests(unittest.TestCase):
             writer.writeframes(bytes(16_000 * 2 * 3))
         return base64.b64encode(buffer.getvalue()).decode()
 
+    def test_background_job_model_is_an_openrouter_id(self):
+        from gnsis.service.desktop_preferences import (
+            DesktopPreferenceError,
+            get_preferences,
+            update_preferences,
+        )
+
+        self.assertEqual(get_preferences("person_alpha").worker_model, "")
+        update_preferences("person_alpha", worker_model="moonshotai/kimi-k2.5")
+        self.assertEqual(
+            get_preferences("person_alpha").worker_model, "moonshotai/kimi-k2.5"
+        )
+        with self.assertRaises(DesktopPreferenceError):
+            update_preferences("person_alpha", worker_model="not a model")
+        update_preferences("person_alpha", worker_model="")
+        self.assertEqual(get_preferences("person_alpha").worker_model, "")
+
     def test_custom_voice_is_private_and_owner_gated(self):
         from gnsis.service.desktop_preferences import (
             DesktopPreferenceError,

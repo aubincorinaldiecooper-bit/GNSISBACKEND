@@ -128,6 +128,7 @@ _ADDITIVE_COLUMNS = [
         "VARCHAR(64) DEFAULT 'gnsis-default'",
     ),
     ("desktop_people", "voice_pace", "VARCHAR(16) DEFAULT 'relaxed'"),
+    ("desktop_people", "worker_model", "VARCHAR(128) DEFAULT ''"),
 ]
 
 
