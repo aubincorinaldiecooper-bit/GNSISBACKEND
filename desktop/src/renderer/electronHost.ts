@@ -550,7 +550,7 @@ export class ElectronLiveHost implements LiveHost {
         const at = this.now();
         if (line === this.lastToolError?.line && at - this.lastToolError.at < 2_000) break;
         this.lastToolError = { line, at };
-        this.emit({ type: "action", state: "failed", text: line });
+        this.emit({ type: "action", state: "failed", text: line, notice: true });
         break;
       }
       case "chunk": {
@@ -687,6 +687,17 @@ const isDenied = (e: unknown) => (e as { name?: string } | null)?.name === "NotA
 /** Fields that carry what someone said, typed or asked for: logged as their length only. */
 const WORDS = new Set(["text", "content", "transcript", "final_asr"]);
 
+const RAW_WORDS = /("(?:text|content|transcript|final_asr|[^"]*(?:token|secret|password)[^"]*)"\s*:\s*)"((?:[^"\\]|\\.)*)(?:"|$)/gi;
+
+/**
+ * The model's raw call text, which may not parse: its shape stays, and the
+ * value of any words or credential field becomes its length, even when the
+ * call broke off mid-string.
+ */
+export function redactRawCall(raw: string): string {
+  return raw.replace(RAW_WORDS, (_m, head: string, body: string) => `${head}"<${body.length} chars>"`);
+}
+
 /** What a `tool.error` leaves in the chat: which tool, and why it did not run. */
 export function toolErrorLine(c: Record<string, unknown>): string {
   const names = new Set<string>();
@@ -709,6 +720,7 @@ export function toolErrorLine(c: Record<string, unknown>): string {
 export function forLog(control: unknown): string {
   return JSON.stringify(control, (key, value) => {
     if (key === "generated_token_ids" && Array.isArray(value)) return `<${value.length} ids>`;
+    if (key === "raw_tool_text" && typeof value === "string") return redactRawCall(value);
     if (/token|secret|password/i.test(key)) return "<redacted>";
     if (WORDS.has(key) && value !== null && value !== undefined) {
       const size = typeof value === "string" ? value.length : JSON.stringify(value).length;
