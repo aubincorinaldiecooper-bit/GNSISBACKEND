@@ -955,6 +955,8 @@ class GNSISGateway:
         self._instance_id = new_id("gateway")
         self._started = False
         self._closed = False
+        # Set from the person's settings for each live session.
+        self.worker_model = ""
 
     async def start(self) -> None:
         """Replay committed events and recover schedulable work once."""
@@ -3930,6 +3932,7 @@ class GNSISGateway:
                     kind=task.kind,
                     parent_task_id=task.parent_task_id,
                     parent_run_id=resolved_parent_run_id,
+                    model=self.worker_model,
                     parent_backend_session_id=parent_backend_session_id,
                     original_turn=(
                         source_turn.final_asr

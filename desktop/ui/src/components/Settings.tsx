@@ -8,6 +8,7 @@ import { actions, eraseIdentity, getHost, getIdentityStore, setState, useStore }
 import type { VoicePreferences } from "../../../src/renderer/bridge";
 import * as I from "./Icons";
 import { VoiceUpload } from "./VoiceUpload";
+import { WorkerModelPicker } from "./WorkerModelPicker";
 
 type Section = "profile" | "voice" | "agents" | "notif" | "appear" | "privacy";
 const ALL_SECTIONS: { id: Section; label: string }[] = [
@@ -19,7 +20,7 @@ const ALL_SECTIONS: { id: Section; label: string }[] = [
   { id: "privacy", label: "Privacy & security" },
 ];
 // Sections whose switches nothing reads yet are left out of the real app.
-const BUILT_SECTIONS = new Set<Section>(["voice", "appear", "privacy"]);
+const BUILT_SECTIONS = new Set<Section>(["voice", "agents", "appear", "privacy"]);
 
 export function Settings() {
   const identity = useStore((s) => s.identity);
@@ -92,7 +93,7 @@ export function Settings() {
     values: Partial<
       Pick<
         VoicePreferences,
-        "persona_description" | "voice_profile_id" | "voice_pace"
+        "persona_description" | "voice_profile_id" | "voice_pace" | "worker_model"
       >
     >,
   ) => {
@@ -227,7 +228,16 @@ export function Settings() {
               </Group>
             )}
             {section === "agents" && (
-              <Group note={inert ? NOT_YET_NOTE : undefined}>
+              <Group title="Model for background jobs">
+                <WorkerModelPicker
+                  value={voicePreferences?.worker_model ?? ""}
+                  disabled={!voicePreferences}
+                  onPick={(id) => void updateVoice({ worker_model: id })}
+                />
+              </Group>
+            )}
+            {section === "agents" && !inert && (
+              <Group>
                 <Row title="Ask before sending emails or messages" desc="Agents show you an approval card first.">{toggle("approve", "Ask before sending emails or messages")}</Row>
                 <Row title="Let agents use a browser" desc="Needed for tasks like finding a recipe or filling out a form.">{toggle("browser", "Let agents use a browser")}</Row>
                 <Row title="Remove finished agents from the dock" desc="They stay in All agents."><Select label="Remove finished agents from the dock" options={["After 10 minutes", "After 1 hour", "After 1 day", "Never"]} disabled={inert} /></Row>

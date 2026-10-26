@@ -2976,6 +2976,14 @@ def create_online_duplex_app(
                     except ValueError as exc:
                         await send_text({"type": "error", "message": str(exc)})
                 elif event_type == "voice.preferences":
+                    worker_model = control.get("worker_model")
+                    gateway = getattr(coordinator, "gateway", None)
+                    if (
+                        gateway is not None
+                        and isinstance(worker_model, str)
+                        and len(worker_model) <= 128
+                    ):
+                        gateway.worker_model = worker_model
                     voice_profile_id = control.get("voice_profile_id")
                     voice_pace = control.get("voice_pace")
                     prompt_audio = control.get("prompt_audio_wav_b64")
@@ -3067,6 +3075,9 @@ def create_online_duplex_app(
                     # Keep the video source across reset, but clear captured frames.
                     screen_frames.reset()
                     active.coordinator = None
+                    worker_model = getattr(
+                        getattr(coordinator, "gateway", None), "worker_model", ""
+                    )
                     await coordinator.close(discard_state=True)
                     coordinator = None
                     await asyncio.to_thread(session.close)
@@ -3078,6 +3089,8 @@ def create_online_duplex_app(
                         host_tools=active.host_tools.accepted,
                     )
                     coordinator = await build_coordinator(session)
+                    if getattr(coordinator, "gateway", None) is not None:
+                        coordinator.gateway.worker_model = worker_model
                     active.duplex = session
                     active.coordinator = coordinator
                     if _streams_speech(runtime):

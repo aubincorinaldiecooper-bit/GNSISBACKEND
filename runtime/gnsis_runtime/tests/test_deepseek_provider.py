@@ -56,6 +56,9 @@ class _Conn:
         self.calls.append(("close_session", session_id))
         await asyncio.sleep(0.01)
 
+    async def set_config_option(self, config_id, session_id, value):
+        self.calls.append(("set_config_option", config_id, value))
+
     async def cancel(self, session_id):
         self.calls.append(("cancel", session_id))
 
@@ -63,6 +66,9 @@ class _Conn:
 def _provider(tmp_path, monkeypatch, script, stop="end_turn", fail_init=False):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "gnsis_runtime.providers.deepseek._openrouter_tool_models", lambda: []
+    )
     seen = {"open": 0, "spawned": 0}
 
     @contextlib.asynccontextmanager
@@ -93,10 +99,10 @@ def _provider(tmp_path, monkeypatch, script, stop="end_turn", fail_init=False):
     return provider, seen
 
 
-def _request(instruction="Sum the counts in fruit.csv"):
+def _request(instruction="Sum the counts in fruit.csv", model=""):
     return types.SimpleNamespace(
         project_id="p1", owner_id="o", task_id="t", run_id="r", generation=1,
-        instruction=instruction,
+        instruction=instruction, model=model,
         context_plan=types.SimpleNamespace(brief=""),
         source_turn=None,
     )
@@ -111,9 +117,9 @@ class _Control:
         return types.SimpleNamespace(outcome=self.outcome)
 
 
-async def _run(provider, control=None, project_id="p1"):
+async def _run(provider, control=None, project_id="p1", request=None):
     project = await provider.open_project(types.SimpleNamespace(project_id=project_id))
-    request = _request()
+    request = request or _request()
     request.project_id = project_id
     run = await project.start(request, control)
     events = [event async for event in run.events()]
@@ -250,3 +256,44 @@ async def test_failure_text_hides_the_key(tmp_path, monkeypatch):
     result = events[-1].payload.result
     assert "test-key" not in result and "secret prompt" not in result
     assert result.startswith("DeepSeek Harness failure: RuntimeError: 401")
+
+
+@pytest.mark.asyncio
+async def test_the_persons_model_choice_switches_the_session(tmp_path, monkeypatch):
+    async def answer(client, sid):
+        await client.session_update(sid, _chunk("Done."))
+
+    provider, seen = _provider(tmp_path, monkeypatch, [answer])
+    events = await _run(provider, request=_request(model="moonshotai/kimi-k2.5"))
+
+    calls = seen["conn"].calls
+    switch = ("set_config_option", "model", '["openrouter","moonshotai/kimi-k2.5"]')
+    assert calls.index(switch) < next(
+        i for i, c in enumerate(calls) if c[0] == "prompt"
+    )
+    assert events[-1].payload.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_no_choice_keeps_the_configured_model(tmp_path, monkeypatch):
+    async def answer(client, sid):
+        await client.session_update(sid, _chunk("Done."))
+
+    provider, seen = _provider(tmp_path, monkeypatch, [answer])
+    await _run(provider)
+
+    assert not [c for c in seen["conn"].calls if c[0] == "set_config_option"]
+
+
+def test_listed_models_replace_the_built_in_list():
+    settings = DeepSeekHarnessSettings(model="deepseek/deepseek-v4-flash")
+    route = json.loads(acp_patch(settings, ["moonshotai/kimi-k3.1-pro"]))[0]["config"][
+        "providers"
+    ]["openrouter"]
+    assert route["api"] == "openai-completions"
+    assert route["models"] == [
+        {"id": "deepseek/deepseek-v4-flash"},
+        {"id": "moonshotai/kimi-k3.1-pro"},
+    ]
+    plain = json.loads(acp_patch(settings))[0]["config"]["providers"]["openrouter"]
+    assert "models" not in plain

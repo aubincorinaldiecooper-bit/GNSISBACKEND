@@ -362,6 +362,8 @@ type VoicePreferences = {
   [key: string]: unknown;
 };
 
+let workerModels: Promise<Array<{ id: string; name: string }>> | undefined;
+
 async function voiceApi<T>(
   endpoint: string,
   init: RequestInit = {},
@@ -409,6 +411,7 @@ async function applyVoicePreferencesToRuntime(): Promise<VoicePreferences | null
     type: "voice.preferences",
     voice_profile_id: preferences.voice_profile_id,
     voice_pace: preferences.voice_pace,
+    worker_model: typeof preferences.worker_model === "string" ? preferences.worker_model : "",
     prompt_audio_wav_b64: reference.audio_wav_b64,
     prompt_text: reference.transcript,
   });
@@ -516,12 +519,38 @@ function registerIdentityHandlers(): void {
     if (typeof input.persona_description === "string") {
       body.persona_description = input.persona_description;
     }
+    if (typeof input.worker_model === "string") {
+      body.worker_model = input.worker_model;
+    }
     const result = await voiceApi<VoicePreferences>("/v1/desktop/preferences", {
       method: "PATCH",
       body: JSON.stringify(body),
     });
     await applyVoicePreferencesToRuntime().catch(() => null);
     return result;
+  });
+  ipcMain.handle("worker:models", async () => {
+    workerModels ??= fetch("https://openrouter.ai/api/v1/models")
+      .then((r) => {
+        if (!r.ok) throw new Error(`OpenRouter returned ${r.status}.`);
+        return r.json() as Promise<{ data?: Array<{ id?: unknown; name?: unknown; supported_parameters?: unknown }> }>;
+      })
+      .then((body) =>
+        (body.data ?? []).flatMap((m) =>
+          typeof m.id === "string" &&
+              !m.id.endsWith(":batch") &&
+              // Background jobs need tool calls; this also matches DeepSeek Harness's catalog.
+              Array.isArray(m.supported_parameters) &&
+              m.supported_parameters.includes("tools")
+            ? [{ id: m.id, name: typeof m.name === "string" ? m.name : m.id }]
+            : [],
+        ),
+      )
+      .catch((error: unknown) => {
+        workerModels = undefined;
+        throw error;
+      });
+    return workerModels;
   });
   ipcMain.handle(
     "voice:profile:upload",

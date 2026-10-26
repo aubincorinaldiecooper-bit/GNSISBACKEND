@@ -33,6 +33,8 @@ export interface VoicePreferences {
   persona_description: string;
   voice_profile_id: string;
   voice_pace: "relaxed" | "normal" | "quick";
+  /** OpenRouter model id for background jobs; empty uses the pod default. */
+  worker_model: string;
   available_voice_profiles: VoiceProfile[];
   available_voice_paces: Array<"relaxed" | "normal" | "quick">;
   can_upload_voice: boolean;
@@ -88,10 +90,12 @@ export interface GnsisBridge {
     values: Partial<
       Pick<
         VoicePreferences,
-        "persona_description" | "voice_profile_id" | "voice_pace"
+        "persona_description" | "voice_profile_id" | "voice_pace" | "worker_model"
       >
     >,
   ): Promise<VoicePreferences>;
+  /** Every OpenRouter model, for the background-job model search. */
+  workerModels?(): Promise<Array<{ id: string; name: string }>>;
   /** Upload a reference WAV (base64) as a new private voice; it becomes the selected voice. */
   uploadVoiceProfile?(
     name: string,

@@ -440,3 +440,8 @@ button:disabled:active { transform: none; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   button:active { transform: none !important; }
 }
+.model-list { display: flex; flex-direction: column; gap: 4px; }
+.model-option { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid transparent; background: none; text-align: left; font-size: 15px; cursor: pointer; }
+.model-option:hover { background: rgba(20, 24, 33, 0.04); }
+.model-option.on { border-color: rgba(20, 24, 33, 0.14); background: #fff; font-weight: 600; }
+.model-option .mono { font-weight: 400; }

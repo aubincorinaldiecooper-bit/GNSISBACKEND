@@ -79,18 +79,45 @@ def _describe(exc: BaseException, secret_env: str) -> str:
     return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
 
-def acp_patch(settings: DeepSeekHarnessSettings) -> str:
-    """The `--patch` overlay that points DeepSeek Harness at the model route."""
+_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
+
+def _openrouter_tool_models() -> list[str]:
+    """OpenRouter's current models that can call tools, as the desktop picker lists them."""
+
+    import urllib.request
+
+    req = urllib.request.Request(
+        _OPENROUTER_MODELS_URL, headers={"User-Agent": "gnsis-runtime"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = json.load(resp)
+    return [
+        m["id"]
+        for m in body.get("data", [])
+        if isinstance(m.get("id"), str)
+        and not m["id"].endswith(":batch")
+        and "tools" in (m.get("supported_parameters") or [])
+    ]
+
+
+def acp_patch(settings: DeepSeekHarnessSettings, models: list[str] | None = None) -> str:
+    """The `--patch` overlay that points DeepSeek Harness at the model route.
+
+    `models`, when given, replaces the harness's built-in model list for the
+    route, so any of them can be picked, including ones newer than the harness.
+    """
+
+    route: dict[str, Any] = {"apiKeyEnv": settings.api_key_env}
+    if models:
+        ids = list(dict.fromkeys([settings.model, *models]))
+        route["api"] = "openai-completions"
+        route["models"] = [{"id": model} for model in ids]
     return json.dumps(
         [
             {
                 "id": "llm-pi-ai",
-                "config": {
-                    "providers": {
-                        settings.route: {"apiKeyEnv": settings.api_key_env}
-                    }
-                },
+                "config": {"providers": {settings.route: route}},
             },
             {
                 "id": "acp",
@@ -262,10 +289,30 @@ class DeepSeekRun:
             )
             self.session_id = session.session_id
             self.provider.client.runs[self.session_id] = self
+            model = getattr(self.request, "model", "") or settings.model
+            if model != settings.model:
+                try:
+                    await asyncio.wait_for(
+                        conn.set_config_option(
+                            config_id="model",
+                            session_id=self.session_id,
+                            # DeepSeek Harness names a model choice [route, model id].
+                            value=json.dumps(
+                                [settings.route, model], separators=(",", ":")
+                            ),
+                        ),
+                        timeout=settings.startup_timeout_sec,
+                    )
+                except asyncio.TimeoutError:
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"DeepSeek Harness cannot use the model {model!r}"
+                    ) from exc
             await self._publish(
                 UpdatePayload(
                     kind="activity",
-                    summary=f"DeepSeek Harness accepted the task ({settings.model}).",
+                    summary=f"DeepSeek Harness accepted the task ({model}).",
                 )
             )
             result = await asyncio.wait_for(
@@ -422,7 +469,13 @@ class DeepSeekHarnessWorkerProvider:
 
             self.runtime_dir.mkdir(parents=True, exist_ok=True)
             patch = self.runtime_dir / "deepseek-harness.patch.yml"
-            patch.write_text(acp_patch(self.settings) + "\n", encoding="utf-8")
+            models: list[str] | None = None
+            if self.settings.route == "openrouter":
+                try:
+                    models = await asyncio.to_thread(_openrouter_tool_models)
+                except Exception:  # noqa: BLE001 - the built-in list still works
+                    models = None
+            patch.write_text(acp_patch(self.settings, models) + "\n", encoding="utf-8")
             attempt = contextlib.AsyncExitStack()
             try:
                 conn, _process = await attempt.enter_async_context(
