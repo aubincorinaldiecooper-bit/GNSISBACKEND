@@ -307,6 +307,73 @@ def format_tool_response(value: Any) -> str:
     return f"{TOOL_RESPONSE_START}\n{content}\n{TOOL_RESPONSE_END}"
 
 
+MORE_WAS_CUT = "more was cut to keep this short; ask for the next part or something narrower"
+_KEEP_KEYS = frozenset({"status", "tool", "call_id", "message", "error", "more"})
+
+
+def fit_tool_response(value: Any, count_tokens: Any, limit: int) -> Any:
+    """Cut a tool result to ``limit`` tokens, saying so, instead of refusing it.
+
+    The largest field is cut first, keeping as many leading list items or
+    characters as fit; a result that was cut carries ``more``.
+    """
+
+    def fits(candidate: Any) -> bool:
+        return count_tokens(format_tool_response(candidate)) <= limit
+
+    if fits(value):
+        return value
+    if isinstance(value, str):
+        return _fit_prefix(value, lambda text: fits(f"{text}… [{MORE_WAS_CUT}]"), f"… [{MORE_WAS_CUT}]")
+    current: dict[str, Any] = dict(value) if isinstance(value, Mapping) else {"content": compact_json(value)}
+    current["more"] = MORE_WAS_CUT
+    for _ in range(200):
+        if fits(current):
+            return current
+        sizes = [(len(compact_json(v)), k) for k, v in current.items() if k not in _KEEP_KEYS]
+        if not sizes:
+            break
+        key = max(sizes)[1]
+        item = current[key]
+        if isinstance(item, list) and len(item) > 1:
+            keep = _most(len(item) - 1, lambda n: fits({**current, key: item[:n]}))
+            current[key] = item[: keep or len(item) // 2]
+        elif isinstance(item, str) and len(item) > 40:
+            keep = _most(len(item) - 1, lambda n: fits({**current, key: item[:n] + "…"}))
+            current[key] = item[: keep or len(item) // 2] + "…"
+        elif isinstance(item, Mapping) and item:
+            current[key] = compact_json(item)
+        else:
+            del current[key]
+    message = current.get("message")
+    if isinstance(message, str):
+        base = {k: current[k] for k in ("status", "tool", "call_id", "more") if k in current}
+        cut = _fit_prefix(message, lambda text: fits({**base, "message": text + "…"}), "…")
+        candidate = {**base, "message": cut}
+        if fits(candidate):
+            return candidate
+    raise ToolProtocolError(f"tool response cannot be cut to {limit} tokens")
+
+
+def _most(high: int, fits: Any) -> int:
+    """The largest n in 0..high for which fits(n), assuming fits shrinks with n."""
+    low = 0
+    while low < high:
+        middle = (low + high + 1) // 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def _fit_prefix(text: str, fits: Any, suffix: str) -> str:
+    low = _most(len(text), lambda n: fits(text[:n]))
+    if low == 0 and text:
+        raise ToolProtocolError("tool response cannot be cut to fit")
+    return text[:low] + suffix
+
+
 def validate_tool_calls(
     calls: Sequence[Mapping[str, Any]],
     tools: Sequence[Mapping[str, Any]] | None,
