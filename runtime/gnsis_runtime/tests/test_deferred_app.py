@@ -292,6 +292,24 @@ def test_logs_need_the_edge_secret_and_serve_the_tail(monkeypatch, tmp_path):
         assert previous.text == "previous boot\n"
 
 
+def test_logs_serve_earlier_boots_kept_on_the_pod_volume(monkeypatch, tmp_path):
+    log = tmp_path / "runtime.log"
+    log.write_text("this boot\n")
+    (tmp_path / "runtime.log.1").write_text("one boot back\n")
+    (tmp_path / "runtime.log.3").write_text("three boots back\n")
+    monkeypatch.setenv("GNSIS_LOG_FILE", str(log))
+    monkeypatch.setenv("GNSIS_EDGE_SECRET", "edge-secret")
+
+    app = create_deferred_app(_inner_app, heartbeat_interval_s=0.05)
+    with TestClient(app) as client:
+        _wait_for_state(client, "ready")
+        edge = {"x-gnsis-edge": "edge-secret"}
+        assert client.get("/logs?boot=1", headers=edge).text == "one boot back\n"
+        assert client.get("/logs?boot=3", headers=edge).text == "three boots back\n"
+        assert client.get("/logs?boot=2", headers=edge).status_code == 404
+        assert client.get("/logs?boot=31", headers=edge).status_code == 404
+
+
 def test_logs_blank_secret_values_a_dependency_printed(monkeypatch, tmp_path):
     log = tmp_path / "runtime.log"
     log.write_text("hf token hf_abcdefgh123 loaded; edge edge-secret-value\n")

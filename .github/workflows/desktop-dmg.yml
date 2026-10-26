@@ -66,6 +66,10 @@ jobs:
             @ubjs/node-darwin-x64@0.31.0-3
       - name: Package ad-hoc signed development DMG (universal)
         working-directory: desktop
+        # electron-builder skips signing on pull requests unless told; the
+        # identity is ad-hoc ("-"), so no certificate or secret is involved.
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
         run: npm run package:mac
       - name: Check the app really is signed
         working-directory: desktop

@@ -51,7 +51,7 @@ test("chunks schedule sequentially, each starting when the previous ends", async
   assert.equal(s1.startedAt, 100);
   assert.equal(s2.startedAt, 100.05);
   // s2's started ack must not fire at enqueue time — only at its scheduled start.
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
   // Wait for each ack rather than sleeping a fixed slice: under the parallel
   // suite a loaded machine could deliver s2's start late, and the fixed sleep
   // then reported a scheduling bug that was really just slow timers. The ack

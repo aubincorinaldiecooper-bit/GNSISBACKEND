@@ -597,8 +597,15 @@ class DuplexLiveSession:
         if is_tool_call:
             if self._tool_response_pending:
                 out = dict(out)
+                refused = [
+                    str(call.get("name") or "?")
+                    for call in out.get("tool_calls") or ()
+                    if isinstance(call, dict)
+                ]
                 out["tool_calls"] = []
-                out["tool_error"] = "a previous tool call is still awaiting its response"
+                out["tool_error"] = "a previous tool call is still awaiting its response" + (
+                    f"; not run: {', '.join(refused)}" if refused else ""
+                )
                 out["tool_response_expected"] = False
             else:
                 # Return one bounded result for a structurally complete malformed call.

@@ -10,11 +10,19 @@ CONFIG="${GNSIS_CONFIG:-/workspace/runtime/configs/gnsis-voice.yaml}"
 
 # Everything this pod prints also goes to a file the runtime serves at /logs,
 # behind the edge secret, since RunPod's API does not expose a pod's logs. The
-# previous boot's file is kept beside it.
-LOG_FILE="${GNSIS_LOG_FILE:-/var/gnsis/logs/runtime.log}"
+# file is on the pod volume (/models), which survives a stop, and the last
+# LOG_BOOTS boots are kept beside it as runtime.log.1 (newest) and up.
+LOG_FILE="${GNSIS_LOG_FILE:-/models/gnsis-logs/runtime.log}"
+LOG_BOOTS="${GNSIS_LOG_BOOTS:-30}"
 export GNSIS_LOG_FILE="$LOG_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
-[ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
+if [ -f "$LOG_FILE" ]; then
+  rm -f "$LOG_FILE.$LOG_BOOTS"
+  for i in $(seq $((LOG_BOOTS - 1)) -1 1); do
+    if [ -f "$LOG_FILE.$i" ]; then mv -f "$LOG_FILE.$i" "$LOG_FILE.$((i + 1))"; fi
+  done
+  mv -f "$LOG_FILE" "$LOG_FILE.1"
+fi
 # fd 3 keeps the real stderr, so a refusal reaches both places before exit.
 exec 3>&2
 exec > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&3)

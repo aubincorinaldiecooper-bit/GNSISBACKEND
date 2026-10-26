@@ -380,6 +380,54 @@ def test_an_unanswered_request_tells_the_model_it_timed_out(desktop_app):
     assert ("tool.timeout", call["call_id"]) in _timeline(coordinators[0])
 
 
+def test_an_answer_too_long_for_the_model_is_reported_not_left_waiting(desktop_app, monkeypatch):
+    """A 50-file listing is past what the model takes in one answer.
+
+    Left waiting, every later call ("open Notes") was refused until the
+    timeout and the person heard nothing. The model is told instead, the
+    call closes, and the desktop hears which tool failed and why.
+    """
+
+    from mcpmft.tool_protocol import ToolProtocolError
+
+    real_feed = ScriptedModel.feed_tool_response
+
+    def bounded_feed(self, response):
+        if len(json.dumps(response)) > 400:
+            raise ToolProtocolError("tool response has 1450 tokens; maximum is 256")
+        return real_feed(self, response)
+
+    monkeypatch.setattr(ScriptedModel, "feed_tool_response", bounded_feed)
+    steps = [
+        (_tool_call("files", {"action": "list", "path": "Downloads"}),),
+        (_speech("There are a lot of files there."),),
+    ]
+    app, models, _opened, coordinators = desktop_app(steps)
+    listing = {
+        "status": "done",
+        "files": [
+            {"name": f"Screenshot 2026-10-{i:02d} at 6.17.20 PM.png", "kind": "file", "size": 482113 + i}
+            for i in range(50)
+        ],
+    }
+    with TestClient(app) as client:
+        with connect(client, DESKTOP) as ws:
+            _settle(ws)
+            ws.send_bytes(ONE_UNIT)
+            call = _expect(ws, "tool.call")
+            ws.send_text(json.dumps({"type": "tool.response", "call_id": call["call_id"], "content": listing}))
+            error = _expect(ws, "tool.error")
+            assert error["call_id"] == call["call_id"] and error["tool"] == "files"
+            assert "1450 tokens; maximum is 256" in error["message"]
+            assert _expect(ws, "tool.response.queued")["call_id"] == call["call_id"]
+    assert len(models[0].responses) == 1
+    assert models[0].responses[0]["status"] == "failed"
+    assert models[0].responses[0]["tool"] == "files"
+    assert not models[0].awaiting_response, "the next call is free to run"
+    kinds = [kind for kind, _ in _timeline(coordinators[0])]
+    assert "tool.response.unreadable" in kinds and "tool.response.injected" in kinds
+
+
 def test_waiting_on_the_person_keeps_the_request_alive(desktop_app):
     steps = [(_tool_call("files", {"action": "move", "path": "a.txt", "to": "B"}),)]
     app, models, _opened, coordinators = desktop_app(

@@ -20,6 +20,8 @@ from mcpmft.infer import startup_timing
 LOGGER = logging.getLogger(__name__)
 _PROCESS_STARTED_AT = time.time()
 _LOG_TAIL_MAX_LINES = 5000
+# start-voice.sh keeps this many earlier boots (GNSIS_LOG_BOOTS).
+_LOG_BOOTS_MAX = 30
 
 
 _SECRET_NAME_PARTS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "GRANT", "CREDENTIAL")
@@ -208,16 +210,22 @@ class DeferredRuntimeApp:
             return FileResponse(path, headers={"Cache-Control": "no-store"})
 
         @app.get("/logs")
-        async def logs(request: Request, lines: int = 500, previous: bool = False):
+        async def logs(
+            request: Request, lines: int = 500, previous: bool = False, boot: int = 0
+        ):
             # The pod's own output, for whoever holds the edge secret. With no
-            # secret configured this stays closed rather than public.
+            # secret configured this stays closed rather than public. `boot=N`
+            # is the Nth boot back (1 is the previous one, as `previous=true`).
             secret_set = bool(os.environ.get("GNSIS_EDGE_SECRET"))
             if not secret_set or not _came_through_the_front_door(request.scope):
                 raise HTTPException(status_code=403, detail="forbidden")
             configured = os.environ.get("GNSIS_LOG_FILE", "")
             if not configured:
                 raise HTTPException(status_code=404, detail="no log file configured")
-            path = Path(configured + (".1" if previous else ""))
+            back = boot if boot > 0 else (1 if previous else 0)
+            if back > _LOG_BOOTS_MAX:
+                raise HTTPException(status_code=404, detail="no log for that boot")
+            path = Path(configured + (f".{back}" if back else ""))
             if not path.is_file():
                 raise HTTPException(status_code=404, detail="no log file yet")
             count = max(1, min(lines, _LOG_TAIL_MAX_LINES))
