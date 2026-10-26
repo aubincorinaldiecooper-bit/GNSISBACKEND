@@ -56,7 +56,7 @@ export function WorkerModelPicker({ value, disabled, onPick }: {
             aria-selected={m.id === current}
             className={"model-option" + (m.id === current ? " on" : "")}
             disabled={disabled}
-            onClick={() => onPick(m.id === DEFAULT_MODEL ? "" : m.id)}
+            onClick={() => onPick(m.id)}
           >
             <span>{m.name.replace(/^[^:]+:\s*/, "")}</span>
             <span className="muted small mono">{m.id}</span>

@@ -732,12 +732,15 @@ def test_the_live_prompt_teaches_recent_visual_context():
     assert "Do not invent continuity" in GNSIS_DUPLEX_SYSTEM_PROMPT
 
 
-def test_the_runtime_has_no_external_worker_dependency():
-    """The deployed runtime is GNSIS itself, not the Ornith action layer."""
+def test_background_jobs_run_in_deepseek_harness():
+    """Background jobs go to DeepSeek Harness on the pod, not the Ornith action layer."""
 
     config_path = Path(__file__).resolve().parents[2] / "configs" / "gnsis-voice.yaml"
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert document["worker"] == {"provider": "none"}
+    assert document["worker"] == {
+        "provider": "deepseek",
+        "settings": {"model": "deepseek/deepseek-v4-flash"},
+    }
     assert document["duplex"]["allow_client_video"] is True
     assert document["duplex"]["media_mode"] == "omni"
     assert set(document["duplex"]["client_video_sources"]) == {"camera", "screen"}
@@ -922,7 +925,7 @@ def test_the_voice_config_enables_speech_and_nothing_else(tmp_path):
     assert config.asr.model_path == "/opt/gnsis-asr/faster-whisper-small.en"
     assert config.asr.device == "cpu"
     assert config.asr.compute_type == "int8"
-    assert config.worker.provider == "none"
+    assert config.worker.provider == "deepseek"
     assert config.duplex.sliding_window_mode == "context_no_previous"
     assert config.duplex.allow_client_video is True
     assert config.duplex.client_video_mode == "omni"
