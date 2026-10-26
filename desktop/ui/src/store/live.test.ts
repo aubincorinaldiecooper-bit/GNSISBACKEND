@@ -155,6 +155,13 @@ test("what GNSIS did on the computer lands in the chat as a plain line; the star
   ]);
 });
 
+test("a refused call (a notice) leaves the running step open", () => {
+  const running = applyLiveEvent(fresh(), { type: "action", state: "working", text: "List Downloads" }, T0).live;
+  assert.equal(running.stepOpen, true);
+  const after = applyLiveEvent(running, { type: "action", state: "failed", text: "Couldn't do that (open): busy", notice: true }, T0).live;
+  assert.equal(after.stepOpen, true);
+});
+
 test("pressing the voice button is not listening: only the microphone coming on is", () => {
   let live = startLiveState("gnsis", T0, "ready");
   assert.equal(live.phase, "connecting");
