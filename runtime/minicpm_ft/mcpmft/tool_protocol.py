@@ -351,6 +351,14 @@ def fit_tool_response(value: Any, count_tokens: Any, limit: int) -> Any:
             candidate[k] = candidate[k][:40] + "…"
     if fits(candidate):
         return candidate
+    for keep in reversed(texts):
+        single = {k: v for k, v in candidate.items() if k not in texts}
+        try:
+            single[keep] = _fit_prefix(current[keep], lambda text, keep=keep, base=dict(single): fits({**base, keep: text + "…"}), "…")
+        except ToolProtocolError:
+            continue
+        if fits(single):
+            return single
     raise ToolProtocolError(f"tool response cannot be cut to {limit} tokens")
 
 
