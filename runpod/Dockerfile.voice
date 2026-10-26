@@ -7,6 +7,12 @@
 #
 # Build from the repository root:
 #   docker build -f runpod/Dockerfile.voice -t gnsis-voice .
+# DeepSeek Harness, the background-job agent (worker.provider: deepseek). It
+# needs Node >= 24.9, so Node and the pinned harness come from a Node stage.
+FROM node:24-bookworm-slim AS dsh
+RUN npm install --global --prefix /opt/dsh @deepseek-ai/dsh@0.2.1-rc.2 \
+    && /opt/dsh/bin/dsh --version
+
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,6 +26,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first, so a source-only change reuses this (large) layer.
+COPY --from=dsh /usr/local/bin/node /usr/local/bin/node
+COPY --from=dsh /opt/dsh /opt/dsh
+ENV PATH="/opt/dsh/bin:${PATH}"
+
 COPY runpod/requirements-voice.txt /tmp/requirements-voice.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/requirements-voice.txt
