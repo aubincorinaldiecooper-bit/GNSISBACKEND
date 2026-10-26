@@ -278,9 +278,21 @@ class GNSISDuplexSession:
         return events
 
     def _fit_runtime_event(self, event: Any) -> Any:
-        """Keep a worker delivery within the live model's response-token budget."""
+        """Keep a worker delivery within the live model's response-token budget.
 
-        from mcpmft.tool_protocol import format_tool_response
+        Uses ``fit_tool_response``, which shortens the largest field and says so,
+        rather than trimming ``content`` alone. The old loop did only the latter
+        and raised when that was not enough, so a delivery whose bulk sat in
+        another field — a long ``error``, or ids and flags beside an empty
+        ``content`` — failed outright with "tool response has 265 tokens;
+        maximum is 256" while a cut, still-useful answer was available.
+        """
+
+        from mcpmft.tool_protocol import (
+            ToolProtocolError,
+            fit_tool_response,
+            format_tool_response,
+        )
 
         if not isinstance(event, dict) or event.get("type") != "worker_delivery":
             raise ValueError("runtime event must be a worker_delivery object")
@@ -288,25 +300,45 @@ class GNSISDuplexSession:
         tokenizer = runner.bundle.tokenizer
         limit = int(runner.params.max_tool_response_tokens)
 
-        def fits(value: dict[str, Any]) -> bool:
-            rendered = format_tool_response(value)
-            return len(tokenizer.encode(rendered, add_special_tokens=False)) <= limit
+        def count_tokens(text: str) -> int:
+            return len(tokenizer.encode(text, add_special_tokens=False))
 
-        if fits(event):
+        if count_tokens(format_tool_response(event)) <= limit:
             return event
+        # ``unresolved`` is bookkeeping the model never reads; dropping it buys
+        # room before anything the person would notice is cut.
         candidate = {key: value for key, value in event.items() if key != "unresolved"}
-        content = str(candidate.get("content") or "")
-        low, high = 0, len(content)
-        while low < high:
-            middle = (low + high + 1) // 2
-            bounded = {**candidate, "content": content[:middle]}
-            if fits(bounded):
-                low = middle
-            else:
-                high = middle - 1
-        bounded = {**candidate, "content": content[:low]}
-        if (content and not bounded["content"]) or not fits(bounded):
-            raise ValueError(
-                f"worker delivery envelope exceeds max_tool_response_tokens={limit}"
-            )
-        return bounded
+        # fit_tool_response trims fields outside its own keep-set, and this
+        # envelope's correlation id is one of them. A delivery that cannot be
+        # traced back to its gate entry is worse than a refused one, so the id
+        # is reserved out of the budget before the rest is fitted, and put back
+        # afterwards.
+        envelope_id = candidate.pop("delivery_id", None)
+        if envelope_id is None:
+            try:
+                return fit_tool_response(candidate, count_tokens, limit)
+            except ToolProtocolError as exc:
+                raise ValueError(
+                    f"worker delivery envelope exceeds max_tool_response_tokens={limit}"
+                ) from exc
+
+        # fit_tool_response fills the budget exactly, so the id is fitted *with*
+        # the body rather than reserved by arithmetic: shrink the allowance
+        # until the fitted body plus the id fits. Each step is one token, and
+        # the loop ends immediately when the fit already leaves room.
+        budget = limit
+        while budget > 0:
+            try:
+                fitted = fit_tool_response(candidate, count_tokens, budget)
+            except ToolProtocolError as exc:
+                raise ValueError(
+                    f"worker delivery envelope exceeds max_tool_response_tokens={limit}"
+                ) from exc
+            restored = {"delivery_id": envelope_id, **fitted}
+            if count_tokens(format_tool_response(restored)) <= limit:
+                return restored
+            budget -= 1
+        raise ValueError(
+            f"worker delivery cannot be cut to max_tool_response_tokens={limit} "
+            "while keeping its delivery_id"
+        )
