@@ -84,6 +84,8 @@ export type LiveEvent =
       type: "action";
       state: "working" | "waiting" | "done" | "failed" | "declined" | "needs_permission";
       text: string;
+      /** A failure with no step of its own (a refused call): leaves any running step as it is. */
+      notice?: boolean;
     }
   /** The menu bar icon was clicked: GNSIS should tuck itself into it, or come back. */
   | { type: "menubar"; want: "hide" | "show" }

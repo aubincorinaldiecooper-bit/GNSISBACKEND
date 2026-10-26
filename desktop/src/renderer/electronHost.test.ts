@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LiveEvent } from "@gnsis/ui";
 import type { GnsisBridge, LinkState, ScreenUpdate, TurnResult } from "./bridge.js";
-import { ElectronLiveHost, type Devices } from "./electronHost.js";
+import { ElectronLiveHost, forLog, redactRawCall, type Devices } from "./electronHost.js";
 
 /**
  * The host adapter is exercised with a fake preload bridge and fake devices,
@@ -602,7 +602,15 @@ test("a tool.error is logged in full and tells the person which tool did not run
   assert.ok(line && line.includes("tool 'open_app' is not available") && line.includes('"generated_token_ids":"<3 ids>"'), "the reason and raw call survive in the log");
   const notes = events.filter((e) => e.type === "action");
   assert.deepEqual(notes, [
-    { type: "action", state: "failed", text: "Couldn't do that: tool 'open_app' is not available" },
-    { type: "action", state: "failed", text: "Couldn't do that (files): the files result was not readable: tool response has 1450 tokens; maximum is 256" },
+    { type: "action", state: "failed", text: "Couldn't do that: tool 'open_app' is not available", notice: true },
+    { type: "action", state: "failed", text: "Couldn't do that (files): the files result was not readable: tool response has 1450 tokens; maximum is 256", notice: true },
   ]);
+});
+
+test("a failed call's raw text keeps its shape in the log but never the words typed or a credential", () => {
+  assert.equal(redactRawCall('{"name": "input", "arguments": {"action": "type", "text": "my secret words"}}'), '{"name": "input", "arguments": {"action": "type", "text": "<15 chars>"}}');
+  assert.equal(redactRawCall('{"name":"input","arguments":{"text":"cut off mid'), '{"name":"input","arguments":{"text":"<11 chars>"');
+  assert.equal(redactRawCall('{"api_token": "abc\\"def", "target": "Notes"}'), '{"api_token": "<8 chars>", "target": "Notes"}');
+  const line = forLog({ type: "tool.error", raw_tool_text: '<tool_call>{"name": "input", "arguments": {"text": "hello there"}}</tool_call>' });
+  assert.ok(!line.includes("hello there") && line.includes("input"), line);
 });

@@ -215,6 +215,7 @@ function onLiveEvent(ev: LiveEvent) {
  * can show it.
  */
 function noteAction(ev: Extract<LiveEvent, { type: "action" }>) {
+  if (ev.notice) return;
   setState((s) => {
     const to = s.live?.to ?? s.awaiting?.to ?? s.reply?.to ?? "gnsis";
     const text = ev.text.trim();

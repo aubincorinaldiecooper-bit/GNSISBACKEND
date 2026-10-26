@@ -275,6 +275,19 @@ test("in the real app, GNSIS's own actions light the Activity button: waiting fo
   assert.equal(getState().panelHidden, true, "none of it opens the drawer");
 });
 
+test("a refused call is noted without erasing the step still running", () => {
+  resetStore();
+  const host = new RecordingHost();
+  configure(host, identityStore);
+  enterDesktop(identity, false);
+  actions.openAgent("gnsis");
+  host.push({ type: "action", state: "working", text: "List Downloads" });
+  const running = getState().working;
+  host.push({ type: "action", state: "failed", text: "Couldn't do that (open): a previous tool call is still awaiting its response", notice: true });
+  assert.equal(getState().working, running);
+  assert.deepEqual(activity(getState()), { needs: 0, working: 1, unread: 0 });
+});
+
 test("typing: the message shows at once, goes to GNSIS through the host, and GNSIS's answer lands in the chat", async () => {
   resetStore();
   const host = new RecordingHost();

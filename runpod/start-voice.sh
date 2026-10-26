@@ -14,6 +14,10 @@ CONFIG="${GNSIS_CONFIG:-/workspace/runtime/configs/gnsis-voice.yaml}"
 # LOG_BOOTS boots are kept beside it as runtime.log.1 (newest) and up.
 LOG_FILE="${GNSIS_LOG_FILE:-/models/gnsis-logs/runtime.log}"
 LOG_BOOTS="${GNSIS_LOG_BOOTS:-30}"
+# /logs?boot=N serves up to 30 earlier boots; keep no more than it can serve.
+case "$LOG_BOOTS" in ''|*[!0-9]*) LOG_BOOTS=30 ;; esac
+[ "$LOG_BOOTS" -ge 1 ] || LOG_BOOTS=1
+[ "$LOG_BOOTS" -le 30 ] || LOG_BOOTS=30
 export GNSIS_LOG_FILE="$LOG_FILE"
 mkdir -p "$(dirname "$LOG_FILE")"
 if [ -f "$LOG_FILE" ]; then
