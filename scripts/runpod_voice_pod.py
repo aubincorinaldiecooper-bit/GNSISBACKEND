@@ -8,12 +8,18 @@ Usage (normally from .github/workflows/runpod-voice-pod.yml):
 The pod mirrors the former Modal app (modal/gnsis_voice.py): 2x L40S, the
 gnsis-voice image from GitHub's container registry, port 7975 over HTTPS, a
 persistent pod volume at /models for the weights, and the same secrets. Those
-secrets are copied from the GNSIS worker's environment on Coolify, where they
-already live, so nothing is entered twice. No secret value is ever printed.
+secrets are read from this process's environment (the workflow passes them
+from repository secrets): Coolify 4.4.6 returns no env values over its API, so
+copying from there silently produced an empty set. No secret value is printed.
 
 Environment:
   RUNPOD_API_KEY      required.
-  COOLIFY_API_TOKEN   required for create (reads the worker's environment).
+  GNSIS_EDGE_SECRET, GNSIS_SIMPLEMEM_URL, GNSIS_SIMPLEMEM_TOKEN,
+  GNSIS_SIMPLEMEM_INTERNAL_TOKEN, GNSIS_DESKTOP_GRANT_PUBLIC_KEY,
+  GNSIS_DESKTOP_GRANT_ISSUER, MODAL_TOKEN_ID, MODAL_TOKEN_SECRET,
+  GNSIS_MODELS_VOLUME  read from the environment for create. Coolify is only
+                      consulted for whatever these do not supply.
+  COOLIFY_API_TOKEN   optional; used only to fill gaps from Coolify.
   GHCR_PULL_TOKEN     optional; a GitHub token with read:packages. When set,
                       it is registered with RunPod so the pod can pull the
                       private image. Without it the image must be public.
@@ -118,7 +124,24 @@ def pod_url(pod_id: str) -> str:
     return f"https://{pod_id}-{PORT}.proxy.runpod.net"
 
 
-def worker_environment() -> dict[str, str]:
+def from_environment() -> dict[str, str]:
+    """The pod's variables, taken from this process's own environment.
+
+    Coolify 4.4.6 does not return environment values over its API at all: a
+    GET of an application's envs lists every key with no `value` and no
+    `real_value` field, for secrets and plain values alike (checked against a
+    102-variable application). Reading the worker that way therefore yields
+    nothing, which is why the pod used to come up without its SimpleMem URL.
+
+    So the caller supplies them instead — the workflow from repository
+    secrets, a person from their shell or a gitignored file. This is the
+    primary path, not a fallback.
+    """
+    return {k: _unquote(os.environ.get(k, "")) for k in WORKER_ENV_KEYS}
+
+
+def from_coolify() -> dict[str, str]:
+    """Read the worker's variables off Coolify, for versions that expose them."""
     client = coolify.Coolify()
     apps = coolify.records(client.request("GET", "/applications"))
     workers = [
@@ -130,12 +153,54 @@ def worker_environment() -> dict[str, str]:
     worker = coolify.choose_unique(workers, "GNSIS worker")
     envs = coolify.app_envs(client, str(worker["uuid"]))
     values = {k: _unquote(coolify.env_value(envs, k)) for k in WORKER_ENV_KEYS}
-    values = {k: v for k, v in values.items() if v}
+    return {k: v for k, v in values.items() if v}
+
+
+def worker_environment() -> dict[str, str]:
+    """The variables the pod is created with.
+
+    The environment wins; Coolify is consulted only for what it is still
+    missing, and only so an older server that does expose values keeps
+    working. Anything still absent is reported, and a SimpleMem URL without
+    its token fails the create instead of quietly running memoryless.
+    """
+    values = from_environment()
+    source = "this environment" if values else ""
+    missing = [k for k in WORKER_ENV_KEYS if k not in values]
+    if missing:
+        try:
+            from_coolify_values = from_coolify()
+        except (coolify.SetupError, PodError, OSError, ValueError) as exc:
+            from_coolify_values = {}
+            print(f"- Coolify could not be read for the rest ({exc.__class__.__name__}); continuing.")
+        for key, value in from_coolify_values.items():
+            if key in missing:
+                values[key] = value
+        if from_coolify_values:
+            source = (source + " and Coolify") if source else "Coolify"
+
     if not values.get("GNSIS_EDGE_SECRET"):
         raise PodError(
-            "The GNSIS worker on Coolify has no readable GNSIS_EDGE_SECRET. The pod refuses to "
-            "start without it, so no pod was created."
+            "GNSIS_EDGE_SECRET is not set. The pod refuses to start without it, and Coolify "
+            "4.4.6 does not return env values over its API, so pass it in explicitly:\n"
+            "  GNSIS_EDGE_SECRET=... python scripts/runpod_voice_pod.py create"
         )
+
+    # A URL without its token used to be dropped silently, so the pod started
+    # memoryless and nothing said so. Fail instead: durable memory is required
+    # whenever it is configured, and a boot that quietly loses it is worse
+    # than one that stops and names the missing variable.
+    if values.get("GNSIS_SIMPLEMEM_URL") and not (
+        values.get("GNSIS_SIMPLEMEM_TOKEN") or values.get("GNSIS_SIMPLEMEM_INTERNAL_TOKEN")
+    ):
+        raise PodError(
+            "GNSIS_SIMPLEMEM_URL is set but neither GNSIS_SIMPLEMEM_TOKEN nor "
+            "GNSIS_SIMPLEMEM_INTERNAL_TOKEN is. The runtime refuses durable memory without a "
+            "token, so the pod would run memoryless; set the token or unset the URL."
+        )
+
+    if source:
+        print(f"- Pod variables from {source}: {', '.join(sorted(values))}")
     return values
 
 
@@ -190,22 +255,10 @@ def create() -> None:
         return
     image = image_name()
     env = worker_environment()
-    print("- Copied from the Coolify worker: " + ", ".join(sorted(env)))
     # The pod stops itself after this many minutes without a live session.
     env["GNSIS_IDLE_STOP_MINUTES"] = os.environ.get("GNSIS_IDLE_STOP_MINUTES", "").strip() or "10"
     if not (env.get("MODAL_TOKEN_ID") and env.get("MODAL_TOKEN_SECRET")):
-        print("- WARNING: no Modal token on the worker; the first boot cannot copy the weights.")
-    # Coolify does not expose secret values over its API, so the SimpleMem token
-    # usually does not copy even when its URL does. The runtime requires the
-    # token whenever the URL is set, so without it drop the URL and run this
-    # pod without durable memory rather than fail to boot. Full-duplex voice
-    # does not depend on memory; set GNSIS_SIMPLEMEM_TOKEN on the pod later to
-    # turn it on.
-    if env.get("GNSIS_SIMPLEMEM_URL") and not (
-        env.get("GNSIS_SIMPLEMEM_TOKEN") or env.get("GNSIS_SIMPLEMEM_INTERNAL_TOKEN")
-    ):
-        env.pop("GNSIS_SIMPLEMEM_URL", None)
-        print("- NOTE: SimpleMem token not readable from Coolify; this pod runs without durable memory.")
+        print("- WARNING: no Modal token supplied; the first boot cannot copy the weights.")
 
     # Secure Cloud first, then Community, so a lack of 2x L40S on one does not
     # block the test. Override with GNSIS_POD_CLOUD (comma-separated).
