@@ -14,7 +14,7 @@ GNSIS is a **general-purpose realtime agent**, not a product optimized around on
 - announce background results only when conversationally appropriate;
 - allow the foreground realtime model, speech renderer, memory engine, and task backends to be replaced independently.
 
-This is an **implementation brief**, not an open-ended research exercise. Use existing open-source systems directly where they already solve the problem. Do not spend a long cycle recreating Qwen Live Harness, Omni-SimpleMem, or desktop media plumbing before proving a direct reuse path is blocked.
+This is an **implementation brief**, not an open-ended research exercise. Use existing open-source systems directly where they already solve the problem. Do not spend a long cycle recreating what an upstream project already solves (Gander, Omni-SimpleMem) before proving a direct reuse path is blocked.
 
 ---
 
@@ -89,33 +89,20 @@ At minimum support:
 
 Episodic memories must retain source-time and source references. Semantic memories may be synthesized/compressed from episodes but must retain provenance pointers to the source events that produced them.
 
-### 4. Venus gets first priority as the foreground-model challenger
+### 4. The foreground model stays behind a provider seam
 
-Current GNSIS production voice architecture uses:
+Voice runs today on Gander (MiniCPM-o 4.5 base, GNSIS Thinker, detached
+Gander Talker). It works, and it is not being replaced.
 
-- Gander Thinker on GPU 0;
-- detached Gander Talker + Token2wav on GPU 1;
-- raw audio/video into the Thinker;
-- learned `listen / speak / interrupt / backchannel` decisions;
-- detached speech so perception can continue while speech is generated.
+What must survive is the seam: the realtime provider, the speech renderer and
+the memory engine stay independently replaceable, so a better foreground model
+or voice can be measured later without rewriting the interaction layer.
+Nothing may hard-code Gander's Thinker/Talker topology into the orchestration.
 
-Do not protect this architecture because it already works.
+Challenging the foreground model (for example with a native Omni model) is
+out of scope until the current system is stable end to end.
 
-Realtime-Venus should be the **first foreground model tested against Gander** because its architecture and reported realtime/full-duplex results make it the most relevant current challenger.
-
-The goal is not "replace Gander because a paper score is higher." The goal is to determine whether native Omni full-duplex produces a materially better GNSIS foreground experience than the current detached Thinker -> Talker arrangement.
-
-Evaluate both under the same GNSIS session/timeline/harness plumbing.
-
-### 5. Native Omni speech is preferred if it wins the realtime evaluation
-
-A native Omni model that perceives, controls turn-taking, produces speech, hears while speaking, and changes course inside one realtime loop is architecturally preferable to a detached Talker **if** it meets GNSIS latency, quality, stability, cost, and control requirements.
-
-Gander's detached Talker remains the working baseline and rollback path until the benchmark is complete.
-
-Do not remove it first.
-
-### 6. Raw audio remains authoritative; ASR is auxiliary
+### 5. Raw audio remains authoritative; ASR is auxiliary
 
 Do not put ASR between the microphone and the foreground realtime intelligence.
 
@@ -132,9 +119,9 @@ ASR/transcripts are still useful for:
 
 But transcript text must not replace the raw audio stream as the interaction authority.
 
-This is an architectural requirement, not a claim that Gander's audio model has already beaten Venus/Qwen in a benchmark.
+This is an architectural requirement, not a claim about any benchmark.
 
-### 7. Delivery gating is mandatory
+### 6. Delivery gating is mandatory
 
 A background task becoming complete must **never** mean "speak immediately."
 
@@ -173,60 +160,25 @@ If the user meaningfully interrupts during delivery, cancel the stale output epo
 
 This behavior is required in the implementation, tests, and telemetry. Do not leave it as a TODO.
 
-### 8. Reuse Qwen Live Harness directly before writing another harness
+### 7. Take from upstream deliberately, and record it
 
-Qwen Live Harness v1.0.0 already contains production-oriented solutions for:
+GNSIS builds on upstream work — Gander (`Omni-Interaction-Agent`) above all,
+whose `gander_runtime` this repository's `runtime/gnsis_runtime` derives from,
+and Omni-SimpleMem for memory.
 
-- daemon-level conversation scheduling;
-- background task delegation;
-- ACP backends;
-- Codex adapter;
-- Claude Code adapter;
-- Gemini CLI ACP;
-- Qwen Code / Qwen Serve;
-- permission forwarding;
-- task lifecycle;
-- cancellation;
-- foreground/background separation;
-- result scheduling;
-- proactive monitors;
-- memory lifecycle;
-- playback/output IDs and acknowledgements.
+Adopt the elements we need rather than forking quietly. Where code comes from
+an upstream project:
 
-Its daemon exposes a `BackendAdaptor` boundary. ACP-compatible agents can generally be configured instead of hand-integrated one by one.
+- record which project, and which commit or release it came from;
+- record whether we changed it, and what the change is;
+- fix a general bug upstream when it is upstream's; keep a local change small,
+  and say why it is local.
 
-The default action is **direct reuse/adaptation of the Qwen Live Harness daemon/ACP subsystem**, not copying its ideas into another custom worker framework.
+What went wrong once already: `gnsis_runtime` mirrored `gander_runtime` file for
+file, nothing said so, and a bug was patched in the vendored copy that belongs
+in the upstream it was copied from.
 
-Only write replacement orchestration code when a concrete incompatibility is demonstrated in code or tests.
-
-### 9. The Qwen Host is now in scope because GNSIS plans a desktop app
-
-Earlier assumptions that "we do not need Qwen Host" no longer apply.
-
-Qwen Host already implements substantial desktop plumbing that GNSIS will otherwise need:
-
-- Electron lifecycle;
-- macOS mic/camera/screen permissions;
-- 16 kHz PCM microphone capture;
-- 24 kHz playback handling;
-- camera and screen capture;
-- native screenshots;
-- output IDs;
-- playback-start/completion acknowledgements;
-- call epochs;
-- daemon reconnect/lifecycle;
-- global shortcut;
-- renderer sandboxing/context isolation;
-- device switching;
-- signed/notarized desktop packaging patterns.
-
-Do **not** automatically adopt its product UI or Qwen model dependency.
-
-Do evaluate **forking/adapting Host as the GNSIS desktop shell** before building equivalent device/permission/media infrastructure from scratch.
-
-GNSIS owns branding, product UI, realtime provider choice, memory, and task orchestration identity.
-
-### 10. GNSIS owns one shared causal session timeline
+### 8. GNSIS owns one shared causal session timeline
 
 The system needs one ordered event plane that every component reports into.
 
@@ -275,7 +227,7 @@ This timeline is the coordination boundary that makes underlying components repl
 - two CUDA devices;
 - raw Omni camera/screen/audio input;
 - `generate_audio: true`;
-- `worker.provider: none`.
+- `worker.provider: deepseek` (DeepSeek Harness on the pod).
 
 The detached path exists specifically so synthesis does not block perception.
 
@@ -320,7 +272,7 @@ Do not throw this away and create a weaker SimpleMem integration in GNSIS.
                                   GNSIS
 
                          DESKTOP / WEB CLIENT
-                    (Qwen Host-derived candidate)
+                    (Electron Host, in this repository)
                                   |
                 mic / camera / screen / playback ACKs
                                   |
@@ -328,9 +280,9 @@ Do not throw this away and create a weaker SimpleMem integration in GNSIS.
                     +-----------------------------+
                     |   REALTIME PROVIDER LAYER   |
                     |-----------------------------|
-                    |  Venus-Omni     candidate   |
-                    |  Gander         baseline    |
-                    |  future Omni providers      |
+                    |  Gander         (in use)    |
+                    |  Dots renderer  (alternate) |
+                    |  future providers           |
                     +--------------+--------------+
                                    |
                            interaction events
@@ -346,8 +298,8 @@ Do not throw this away and create a weaker SimpleMem integration in GNSIS.
           MEMORY PIPELINE                           TASK/AGENT PIPELINE
           |                                         |
           |                                         v
-          |                              Qwen Live Harness daemon
-          |                                 / ACP subsystem
+          |                              GNSIS worker (task backends)
+          |                                    / providers
           |                                         |
      +----+----------------+              +---------+-----------+
      |                     |              |         |           |
@@ -386,7 +338,7 @@ Background task result
 
 ## Realtime provider contract
 
-Create or formalize one model-agnostic provider contract before deeply modifying Gander or Venus.
+Keep one model-agnostic provider contract in front of the foreground model.
 
 Suggested responsibilities:
 
@@ -403,7 +355,7 @@ class RealtimeProvider:
 
 Provider events should normalize to GNSIS timeline events rather than exposing model-specific wire formats to the rest of the product.
 
-Do not design the interface around Gander-specific Thinker/Talker concepts. Venus/native-Omni providers must fit without pretending to have a detached Talker.
+Do not design the interface around Gander-specific Thinker/Talker concepts: another provider must fit without pretending to have a detached Talker.
 
 ---
 
@@ -415,10 +367,9 @@ Timebox this. Do not turn it into a research report.
 
 1. Inspect current GNSIS main.
 2. Inspect current Clipit Omni-SimpleMem files listed above.
-3. Inspect current Qwen Live Harness daemon + Host boundaries.
-4. Inspect Realtime-Venus runnable duplex entry points and model/resource requirements.
-5. Record exact upstream commits/revisions/licenses used.
-6. Produce a short architecture delta in the PR, then move to code.
+3. Record which upstream project each part of the runtime derives from, at which commit.
+4. Record exact upstream commits/revisions/licenses used.
+5. Produce a short architecture delta in the PR, then move to code.
 
 Exit condition: concrete file map + implementation branch. No "recommendation-only" deliverable.
 
@@ -530,59 +481,11 @@ This is mandatory before declaring orchestration complete.
 
 ---
 
-### Phase 3 — Adopt Qwen Live Harness daemon/ACP instead of extending the custom worker first
-
-Goal: get real background agents working through an existing adapter layer.
-
-#### Direct reuse target
-
-Start from Qwen Live Harness's daemon and `BackendAdaptor`/ACP code.
-
-Attempt to run at least:
-
-- Codex through its existing ACP adapter;
-- Claude Code through its existing ACP adapter.
-
-Do not write fresh Codex/Claude process managers unless direct use is blocked.
-
-#### GNSIS integration
-
-Add the thinnest boundary needed between:
-
-`GNSIS timeline / realtime provider <-> Qwen daemon task APIs`
-
-Do not allow the Qwen daemon to become the product identity. GNSIS owns session IDs, memory, policy, and UI.
-
-Background agent events must be normalized onto the GNSIS timeline.
-
-Qwen result scheduling behavior should be reused where compatible, but final speech delivery still obeys GNSIS delivery gates.
-
-#### Permissions
-
-Preserve explicit approval boundaries.
-
-A backend asking for permission is a state transition, not permission to silently execute.
-
-#### Acceptance
-
-From a live GNSIS conversation:
-
-1. delegate a task to Codex;
-2. continue the conversation while Codex works;
-3. interrupt/change the task where supported;
-4. receive progress;
-5. result reaches `result_ready`;
-6. result is not spoken until the delivery gate opens;
-7. result is announced once;
-8. cancellation shuts the worker/session down cleanly.
-
----
-
-### Phase 4 — Desktop Host reuse evaluation and implementation
+### Phase 3 — Desktop Host and implementation
 
 Because a GNSIS desktop app is planned, do not postpone this to an unrelated future rewrite.
 
-Evaluate Qwen Host as a fork/adaptation base.
+The Host already exists in `desktop/`; keep it and reuse what it does.
 
 Reuse where practical:
 
@@ -597,14 +500,13 @@ Reuse where practical:
 - daemon discovery/reconnect;
 - context isolation/sandboxing;
 - device switching;
-- native screenshots;
 - packaging/signing structure.
 
 Replace:
 
-- Qwen branding/UI;
-- Qwen-specific config assumptions;
-- direct dependence on Qwen Omni as the only foreground provider.
+- third-party branding or UI;
+- assumptions specific to another project's config;
+- dependence on one foreground provider.
 
 The Host should talk to the GNSIS coordinator/provider contract.
 
@@ -621,60 +523,6 @@ The desktop prototype must:
 - preserve macOS permission correctness.
 
 If direct Host reuse proves impractical, document the exact incompatible surfaces before writing replacements.
-
----
-
-### Phase 5 — Venus-first foreground evaluation
-
-Do this as an implementation benchmark, not a literature review.
-
-Add Venus behind the `RealtimeProvider` interface.
-
-Keep Gander available behind the same interface.
-
-#### Test scenarios
-
-At minimum:
-
-1. normal conversational turn;
-2. user backchannel ("yeah", "mhm") while assistant speaks;
-3. genuine interruption ("wait", correction, new instruction);
-4. background speech not addressed to GNSIS;
-5. user speaks over the start of assistant audio;
-6. screen changes while assistant speaks;
-7. question referring to current screen;
-8. question referring to an earlier episodic memory;
-9. delegation while the live conversation continues;
-10. worker result becomes ready during user speech;
-11. long session;
-12. reconnect.
-
-#### Measure
-
-- time to first meaningful audio;
-- barge-in/cancel latency;
-- false interruption rate;
-- missed interruption rate;
-- backchannel continuation;
-- foreground perception continuity while speaking;
-- ability to change response after new sensory input;
-- speech quality/naturalness;
-- audiovisual grounding;
-- GPU memory;
-- steady-state GPU utilization;
-- cold start;
-- session stability;
-- cost per active minute where measurable.
-
-#### Decision rule
-
-Venus gets first testing priority.
-
-If Venus materially improves the realtime experience without unacceptable resource/stability regressions, make it the default foreground candidate.
-
-If it does not, keep Gander as default and retain the provider abstraction.
-
-Do not merge a "Venus is better" conclusion based only on published benchmark numbers.
 
 ---
 
@@ -764,11 +612,10 @@ At minimum return:
 - Do not leave `SimpleMemProvider` as a production stub.
 - Do not silently fall back to no memory.
 - Do not create another generic vector-memory system.
-- Do not rebuild Qwen's ACP adapters before attempting direct reuse.
 - Do not treat task completion as permission to speak.
 - Do not infer playback completion from model/TTS completion.
-- Do not discard Qwen Host without testing reuse now that a desktop app is planned.
-- Do not delete Gander before Venus is benchmarked in the same GNSIS plumbing.
+- Do not build a second desktop host beside the one in `desktop/`.
+- Do not replace the working foreground model without measuring the replacement in the same plumbing.
 - Do not put ASR in front of raw audio.
 - Do not hard-code the core orchestration around Gander's Thinker/Talker topology.
 - Do not optimize GNSIS around one narrow use case.
@@ -834,36 +681,14 @@ Keep changes reviewable.
 - interruption/cancel path;
 - tests + telemetry.
 
-### PR 3 — Qwen Live Harness daemon/ACP integration
+### PR 3 — GNSIS desktop Host
 
-- direct daemon/adaptor reuse;
-- Codex;
-- Claude;
-- permissions;
-- cancellation;
-- progress/result events;
-- delivery gate integration.
-
-### PR 4 — GNSIS desktop Host prototype
-
-- adapt/fork Qwen Host where practical;
+- keep the existing Host in `desktop/`;
 - GNSIS UI/branding boundary;
 - capture/playback ACK;
 - daemon lifecycle;
 - permissions;
 - real-device acceptance.
-
-### PR 5 — Venus RealtimeProvider + Gander comparison
-
-- Venus provider;
-- same host/timeline/harness;
-- benchmark scenarios;
-- telemetry report;
-- default-provider decision based on measured results.
-
-If a PR naturally needs splitting further, do so. Do not collapse all of this into one risky rewrite.
-
----
 
 ## External implementations to use as source material
 
@@ -881,26 +706,6 @@ Relevant merged Clipit PRs:
 - https://github.com/aubincorinaldiecooper-bit/CLIPIT/pull/114
 - https://github.com/aubincorinaldiecooper-bit/CLIPIT/pull/123
 - https://github.com/aubincorinaldiecooper-bit/CLIPIT/pull/126
-
-### Qwen Live Harness
-
-https://github.com/QwenLM/Qwen-Live-Harness
-
-Focus on:
-
-- `packages/qwen-live-harness/src/orchestrator`
-- `packages/qwen-live-harness/src/realtime`
-- `packages/qwen-live-harness/src/adaptor`
-- `packages/qwen-live-harness/src/permissions`
-- `packages/qwen-live-harness/src/subagents`
-- `packages/qwen-live-harness/src/host`
-- `packages/qwen-live-harness-host`
-
-### Realtime-Venus
-
-https://github.com/inclusionAI/Realtime-Venus
-
-Use it as the first native-Omni foreground challenger.
 
 ### Current GNSIS baseline
 
@@ -925,7 +730,7 @@ It is done when a real GNSIS desktop/live session can demonstrate this journey:
 1. GNSIS sees and hears continuously.
 2. The user asks for something that requires background work.
 3. GNSIS acknowledges naturally without blocking the live interaction.
-4. GNSIS delegates through the reused Harness/ACP layer.
+4. GNSIS delegates to a background worker.
 5. The user keeps speaking/showing new information while the task runs.
 6. GNSIS can remember relevant earlier audiovisual events through Omni-SimpleMem.
 7. The worker completes.
