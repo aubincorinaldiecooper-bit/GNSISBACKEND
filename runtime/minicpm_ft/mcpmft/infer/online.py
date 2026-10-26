@@ -25,6 +25,7 @@ from mcpmft.infer.streaming_text import DuplexStreamingText
 from mcpmft.tool_protocol import (
     MAX_TOOL_CALLS_PER_UNIT,
     ToolProtocolError,
+    fit_tool_response,
     format_tool_response,
     parse_tool_calls,
     system_prompt_with_tools,
@@ -523,6 +524,15 @@ class OnlineRunner:
 
     def reset_streaming_text(self) -> None:
         self._streaming_text.reset()
+
+    def fit_tool_response(self, response: Any) -> Any:
+        """Cut a long tool result to the response budget, marked as cut."""
+        tokenizer = self.bundle.tokenizer
+        return fit_tool_response(
+            response,
+            lambda text: len(tokenizer.encode(text, add_special_tokens=False)),
+            int(self.params.max_tool_response_tokens),
+        )
 
     def validate_tool_response(self, response: Any) -> str:
         """Format and bound a tool result before it enters the live media queue."""

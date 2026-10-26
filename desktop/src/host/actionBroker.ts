@@ -30,7 +30,7 @@ const LOOK_NOTE: Record<Look, string> = {
   not_shared: "The screen is not being shared, so this cannot be checked by looking.",
 };
 
-/** The runtime keeps a model tool result under 256 tokens; stay well inside. */
+/** A first cut by size; the runtime then cuts to its token budget, marked as cut. */
 const MAX_RESPONSE_CHARS = 900;
 const PROGRESS_EVERY_MS = 20_000;
 const MAX_REMEMBERED_CALLS = 128;

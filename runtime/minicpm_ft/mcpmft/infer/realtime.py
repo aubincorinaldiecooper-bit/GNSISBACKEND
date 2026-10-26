@@ -454,6 +454,7 @@ class DuplexLiveSession:
         self._ensure_open()
         if not self._tool_response_pending:
             raise RuntimeError("there is no pending tool call for this response")
+        response = self.runner.fit_tool_response(response)
         self.runner.validate_tool_response(response)
         self._queued_tool_responses.append(response)
         self._tool_response_pending = False
