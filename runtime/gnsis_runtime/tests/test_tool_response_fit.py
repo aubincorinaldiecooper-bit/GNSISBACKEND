@@ -53,3 +53,26 @@ def test_a_plain_string_or_a_long_message_is_cut_with_the_marker():
 def test_a_budget_too_small_for_even_the_marker_still_refuses():
     with pytest.raises(ToolProtocolError):
         fit_tool_response({"status": "done", "entries": list(range(100))}, count, 5)
+
+
+def test_a_long_error_without_a_message_is_cut_not_refused():
+    failed = {"status": "error", "tool": "browser", "error": "navigation failed: " + "timeout waiting for selector " * 60}
+    fitted = fit_tool_response(failed, count, LIMIT)
+    assert count(format_tool_response(fitted)) <= LIMIT
+    assert fitted["error"].startswith("navigation failed: timeout")
+
+
+def test_a_single_huge_entry_is_shortened_not_dropped():
+    entry = {"name": "foo", "elements": [f"button {i}: Add to cart" for i in range(200)]}
+    fitted = fit_tool_response({"status": "done", "entries": [entry]}, count, LIMIT)
+    assert count(format_tool_response(fitted)) <= LIMIT
+    assert fitted["entries"][0]["name"] == "foo"
+    assert 0 < len(fitted["entries"][0]["elements"]) < 200
+
+
+def test_a_nested_state_stays_structured():
+    state = {"url": "https://www.ubereats.com/store/nene", "title": "Nene Chicken", "text": "spicy wings " * 300}
+    fitted = fit_tool_response({"status": "done", "state": state}, count, LIMIT)
+    assert count(format_tool_response(fitted)) <= LIMIT
+    assert isinstance(fitted["state"], dict)
+    assert fitted["state"]["title"] == "Nene Chicken"

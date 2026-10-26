@@ -334,25 +334,51 @@ def fit_tool_response(value: Any, count_tokens: Any, limit: int) -> Any:
         if not sizes:
             break
         key = max(sizes)[1]
-        item = current[key]
-        if isinstance(item, list) and len(item) > 1:
-            keep = _most(len(item) - 1, lambda n: fits({**current, key: item[:n]}))
-            current[key] = item[: keep or len(item) // 2]
-        elif isinstance(item, str) and len(item) > 40:
-            keep = _most(len(item) - 1, lambda n: fits({**current, key: item[:n] + "…"}))
-            current[key] = item[: keep or len(item) // 2] + "…"
-        elif isinstance(item, Mapping) and item:
-            current[key] = compact_json(item)
-        else:
+        smaller = _shrink(current[key], lambda item, key=key: fits({**current, key: item}))
+        if smaller is _DROP:
             del current[key]
-    message = current.get("message")
-    if isinstance(message, str):
-        base = {k: current[k] for k in ("status", "tool", "call_id", "more") if k in current}
-        cut = _fit_prefix(message, lambda text: fits({**base, "message": text + "…"}), "…")
-        candidate = {**base, "message": cut}
+        else:
+            current[key] = smaller
+    texts = [k for k in ("error", "message") if isinstance(current.get(k), str)]
+    candidate = {k: current[k] for k in ("status", "tool", "call_id", "more", *texts) if k in current}
+    for k in sorted(texts, key=lambda name: -len(candidate[name])):
         if fits(candidate):
-            return candidate
+            break
+        others = dict(candidate)
+        try:
+            candidate[k] = _fit_prefix(candidate[k], lambda text, k=k, others=others: fits({**others, k: text + "…"}), "…")
+        except ToolProtocolError:
+            candidate[k] = candidate[k][:40] + "…"
+    if fits(candidate):
+        return candidate
     raise ToolProtocolError(f"tool response cannot be cut to {limit} tokens")
+
+
+_DROP = object()
+
+
+def _shrink(item: Any, fits: Any) -> Any:
+    """One step smaller: the largest cut of ``item`` that fits, else a smaller one, else _DROP.
+
+    Lists keep leading items, text keeps a prefix, and objects shrink their
+    largest field, so nested results stay valid JSON.
+    """
+    if isinstance(item, list) and len(item) > 1:
+        keep = _most(len(item) - 1, lambda n: fits(item[:n]))
+        return item[: keep or len(item) // 2]
+    if isinstance(item, list) and item:
+        inner = _shrink(item[0], lambda value: fits([value]))
+        return _DROP if inner is _DROP else [inner]
+    if isinstance(item, str) and len(item) > 40:
+        keep = _most(len(item) - 1, lambda n: fits(item[:n] + "…"))
+        return item[: keep or len(item) // 2] + "…"
+    if isinstance(item, Mapping) and item:
+        key = max((len(compact_json(v)), k) for k, v in item.items())[1]
+        inner = _shrink(item[key], lambda value: fits({**item, key: value}))
+        if inner is _DROP:
+            return {k: v for k, v in item.items() if k != key}
+        return {**item, key: inner}
+    return _DROP
 
 
 def _most(high: int, fits: Any) -> int:
