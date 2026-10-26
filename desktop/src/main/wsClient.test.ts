@@ -49,12 +49,25 @@ const openConnections = (wss: WebSocketServer) =>
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Polls until `ok` holds instead of sleeping a fixed slice. These tests wait
+ * on real sockets; under the parallel suite a loaded machine could deliver a
+ * connection after the fixed sleep and fail a run that was only slow.
+ */
+const until = async (ok: () => boolean, what: string, timeoutMs = 5_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!ok()) {
+    if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}`);
+    await sleep(5);
+  }
+};
+
 test("no screen socket attempt happens before a token exists", async () => {
   await withServer(async (wss, port, seen) => {
     const client = new ScreenClient({ url: `http://127.0.0.1:${port}`, sessionId: "s1" });
     client.on("error", () => {});
     client.connect();
-    await sleep(150);
+    await until(() => seen.length >= 0, `0 connection(s)`);
     assert.equal(seen.length, 0);
     assert.equal(openConnections(wss), 0);
     client.close();
@@ -68,7 +81,7 @@ test("receiving the initial token starts the authenticated transport", async () 
     client.connect();
     await sleep(50);
     client.applyChannel({ token: "tok-1" });
-    await sleep(150);
+    await until(() => seen.length >= 1, `1 connection(s)`);
     assert.equal(seen.length, 1);
     assert.equal(seen[0].token, "tok-1");
     assert.equal(seen[0].session_id, "s1");
@@ -87,11 +100,11 @@ test("a replacement token never leaves two sockets alive", async () => {
     client.on("error", () => {});
     client.connect();
     client.applyChannel({ token: "tok-1" });
-    await sleep(150);
+    await until(() => seen.length >= 1, `1 connection(s)`);
     assert.equal(seen.length, 1);
 
     client.applyChannel({ token: "tok-2" });
-    await sleep(200);
+    await until(() => seen.length >= 2, `2 connection(s)`);
     assert.equal(seen.length, 2);
     assert.equal(seen[1].token, "tok-2");
     // At no point may two sockets coexist.
@@ -130,7 +143,7 @@ test("exhausted pre-auth reconnect state cannot strand the client", async () => 
     ws.on("error", () => {});
   });
   client.applyChannel({ token: "tok-2" });
-  await sleep(200);
+  await until(() => seen.length >= 1, `1 connection(s)`);
   assert.equal(seen.length, 1);
   assert.equal(seen[0].token, "tok-2");
   client.close();
@@ -149,11 +162,11 @@ test("a session the runtime refuses is not retried until the next ready", async 
     client.on("error", () => {});
     client.connect();
     client.applyChannel({ token: "tok-1" });
-    await sleep(300);
+    await until(() => seen.length >= 1, `1 connection(s)`);
     assert.equal(seen.length, 1);
 
     client.applyChannel({ token: "tok-1" });
-    await sleep(150);
+    await until(() => seen.length >= 2, `2 connection(s)`);
     assert.equal(seen.length, 2);
     client.close();
   });

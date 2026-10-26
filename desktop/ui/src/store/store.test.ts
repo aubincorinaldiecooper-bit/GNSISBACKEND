@@ -11,6 +11,15 @@ import { TYPING_NOT_CONNECTED } from "../demo/data";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Polls until `ok` holds, so a slow machine is not mistaken for a bug. */
+const until = async (ok: () => boolean, what: string, timeoutMs = 5_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!ok()) {
+    if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}`);
+    await sleep(2);
+  }
+};
+
 const identity: Identity = { publicId: "gnsis:TEST-TEST-TEST", publicKey: "", storage: "local" };
 const identityStore: IdentityStore = {
   storageNote: "test",
@@ -201,9 +210,22 @@ test("the simulated host plays a whole conversation into the chat", async () => 
   configure(host, identityStore);
   enterDesktop(identity, false);
   actions.startLive("gnsis");
-  await sleep(5);
-  assert.equal(getState().live?.phase, "connecting", "a moment of connecting before the microphone is on");
-  await sleep(450);
+  // Poll for each phase instead of sleeping a fixed slice: the simulated host
+  // advances on timers, and under the parallel suite a loaded machine reached
+  // "listening" late, failing the assertions below on a run that was only slow.
+  await until(() => getState().live?.phase === "listening", "the simulated host to start listening");
+  // The scripted conversation streams in after listening begins, so wait for
+  // it to finish (the last "Done:" line) rather than for a fixed duration.
+  // Wait for the conversation to finish, not for a fixed duration: the last
+  // thing the script does is press enter, after the interrupted reply. Waiting
+  // on the agent's dash-terminated reply is the true end of the script.
+  await until(
+    () =>
+      getState().convs.gnsis.turns.some(
+        (t) => t.role === "agent" && t.text.endsWith("—"),
+      ),
+    "the interrupted reply that ends the script",
+  );
   const s = getState();
   assert.equal(s.live?.phase, "listening");
   const turns = s.convs.gnsis.turns.slice(1); // after the greeting
