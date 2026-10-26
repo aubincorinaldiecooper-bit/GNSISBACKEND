@@ -100,6 +100,21 @@ class BillingStore:
     """Durable ledger, charges, and reservations. Workspace-isolated."""
 
     # -- balance derivation ----------------------------------------------
+    def workspace_for_payment(self, payment_reference: Optional[str]) -> Optional[str]:
+        """Workspace credited by the top-up recorded under this Stripe payment reference."""
+        if not payment_reference:
+            return None
+        with session_scope() as s:
+            row = (
+                s.query(orm.BalanceTransaction.workspace_id)
+                .filter(
+                    orm.BalanceTransaction.transaction_type == TOP_UP,
+                    orm.BalanceTransaction.stripe_payment_reference == payment_reference,
+                )
+                .first()
+            )
+            return row[0] if row else None
+
     def balance(self, workspace_id: str) -> Decimal:
         with session_scope() as s:
             rows = (

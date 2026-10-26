@@ -38,6 +38,8 @@ def _stripe_post(url: str, form: dict, secret_key: str) -> dict:
         except Exception:  # noqa: BLE001
             message = f"HTTP {exc.code}"
         raise HTTPException(status_code=502, detail=f"stripe: {message}")
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise HTTPException(status_code=502, detail="stripe: unreachable")
 
 
 def create_checkout_session(
@@ -46,9 +48,11 @@ def create_checkout_session(
     if not (settings.stripe_secret_key and settings.stripe_webhook_secret):
         raise HTTPException(status_code=503, detail="payments are not configured")
     try:
-        amount = Decimal(str(amount_usd)).quantize(Decimal("0.01"))
+        amount = Decimal(str(amount_usd))
     except InvalidOperation:
         raise HTTPException(status_code=422, detail="amount_usd must be a number")
+    if not amount.is_finite() or amount != amount.quantize(Decimal("0.01")):
+        raise HTTPException(status_code=422, detail="amount_usd must be in whole cents")
     lo, hi = Decimal(settings.topup_min_usd), Decimal(settings.topup_max_usd)
     if not (lo <= amount <= hi):
         raise HTTPException(status_code=422, detail=f"amount_usd must be between {lo} and {hi}")
@@ -58,7 +62,7 @@ def create_checkout_session(
         "client_reference_id": workspace_id,
         "metadata[workspace_id]": workspace_id,
         "line_items[0][quantity]": "1",
-        "line_items[0][price_data][currency]": (settings.default_currency or "USD").lower(),
+        "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": str(int(amount * 100)),
         "line_items[0][price_data][product_data][name]": "GNSIS balance top-up",
         "success_url": f"{base}/dashboard?topup=success",

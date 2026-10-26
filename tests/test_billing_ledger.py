@@ -241,6 +241,21 @@ class StripeWebhookTests(unittest.TestCase):
                                  extra={"amount_refunded": 500}))
         self.assertEqual(store.balance("ws-1"), Decimal("20.00"))  # 25 - 5
 
+    def test_checkout_refund_is_attributed_through_the_payment_intent(self):
+        from gnsis.service.billing import BillingStore
+        from gnsis.service.stripe_webhook import handle_event
+
+        store = BillingStore()
+        handle_event({"id": "evt_cs", "type": "checkout.session.completed", "data": {"object": {
+            "id": "cs_1", "payment_intent": "pi_1", "payment_status": "paid", "status": "complete",
+            "amount_total": 2500, "currency": "usd", "metadata": {"workspace_id": "ws-1"}}}})
+        # charge.refunded has no session metadata, only the PaymentIntent.
+        r = handle_event({"id": "evt_rf", "type": "charge.refunded", "data": {"object": {
+            "id": "ch_1", "payment_intent": "pi_1", "amount_refunded": 2500, "currency": "usd",
+            "metadata": {}}}})
+        self.assertTrue(r["handled"])
+        self.assertEqual(store.balance("ws-1"), Decimal("0.00"))
+
     def test_webhook_endpoint_rejects_bad_signature(self):
         from fastapi.testclient import TestClient
         from gnsis.service.api import app
