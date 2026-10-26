@@ -5,6 +5,12 @@ on:
     branches: ["**"]
   pull_request:
 
+# A newer run on the same ref cancels the one still going: successive pushes
+# to a branch should bill for the last one, not for every one.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

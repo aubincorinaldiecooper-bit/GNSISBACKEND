@@ -3,7 +3,24 @@ name: Visual SDKs
 on:
   push:
     branches: ["**"]
+    # The SDKs only change with these trees. Without the filter every docs or
+    # workflow push paid for two full dependency installs.
+    paths:
+      - "sdks/**"
+      - "runtime/gnsis_runtime/**"
+      - "runtime/minicpm_ft/**"
+      - ".github/workflows/visual-sdks.yml"
   pull_request:
+    paths:
+      - "sdks/**"
+      - "runtime/gnsis_runtime/**"
+      - "runtime/minicpm_ft/**"
+      - ".github/workflows/visual-sdks.yml"
+
+# A newer run on the same ref cancels the one still going.
+concurrency:
+  group: visual-sdks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   python:

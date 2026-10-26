@@ -9,14 +9,32 @@ on:
       - "desktop/**"
       - "runtime/configs/gnsis-host-tools.json"
       - ".github/workflows/desktop-dmg.yml"
+  # A pull request builds a DMG only when it asks for one. macOS runners bill
+  # at ten times the Linux rate and a universal build takes about twenty
+  # minutes, so running this on every desktop pull request was the largest
+  # single cost in the account — and mostly produced an archive nobody opened.
+  # Add the "build-dmg" label to a pull request to get one; the job re-runs
+  # when the label is added because `labeled` is in the event list.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "desktop/**"
       - "runtime/configs/gnsis-host-tools.json"
       - ".github/workflows/desktop-dmg.yml"
 
+# Pushing twice in a row should not pay for the first build: a newer run on
+# the same ref cancels the one still going.
+concurrency:
+  group: desktop-dmg-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dmg:
+    # Pull-request builds are opt-in by label; pushes to main and manual runs
+    # always build.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'build-dmg')
     runs-on: macos-14
     permissions:
       contents: write
