@@ -234,6 +234,7 @@ export function Settings() {
                   disabled={!voicePreferences}
                   onPick={(id) => void updateVoice({ worker_model: id })}
                 />
+                {voiceNote && <div className="muted small voice-note">{voiceNote}</div>}
               </Group>
             )}
             {section === "agents" && !inert && (

@@ -98,11 +98,14 @@ memory:
   session_recall_top_k: 8
   session_recall_timeout_sec: 10.0
 
-# No background worker runs next to the voice runtime, so task_start answers
-# that nothing can take the task. Actions on the person's Mac do not come
-# through here: they go to the connected desktop (duplex.host_tools_path).
+# Background jobs run in DeepSeek Harness on the pod, with models from
+# OpenRouter (OPENROUTER_API_KEY on the pod). Each person's Settings pick
+# overrides the model. Actions on the person's Mac do not come through here:
+# they go to the connected desktop (duplex.host_tools_path).
 worker:
-  provider: none
+  provider: deepseek
+  settings:
+    model: deepseek/deepseek-v4-flash
 
 # The foreground model behind the realtime provider seam. thinker is the
 # baseline and the rollback path; venus is measured against it through the
