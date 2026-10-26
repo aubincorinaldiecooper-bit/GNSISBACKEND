@@ -16,6 +16,7 @@ dependencies = [
   "pyyaml>=6",
   "uvicorn[standard]>=0.29",
   "websockets>=12",
+  "agent-client-protocol==0.12.1",
 ]
 
 [project.optional-dependencies]

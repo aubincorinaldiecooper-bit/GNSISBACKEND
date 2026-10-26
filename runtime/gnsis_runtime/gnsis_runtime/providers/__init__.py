@@ -22,11 +22,13 @@ from .registry import (
 
 def builtin_provider_registry() -> ProviderFactoryRegistry:
     from .codex import CODEX_PROVIDER_REGISTRATION
+    from .deepseek import DEEPSEEK_PROVIDER_REGISTRATION
     from .ornith import ORNITH_PROVIDER_REGISTRATION
 
     registry = ProviderFactoryRegistry()
     registry.register(CODEX_PROVIDER_REGISTRATION)
     registry.register(ORNITH_PROVIDER_REGISTRATION)
+    registry.register(DEEPSEEK_PROVIDER_REGISTRATION)
     return registry
 
 
