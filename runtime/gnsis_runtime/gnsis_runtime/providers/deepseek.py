@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,9 +58,25 @@ DEEPSEEK_CAPABILITIES = BackendCapabilities(
     worker_tools=frozenset(),
 )
 
-# Each run gets a fresh session; consequential steps the agent asks
-# permission for are refused, because no person is answering its prompts.
+# The harness sandbox confines each project's session to its own folder; any
+# step it asks permission for goes to GNSIS policy, and only "allow" proceeds.
 _REFUSED = "refused: background jobs cannot take steps that need permission"
+_CLOSE_TIMEOUT_SEC = 5.0
+
+
+def _folder(project_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", project_id).strip(".") or "project"
+
+
+def _describe(exc: BaseException, secret_env: str) -> str:
+    detail = (str(exc).splitlines() or [""])[0]
+    secret = os.environ.get(secret_env)
+    if secret:
+        detail = detail.replace(secret, "[redacted]")
+    detail = re.sub(r"(?i)(bearer\s+|sk-or-[\w-]*)\S*", "[redacted]", detail)
+    if len(detail) > 160:
+        detail = detail[:160] + "…"
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
 
 def acp_patch(settings: DeepSeekHarnessSettings) -> str:
@@ -79,6 +96,7 @@ def acp_patch(settings: DeepSeekHarnessSettings) -> str:
                 "id": "acp",
                 "config": {"provider": settings.route, "model": settings.model},
             },
+            {"id": "approval", "config": {"policy": "ask"}},
         ],
         indent=2,
     )
@@ -101,6 +119,14 @@ class _Client:
         from acp.schema import AllowedOutcome, DeniedOutcome, RequestPermissionResponse
 
         run = self.runs.get(session_id)
+        if run is not None and await run.authorized(tool_call):
+            for option in options:
+                if str(getattr(option, "kind", "")) == "allow_once":
+                    return RequestPermissionResponse(
+                        outcome=AllowedOutcome(
+                            outcome="selected", option_id=option.option_id
+                        )
+                    )
         if run is not None:
             await run.on_refused(getattr(tool_call, "title", None) or "a step")
         for option in options:
@@ -127,10 +153,12 @@ class DeepSeekRun:
         request: WorkerRequest,
         provider: "DeepSeekHarnessWorkerProvider",
         workspace: Path,
+        control: WorkerControl | None = None,
     ) -> None:
         self.request = request
         self.provider = provider
         self.workspace = workspace
+        self.control = control
         self.session_id = ""
         self._queue: asyncio.Queue[WorkerEvent | None] = asyncio.Queue()
         self._seq = 0
@@ -178,6 +206,26 @@ class DeepSeekRun:
                 UpdatePayload(kind="activity", summary=f"Using {title}.")
             )
 
+    async def authorized(self, tool_call: Any) -> bool:
+        if self.control is None:
+            return False
+        kind = str(getattr(tool_call, "kind", None) or "other")
+        call_id = getattr(tool_call, "tool_call_id", "") or new_id("call")
+        try:
+            decision = await self.control.authorize(
+                f"deepseek.{kind}",
+                request_key=f"{self.request.run_id}:{call_id}",
+                prompt=getattr(tool_call, "title", None) or kind,
+            )
+        except Exception:
+            # A policy failure fails closed: the step is refused below.
+            return False
+        return decision.outcome == "allow"
+
+    @property
+    def terminal(self) -> bool:
+        return self._terminal
+
     async def on_refused(self, title: str) -> None:
         await self._publish(
             UpdatePayload(kind="activity", summary=f"{title}: {_REFUSED}.")
@@ -205,9 +253,13 @@ class DeepSeekRun:
         from acp import text_block
 
         settings = self.provider.settings
+        done: DonePayload | None = None
         try:
             conn = await self.provider.connection()
-            session = await conn.new_session(cwd=str(self.workspace), mcp_servers=[])
+            session = await asyncio.wait_for(
+                conn.new_session(cwd=str(self.workspace), mcp_servers=[]),
+                timeout=settings.startup_timeout_sec,
+            )
             self.session_id = session.session_id
             self.provider.client.runs[self.session_id] = self
             await self._publish(
@@ -225,28 +277,28 @@ class DeepSeekRun:
             answer = "".join(self._text).strip()
             stop = getattr(result, "stop_reason", "")
             if stop == "cancelled":
-                await self._publish(DonePayload(status="cancelled", result=answer))
+                done = DonePayload(status="cancelled", result=answer)
             elif stop == "end_turn" and answer:
-                await self._publish(DonePayload(status="completed", result=answer))
+                done = DonePayload(status="completed", result=answer)
             else:
-                await self._publish(
-                    DonePayload(
-                        status="partial" if answer else "failed",
-                        result=answer or f"DeepSeek Harness stopped: {stop or 'no reply'}",
-                    )
+                done = DonePayload(
+                    status="partial" if answer else "failed",
+                    result=answer or f"DeepSeek Harness stopped: {stop or 'no reply'}",
                 )
         except asyncio.CancelledError:
-            await self._publish(DonePayload(status="cancelled", result="Task cancelled."))
+            done = DonePayload(status="cancelled", result="Task cancelled.")
             raise
         except Exception as exc:
-            await self._publish(
-                DonePayload(
-                    status="failed",
-                    result=f"DeepSeek Harness failure: {type(exc).__name__}: {exc}",
-                )
+            done = DonePayload(
+                status="failed",
+                result="DeepSeek Harness failure: "
+                + _describe(exc, settings.api_key_env),
             )
         finally:
+            # Close before reporting done: the Gateway closes the run on done.
             await self._close_session()
+            if done is not None:
+                await self._publish(done)
 
     async def _close_session(self) -> None:
         if not self.session_id:
@@ -255,7 +307,10 @@ class DeepSeekRun:
         conn = self.provider.live_connection
         if conn is not None:
             with contextlib.suppress(Exception):
-                await conn.close_session(session_id=self.session_id)
+                await asyncio.wait_for(
+                    conn.close_session(session_id=self.session_id),
+                    timeout=_CLOSE_TIMEOUT_SEC,
+                )
 
     async def events(self) -> AsyncIterator[WorkerEvent]:
         while True:
@@ -304,7 +359,10 @@ class DeepSeekProject:
             raise RuntimeError("DeepSeek Harness project is closed")
         if request.project_id != self.project.project_id:
             raise ValueError("WorkerRequest project mismatch")
-        run = DeepSeekRun(request, self.provider, self.provider.workspace)
+        self._runs = {run for run in self._runs if not run.terminal}
+        workspace = self.provider.workspace / "projects" / _folder(self.project.project_id)
+        workspace.mkdir(parents=True, exist_ok=True)
+        run = DeepSeekRun(request, self.provider, workspace, control)
         self._runs.add(run)
         await run.start()
         return run
@@ -365,22 +423,28 @@ class DeepSeekHarnessWorkerProvider:
             self.runtime_dir.mkdir(parents=True, exist_ok=True)
             patch = self.runtime_dir / "deepseek-harness.patch.yml"
             patch.write_text(acp_patch(self.settings) + "\n", encoding="utf-8")
-            conn, _process = await self._stack.enter_async_context(
-                spawn(
-                    self.client,
-                    self._command(),
-                    "--profile",
-                    "acp",
-                    "--patch",
-                    str(patch),
-                    cwd=str(self.workspace),
-                    env=dict(os.environ),
+            attempt = contextlib.AsyncExitStack()
+            try:
+                conn, _process = await attempt.enter_async_context(
+                    spawn(
+                        self.client,
+                        self._command(),
+                        "--profile",
+                        "acp",
+                        "--patch",
+                        str(patch),
+                        cwd=str(self.workspace),
+                        env={**os.environ, "DSH_PERMISSION_MODE": "workspace-write"},
+                    )
                 )
-            )
-            await asyncio.wait_for(
-                conn.initialize(protocol_version=PROTOCOL_VERSION),
-                timeout=self.settings.startup_timeout_sec,
-            )
+                await asyncio.wait_for(
+                    conn.initialize(protocol_version=PROTOCOL_VERSION),
+                    timeout=self.settings.startup_timeout_sec,
+                )
+            except BaseException:
+                await attempt.aclose()
+                raise
+            self._stack.push_async_callback(attempt.aclose)
             self.live_connection = conn
             return conn
 

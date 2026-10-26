@@ -76,3 +76,14 @@ def test_a_nested_state_stays_structured():
     assert count(format_tool_response(fitted)) <= LIMIT
     assert isinstance(fitted["state"], dict)
     assert fitted["state"]["title"] == "Nene Chicken"
+
+
+def test_a_long_error_and_message_keep_one_when_both_cannot_fit():
+    failed = {
+        "status": "failed",
+        "error": "bad request " * 300,
+        "message": "Try a different query. " * 300,
+    }
+    fitted = fit_tool_response(failed, count, 50)
+    assert count(format_tool_response(fitted)) <= 50
+    assert fitted["message"].startswith("Try a different")
