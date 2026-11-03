@@ -2,7 +2,7 @@
 // Set CHROME_PATH to use a specific browser; otherwise Remotion downloads its own.
 import { execFileSync } from "node:child_process";
 
-const clips = ["say-it", "asks-first", "interrupt"];
+const clips = ["say-it", "asks-first", "interrupt", "gnsis-30s"];
 const only = process.argv.slice(2);
 const browser = process.env.CHROME_PATH ? ["--browser-executable", process.env.CHROME_PATH] : [];
 
